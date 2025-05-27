@@ -204,6 +204,7 @@ class CRLAgent(flax.struct.PyTreeNode):
         ex_observations,
         ex_actions,
         config,
+        ex_goals=None,
     ):
         """Create a new agent.
 
@@ -212,11 +213,14 @@ class CRLAgent(flax.struct.PyTreeNode):
             ex_observations: Example batch of observations.
             ex_actions: Example batch of actions. In discrete-action MDPs, this should contain the maximum action value.
             config: Configuration dictionary.
+            ex_goals: Example batch of goals. If None, the goals are set to the observations.
         """
         rng = jax.random.PRNGKey(seed)
         rng, init_rng = jax.random.split(rng, 2)
 
-        ex_goals = ex_observations
+        if ex_goals is None:
+            ex_goals = ex_observations
+
         if config['discrete']:
             action_dim = ex_actions.max() + 1
         else:
@@ -314,7 +318,7 @@ def get_config():
             latent_dim=512,  # Latent dimension for phi and psi.
             layer_norm=True,  # Whether to use layer normalization.
             discount=0.99,  # Discount factor.
-            actor_loss='ddpgbc',  # Actor loss type ('awr' or 'ddpgbc').
+            actor_loss='awr',  # Actor loss type ('awr' or 'ddpgbc').
             alpha=0.1,  # Temperature in AWR or BC coefficient in DDPG+BC.
             actor_log_q=True,  # Whether to maximize log Q (True) or Q itself (False) in the actor loss.
             const_std=True,  # Whether to use constant standard deviation for the actor.
