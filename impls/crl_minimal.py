@@ -2,9 +2,8 @@ import os
 
 from matplotlib import pyplot as plt
 
-
 os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"   
-os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+os.environ['CUDA_VISIBLE_DEVICES'] = '4'
 
 import jax
 import jax.numpy as jnp
@@ -16,10 +15,11 @@ from xminigrid.wrappers import GymAutoResetWrapper
 from xminigrid.experimental.img_obs import RGBImgObservationWrapper
 from config import ROOT_DIR
 from agents import agents
-
+from utils.datasets import GCDataset, ReplayBuffer
 
 
 FLAGS = flags.FLAGS
+flags.DEFINE_string('env', 'MiniGrid-EmptyRandom-5x5', 'Environment to use.')
 flags.DEFINE_integer('seed', 0, 'Random seed.')
 
 config_flags.DEFINE_config_file('agent', ROOT_DIR + '/agents/crl.py', lock_config=False)
@@ -37,7 +37,7 @@ def main(_):
 
 
     # to list available environments: xminigrid.registered_environments()
-    env, env_params = xminigrid.make("MiniGrid-EmptyRandom-5x5")
+    env, env_params = xminigrid.make(FLAGS.env)
 
     # auto-reset wrapper
     env = GymAutoResetWrapper(env)
@@ -46,12 +46,22 @@ def main(_):
     timestep = jax.jit(env.reset)(env_params, reset_key)
     example_batch = {
         'observations':timestep.observation.reshape(1, -1),  # Add batch dimension
+        # 'actions': jnp.zeros((1,), dtype=jnp.int32).reshape(1, -1), 
         'actions': jnp.zeros((1,), dtype=jnp.int32),  # Single action for batch size 1
         'value_goals': timestep.state.goal_encoding.reshape(1, -1),
         'actor_goals': timestep.state.goal_encoding.reshape(1, -1),
+        'terminals': timestep.step_type.reshape(1,-1) == xminigrid.types.StepType.LAST,
         # 'masks': jnp.ones((1,), dtype=jnp.float32),
         # 'rewards': jnp.zeros((1,), dtype=jnp.float32),
     }
+    print(f"terminals shape: {example_batch['terminals'].shape}")
+    print(f"observations shape: {example_batch['observations'].shape}")
+    print(f"actions shape: {example_batch['actions'].shape}")
+    print(f"value_goals shape: {example_batch['value_goals'].shape}")
+    print(f"actor_goals shape: {example_batch['actor_goals'].shape}")
+
+
+
     plt.imshow(env.render(env_params, timestep))
     plt.savefig("render.png")
 
@@ -71,11 +81,41 @@ def main(_):
         example_batch['observations'],
         example_batch['actions'],
         config,
+        example_batch['value_goals'],
     )
+
     print(f"Observation: {timestep.observation}")
     print(f"Goal: {timestep.state.goal_encoding}")
 
     agent.update(example_batch)
+
+
+    print(timestep.step_type)
+    transition = {
+        'observations': timestep.observation,
+        'actions': jnp.zeros((1,), dtype=jnp.int32),  
+        'value_goals': timestep.state.goal_encoding,
+        'actor_goals': timestep.state.goal_encoding,
+        'terminals': timestep.step_type == xminigrid.types.StepType.LAST,
+    }
+    rb = ReplayBuffer.create(transition, 1000)
+
+    for i in range(10):
+        print(f"step {i}")
+        timestep = jax.jit(env.step)(env_params, timestep, action=0)
+        transition = {
+            'observations': timestep.observation,
+            'actions': jnp.zeros((1,), dtype=jnp.int32),  
+            'value_goals': timestep.state.goal_encoding,
+            'actor_goals': timestep.state.goal_encoding,
+            'terminals': timestep.step_type == xminigrid.types.StepType.LAST,
+        }
+        rb.add_transition(transition)
+    print(f"rb size: {rb.size}")
+    
+    # gc_dataset = GCDataset(rb, config)
+    # print(f"gc_dataset size: {gc_dataset.size}")
+    # print(f"gc_dataset sample: {gc_dataset.sample(1)}")
 
 if __name__ == '__main__':
     app.run(main)
