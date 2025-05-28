@@ -12,6 +12,7 @@ import xminigrid
 from xminigrid.wrappers import GymAutoResetWrapper
 from xminigrid.types import TimeStep
 from xminigrid.experimental.img_obs import RGBImgObservationWrapper
+from benchmark_test import build_benchmark
 
 @flax.struct.dataclass
 class ReplayBufferState:
@@ -190,7 +191,7 @@ def jit_wrap(buffer):
 
 
 key = jax.random.PRNGKey(0)
-reset_key = jax.random.split(key, 1)[0]
+buffer_key, reset_key = jax.random.split(key, 2)
 env, env_params = xminigrid.make('MiniGrid-EmptyRandom-5x5')
 env = GymAutoResetWrapper(env)
 timestep = jax.jit(env.reset)(env_params, reset_key)
@@ -200,14 +201,50 @@ print(timestep.state.step_num)
 
 replay_buffer = jit_wrap(
     TrajectoryUniformSamplingQueue(
-        max_replay_size=10_000,
+        max_replay_size=100,
         dummy_data_sample=timestep,
-        sample_batch_size=1024,
-        num_envs=1024,
+        sample_batch_size=256,
+        num_envs=256,
         episode_length=10,
     )
 )
+buffer_state = jax.jit(replay_buffer.init)(buffer_key)
 
 print(replay_buffer._data_shape)
 
-replay_buffer.sample(replay_buffer.init(key))
+
+
+benchmark_fn = build_benchmark('MiniGrid-EmptyRandom-5x5', 256, 100)
+
+# TypeError: Cannot determine dtype of key<fry> while using key = jax.random.key(0)
+key = jax.random.PRNGKey(0)
+env_step, timesteps_all = benchmark_fn(key)
+
+print(env_step.observation.shape)
+print(timesteps_all.observation.shape)
+
+replay_buffer.insert(buffer_state, timesteps_all)
+
+buffer_state, transitions = replay_buffer.sample(buffer_state)
+
+print(transitions.state.step_num)  # Here we have 100 transitions, but there is a bug, because full output of this script is:
+# (7, 7, 2)
+# 0
+# (100, 256, 171)
+# (256, 7, 7, 2)
+# (100, 256, 7, 7, 2)
+# [[0 0 0 ... 0 0 0]
+#  [0 0 0 ... 0 0 0]
+#  [0 0 0 ... 0 0 0]
+#  ...
+#  [0 0 0 ... 0 0 0]
+#  [0 0 0 ... 0 0 0]
+#  [0 0 0 ... 0 0 0]]
+# So there's  something wrong with transitions.state.step_num. Why the number is not growing?
+
+
+
+
+
+
+
