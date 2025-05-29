@@ -100,6 +100,7 @@ class TrajectoryUniformSamplingQueue:
             )
 
         update = self._flatten_fn(samples)  # Updates has shape (unroll_len, num_envs, self._data_shape[-1])
+        print(f"update: {update}")
         data = buffer_state.data  # shape = (max_replay_size, num_envs, data_size)
 
         # If needed, roll the buffer to make sure there's enough space to fit
@@ -111,17 +112,15 @@ class TrajectoryUniformSamplingQueue:
 
         # Update the buffer and the control numbers.
         data = jax.lax.dynamic_update_slice_in_dim(data, update, position, axis=0)
+        print(f"data: {data}")
         position = (
             (position + len(update)) % (len(data) + 1)
         )  # so whenever roll happens, position becomes len(data), else it is increased by len(update), what is the use of doing % (len(data) + 1)??
-        sample_position = jnp.maximum(
-            0, buffer_state.sample_position + roll
-        )  # what is the use of this line? sample_position always remains 0 as roll can never be positive
+        print(f"position: {position}")
 
         return buffer_state.replace(
             data=data,
             insert_position=position,
-            sample_position=sample_position,
         )
 
     def sample(self, buffer_state):
@@ -199,22 +198,30 @@ timestep = jax.jit(env.reset)(env_params, reset_key)
 print(timestep.observation.shape)
 print(timestep.state.step_num)
 
-replay_buffer = jit_wrap(
-    TrajectoryUniformSamplingQueue(
+# replay_buffer = jit_wrap(
+#     TrajectoryUniformSamplingQueue(
+#         max_replay_size=100,
+#         dummy_data_sample=timestep,
+#         sample_batch_size=256,
+#         num_envs=256,
+#         episode_length=10,
+#     )
+# )
+# buffer_state = jax.jit(replay_buffer.init)(buffer_key)
+replay_buffer = TrajectoryUniformSamplingQueue(
         max_replay_size=100,
         dummy_data_sample=timestep,
         sample_batch_size=256,
         num_envs=256,
         episode_length=10,
     )
-)
-buffer_state = jax.jit(replay_buffer.init)(buffer_key)
+buffer_state = replay_buffer.init(buffer_key)
 
 print(replay_buffer._data_shape)
 
 
 
-benchmark_fn = build_benchmark('MiniGrid-EmptyRandom-5x5', 256, 100)
+benchmark_fn = build_benchmark('MiniGrid-EmptyRandom-5x5', 256, 50)
 
 # TypeError: Cannot determine dtype of key<fry> while using key = jax.random.key(0)
 key = jax.random.PRNGKey(0)
@@ -223,11 +230,12 @@ env_step, timesteps_all = benchmark_fn(key)
 print(env_step.observation.shape)
 print(timesteps_all.observation.shape)
 
-replay_buffer.insert(buffer_state, timesteps_all)
+print(timesteps_all.state.step_num)
+buffer_state = replay_buffer.insert(buffer_state, timesteps_all)
 
-buffer_state, transitions = replay_buffer.sample(buffer_state)
+buffer_state, transitions = replay_buffer.sample(buffer_state) # this is not working, because sample_position is always 0
 
-print(transitions.state.step_num)  # Here we have 100 transitions, but there is a bug, because full output of this script is:
+print(f"transitions.state.step_num: {transitions.state.step_num}")  # Here we have 100 transitions, but there is a bug, because full output of this script is:
 # (7, 7, 2)
 # 0
 # (100, 256, 171)
@@ -243,8 +251,38 @@ print(transitions.state.step_num)  # Here we have 100 transitions, but there is 
 # So there's  something wrong with transitions.state.step_num. Why the number is not growing?
 
 
+# @jax.jit
+def segment_ids_per_row(x: jnp.ndarray) -> jnp.ndarray:
+    """
+    Parameters
+    ----------
+    x : jnp.ndarray            # shape (rows, cols) or (cols,)
+        Row-wise sequences whose wrap-arounds you want to label.
 
+    Returns
+    -------
+    jnp.ndarray                # same shape as `x`
+        0-based index of the sub-vector each element belongs to.
+    """
+    # 1. Where does the sequence go “backwards”?
+    #    diff < 0  →  a wrap-around happened between col k-1 and k
+    resets = jnp.concatenate(
+        [jnp.zeros((*x.shape[:-1], 1), dtype=jnp.int32),     # first column never resets
+         (jnp.diff(x, axis=-1) < 0).astype(jnp.int32)],
+        axis=-1
+    )
 
+    # 2. Turn those reset flags into running segment numbers.
+    return jnp.cumsum(resets, axis=-1)
 
+row = jnp.array([13, 14, 15,  0, 1, 2, 3])
+print(segment_ids_per_row(row))          # → [0 0 0 1 1 1 1]
+
+mat = jnp.array([[37,38,39,40,41,42,43,44,45,46],
+                 [17,18,19,20,21,22,23,24,25,26],
+                 [16,17,18,19,20,21,22,23,24, 0],
+                 [14,15,16,17,18,19,20,21, 0, 1],
+                 [23,24,25,26,27,28,29,30,31,32]])
+print(segment_ids_per_row(mat))
 
 
