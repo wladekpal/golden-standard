@@ -16,8 +16,10 @@ from xminigrid.experimental.img_obs import RGBImgObservationWrapper
 
 
 
-def build_benchmark(env_id, num_envs, timesteps):
+def build_benchmark(env_id, num_envs, timesteps, view_size=3):
     env, env_params = xminigrid.make(env_id)
+    env_params = env_params.replace(view_size=view_size)
+    
     env = GymAutoResetWrapper(env)
     
     def benchmark_fn(key):

@@ -184,12 +184,13 @@ def jit_wrap(buffer):
     buffer.sample_internal = jax.jit(buffer.sample_internal)
     return buffer
 
-
-
+VIEW_SIZE = 3
 key = jax.random.PRNGKey(0)
 buffer_key, reset_key = jax.random.split(key, 2)
 env, env_params = xminigrid.make('MiniGrid-EmptyRandom-5x5')
+env_params = env_params.replace(view_size=VIEW_SIZE)
 env = GymAutoResetWrapper(env)
+
 timestep = jax.jit(env.reset)(env_params, reset_key)
 
 print(timestep.observation.shape)
@@ -218,7 +219,7 @@ print(replay_buffer._data_shape)
 
 
 
-benchmark_fn = build_benchmark('MiniGrid-EmptyRandom-5x5', 256, 50)
+benchmark_fn = build_benchmark('MiniGrid-EmptyRandom-5x5', 256, 50, view_size=VIEW_SIZE)
 
 # TypeError: Cannot determine dtype of key<fry> while using key = jax.random.key(0)
 key = jax.random.PRNGKey(0)
@@ -289,45 +290,27 @@ def flatten_batch(buffer_config, transition, sample_key):
     # the same result can be obtained using probs = is_future_mask * (gamma ** jnp.cumsum(is_future_mask, axis=-1))
 
     single_trajectories = segment_ids_per_row(transition.state.step_num)
-    jax.debug.print("single_trajectories: {x} ", x=single_trajectories)
+    # jax.debug.print("single_trajectories: {x} ", x=single_trajectories)
     # array of seq_len x seq_len where a row is an array of traj_ids that correspond to the episode index from which that time-step was collected
     # timesteps collected from the same episode will have the same traj_id. All rows of the single_trajectories are same.
 
     probs = probs * jnp.equal(single_trajectories, single_trajectories.T) + jnp.eye(seq_len) * 1e-5
-    jax.debug.print("probs: {x} ", x=probs)
+    # jax.debug.print("probs: {x} ", x=probs)
     # ith row of probs will be non zero only for time indices that
     # 1) are greater than i
     # 2) have the same traj_id as the ith time index
 
-    # goal_index = jax.random.categorical(sample_key, jnp.log(probs))
-    # future_state = jnp.take(
-    #     transition.observation, goal_index[:-1], axis=0
-    # )  # the last goal_index cannot be considered as there is no future.
+    goal_index = jax.random.categorical(sample_key, jnp.log(probs))
+    future_state = jnp.take(  # shape (episode_length-1, obs_size_1, obs_size_2, obs_size_3)
+        transition.observation, goal_index[:-1], axis=0
+    )  # the last goal_index cannot be considered as there is no future.
     # future_action = jnp.take(transition.action, goal_index[:-1], axis=0)
-    # goal = future_state[:, goal_indices]
-    # future_state = future_state[:, :state_size]
-    # state = transition.observation[:-1, :state_size]  # all states are considered
-    # new_obs = jnp.concatenate([state, goal], axis=1)
+    jax.debug.print("future_state.shape: {x} ", x=future_state.shape)
+    goal = future_state[:, :, future_state.shape[2]//2, :]
+    jax.debug.print("goal: {x} ", x=goal)
+    state = transition.observation[:-1]  # all states are considered
 
-    # extras = {
-    #     "policy_extras": {},
-    #     "state_extras": {
-    #         "truncation": jnp.squeeze(transition.extras["state_extras"]["truncation"][:-1]),
-    #         "traj_id": jnp.squeeze(transition.extras["state_extras"]["traj_id"][:-1]),
-    #     },
-    #     "state": state,
-    #     "future_state": future_state,
-    #     "future_action": future_action,
-    # }
-
-    # return transition._replace(
-    #     observation=jnp.squeeze(new_obs),  # this has shape (num_envs, episode_length-1, obs_size)
-    #     action=jnp.squeeze(transition.action[:-1]),
-    #     reward=jnp.squeeze(transition.reward[:-1]),
-    #     discount=jnp.squeeze(transition.discount[:-1]),
-    #     extras=extras,
-    # )
-    return transition
+    return state, goal
 
 
 
@@ -336,8 +319,9 @@ buffer_state, transitions = replay_buffer.sample(buffer_state)
 # process transitions for training
 batch_keys = jax.random.split(buffer_state.key, transitions.observation.shape[0])
 print(f"batch_keys: {batch_keys.shape}")
-flattened_transitions = jax.vmap(flatten_batch, in_axes=(None, 0, 0))((0.99, 171, 0), transitions, batch_keys)
-print(f"flattened_transitions.observation.shape: {flattened_transitions.observation.shape}")
+state, goal = jax.vmap(flatten_batch, in_axes=(None, 0, 0))((0.99, 171, 0), transitions, batch_keys)
+print(f"state.shape: {state.shape}")
+print(f"goal.shape: {goal.shape}")
 
 
 

@@ -1,5 +1,5 @@
 import os
-
+import numpy as np
 from matplotlib import pyplot as plt
 
 os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"   
@@ -38,6 +38,8 @@ def main(_):
 
     # to list available environments: xminigrid.registered_environments()
     env, env_params = xminigrid.make(FLAGS.env)
+    env_params = env_params.replace(view_size=3)
+    
 
     # auto-reset wrapper
     env = GymAutoResetWrapper(env)
@@ -70,6 +72,14 @@ def main(_):
     plt.imshow(timestep.observation[:,:,1])
     plt.savefig("observation_1.png")
 
+    modified_observation = np.array(timestep.observation) 
+    modified_observation[:,1,0] = 10 # This is the axis on which there's agent sight
+    modified_observation[:,1,1] = 10
+    plt.imshow(modified_observation[:,:,0])
+    plt.savefig("modified_observation_0.png")
+    plt.imshow(modified_observation[:,:,1])
+    plt.savefig("modified_observation_1.png")
+
 
     # Print environment details
     print(f"Number of actions: {env.num_actions(env_params)}")
@@ -85,6 +95,7 @@ def main(_):
     )
 
     print(f"Observation: {timestep.observation}")
+    print(f"Modified observation: {modified_observation}")
     print(f"Goal: {timestep.state.goal_encoding}")
 
     agent.update(example_batch)
