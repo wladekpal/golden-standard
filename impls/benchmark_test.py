@@ -5,16 +5,20 @@ os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"
 os.environ['CUDA_VISIBLE_DEVICES'] = '4'
 
 import jax
-import flax.struct
-import jax.numpy as jnp
-from jax import flatten_util
+from typing import Generic
+from flax import struct
+
 import xminigrid
 from xminigrid.wrappers import GymAutoResetWrapper
-from xminigrid.types import TimeStep
-from xminigrid.experimental.img_obs import RGBImgObservationWrapper
+from xminigrid.types import TimeStep, EnvCarryT, State, StepType
 
 
 
+
+class TimeStepNew(TimeStep):
+    action: jax.Array
+
+    
 
 def build_benchmark(env_id, num_envs, timesteps, view_size=3):
     env, env_params = xminigrid.make(env_id)
@@ -25,12 +29,13 @@ def build_benchmark(env_id, num_envs, timesteps, view_size=3):
     def benchmark_fn(key):
         def _step_fn(timestep, action):
             new_timestep = jax.vmap(env.step, in_axes=(None, 0, 0))(env_params, timestep, action)
-            return new_timestep, TimeStep(
+            return new_timestep, TimeStepNew(
                 observation=timestep.observation,
                 reward=timestep.reward,
                 discount=timestep.discount,
                 step_type=timestep.step_type,
                 state=timestep.state,
+                action=action,
             )
 
         key, actions_key = jax.random.split(key)
