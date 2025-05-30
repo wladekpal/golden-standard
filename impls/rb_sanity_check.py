@@ -65,10 +65,10 @@ buffer_state, transitions = replay_buffer.sample(buffer_state)
 # Process transitions for training
 batch_keys = jax.random.split(buffer_state.key, transitions.observation.shape[0])
 print(f"batch_keys: {batch_keys.shape}")
-state, action, future_state = jax.vmap(flatten_batch_sanity_check, in_axes=(None, 0, 0))((0.99, 171, 0), transitions, batch_keys)
-print(f"state.shape: {state.shape}")
+state, action, future_state, goal_index = jax.vmap(flatten_batch_sanity_check, in_axes=(None, 0, 0))((0.99, 171, 0), transitions, batch_keys)
 print(f"action.shape: {action.shape}")
-print(f"future_state.shape: {future_state.shape}")
+print(f"future_state.observation.shape: {future_state.observation.shape}")
+print(f"goal_index.shape: {goal_index.shape}")
 
 transition = jax.tree_util.tree_map(lambda x: x[0,0], transitions) # Take only one env and first timestep 
 print(f"transition.observation.shape: {transition.observation.shape}")
@@ -76,6 +76,38 @@ plt.imshow(env.render(env_params, transition))
 plt.savefig("render_transition.png")
 
 
+transition_from_state = jax.tree_util.tree_map(lambda x: x[0,0], state)
+print(f"transition_from_state.observation.shape: {transition_from_state.observation.shape}")
+plt.imshow(env.render(env_params, transition_from_state))
+plt.savefig("render_transition_from_state.png")
+
+print(f"goal_index: {goal_index[0]}")
+
+transition_from_future_state = jax.tree_util.tree_map(lambda x: x[0,0], future_state)
+print(f"transition_from_future_state.observation.shape: {transition_from_future_state.observation.shape}")
+plt.imshow(env.render(env_params, transition_from_future_state))
+plt.savefig("render_transition_from_future_state.png")
+
+transition_from_state_goal_index = jax.tree_util.tree_map(lambda x: x[0,goal_index[0,0]], state)
+print(f"transition_from_state_goal_index.observation.shape: {transition_from_state_goal_index.observation.shape}")
+plt.imshow(env.render(env_params, transition_from_state_goal_index))
+plt.savefig("render_transition_from_state_goal_index.png")
 
 
+# Create a figure with subplots for each timestep
+fig, axes = plt.subplots(2, state.observation.shape[1], figsize=(20, 4))
+for i in range(state.observation.shape[1]):
+    transition_from_state_i = jax.tree_util.tree_map(lambda x: x[0,i], state)
+    axes[0,i].imshow(env.render(env_params, transition_from_state_i))
+    axes[0,i].set_title(f'Timestep {i}\nAction: {action[0,i]}')
+    axes[0,i].axis('off')
 
+for i in range(future_state.observation.shape[1]):
+    transition_from_future_state_i = jax.tree_util.tree_map(lambda x: x[0,i], future_state)
+    axes[1,i].imshow(env.render(env_params, transition_from_future_state_i))
+    axes[1,i].set_title(f'Future Timestep for {i}\nTimestep {goal_index[0,i]}')
+    axes[1,i].axis('off')
+
+plt.tight_layout()
+plt.savefig("render_transition_from_state_all.png")
+plt.close()

@@ -282,17 +282,15 @@ def flatten_batch_sanity_check(buffer_config, transition, sample_key):
     # 2) have the same traj_id as the ith time index
 
     goal_index = jax.random.categorical(sample_key, jnp.log(probs))
-    future_state = jnp.take(  # shape (episode_length-1, obs_size_1, obs_size_2, obs_size_3)
-        transition.observation, goal_index[:-1], axis=0
-    )  # the last goal_index cannot be considered as there is no future.
+    future_state = jax.tree_util.tree_map(lambda x: jnp.take(x, goal_index[:-1], axis=0), transition)  # the last goal_index cannot be considered as there is no future.
 
     # jax.debug.print("future_state.shape: {x} ", x=future_state.shape)
     # goals = future_state[:, :, future_state.shape[2]//2, :]
     # jax.debug.print("goal: {x} ", x=goal)
-    states = transition.observation[:-1]  # all states are considered
+    states = jax.tree_util.tree_map(lambda x: x[:-1], transition) # Take only one env and first timestep 
     actions = transition.action[:-1]
 
-    return states, actions, future_state
+    return states, actions, future_state, goal_index
 
 
 if __name__ == "__main__":
