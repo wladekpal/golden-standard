@@ -6,7 +6,7 @@ os.environ['CUDA_VISIBLE_DEVICES'] = '4'
 import jax
 import jax.numpy as jnp
 import xminigrid
-from benchmark_test import TimeStepNew, build_benchmark
+from impls.data_collection import TimeStepNew, build_benchmark
 from absl import app, flags
 from ml_collections import config_flags
 
@@ -112,7 +112,9 @@ def main(_):
         'terminals':jnp.zeros((state.shape[0],), dtype=jnp.int32), # TODO: check if this is correct
     }
     agent, update_info = agent.update(valid_batch)
-    print(f"update_info: {update_info}")
+    # print(f"update_info: {update_info}")
+
+
 
 
 if __name__ == "__main__":

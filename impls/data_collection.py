@@ -1,19 +1,7 @@
-import os
-import functools
-
-os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"   
-os.environ['CUDA_VISIBLE_DEVICES'] = '4'
-
 import jax
-from typing import Generic
-from flax import struct
-
 import xminigrid
 from xminigrid.wrappers import GymAutoResetWrapper
-from xminigrid.types import TimeStep, EnvCarryT, State, StepType
-
-
-
+from xminigrid.types import TimeStep
 
 class TimeStepNew(TimeStep):
     action: jax.Array
@@ -49,12 +37,3 @@ def build_benchmark(env_id, num_envs, timesteps, view_size=3):
 
     return benchmark_fn
 
-
-# benchmark_fn = build_benchmark('MiniGrid-EmptyRandom-5x5', 1024, 3)
-
-# # TypeError: Cannot determine dtype of key<fry> while using key = jax.random.key(0)
-# key = jax.random.PRNGKey(0)
-# env_step, timesteps_all = benchmark_fn(key)
-
-# print(env_step.observation.shape)
-# print(timesteps_all.observation.shape)
