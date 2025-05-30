@@ -6,7 +6,7 @@ os.environ['CUDA_VISIBLE_DEVICES'] = '4'
 import jax
 import jax.numpy as jnp
 import xminigrid
-from impls.data_collection import TimeStepNew, build_benchmark
+from data_collection import TimeStepNew, build_benchmark
 from absl import app, flags
 from ml_collections import config_flags
 
