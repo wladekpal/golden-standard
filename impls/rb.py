@@ -241,6 +241,7 @@ def flatten_batch(buffer_config, transition, sample_key):
     )  # the last goal_index cannot be considered as there is no future.
 
     # jax.debug.print("future_state.shape: {x} ", x=future_state.shape)
+    # TODO: change that later
     goals = future_state[:, :, future_state.shape[2]//2, :]
     # jax.debug.print("goal: {x} ", x=goal)
     states = transition.observation[:-1]  # all states are considered

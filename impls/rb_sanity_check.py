@@ -111,3 +111,6 @@ for i in range(future_state.observation.shape[1]):
 plt.tight_layout()
 plt.savefig("render_transition_from_state_all.png")
 plt.close()
+
+print(f"transition_from_state_i.state.grid[:,:,0]: {transition_from_state_i.state.grid[:,:,0]}")
+print(f"transition_from_state_i.state.grid[:,:,1]: {transition_from_state_i.state.grid[:,:,1]}")
