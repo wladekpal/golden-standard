@@ -37,17 +37,16 @@ def build_benchmark(env_id, num_envs, timesteps, view_size=3):
 
     return benchmark_fn
 
-def collect_data(env_id, num_envs, agent, goals, timesteps, view_size=3, ):
+def collect_data(env_id, num_envs, goals, timesteps, view_size=3):
     env, env_params = xminigrid.make(env_id)
     env_params = env_params.replace(view_size=view_size)
     
     env = GymAutoResetWrapper(env)
     
-    def benchmark_fn(key):
+    def benchmark_fn(agent, key):
         def _step_fn(carry, unused):
             timestep, current_key = carry
             current_key, next_key = jax.random.split(current_key)
-            print(f"timestep.observation.shape: {timestep.observation.shape}")
             action = agent.sample_actions(timestep.observation.reshape(num_envs, -1), goals, seed=current_key)
             new_timestep = jax.vmap(env.step, in_axes=(None, 0, 0))(env_params, timestep, action)
             return (new_timestep, next_key), TimeStepNew(

@@ -18,7 +18,7 @@ from config import ROOT_DIR
 
 # Environment parameters
 VIEW_SIZE = 3
-env_name = 'MiniGrid-EmptyRandom-8x8'
+env_name = 'MiniGrid-EmptyRandom-5x5'
 
 # Random seed TODO: Need to make sure that latter everything is correctly seeded
 key = jax.random.PRNGKey(0)
@@ -114,3 +114,22 @@ plt.close()
 
 print(f"transition_from_state_i.state.grid[:,:,0]: {transition_from_state_i.state.grid[:,:,0]}")
 print(f"transition_from_state_i.state.grid[:,:,1]: {transition_from_state_i.state.grid[:,:,1]}")
+
+
+# Create a figure with subplots for each timestep
+fig, axes = plt.subplots(2, state.observation.shape[1], figsize=(20, 4))
+for i in range(state.observation.shape[1]):
+    transition_from_state_i = jax.tree_util.tree_map(lambda x: x[1,i], state)
+    axes[0,i].imshow(env.render(env_params, transition_from_state_i))
+    axes[0,i].set_title(f'Timestep {i}\nAction: {action[1,i]}')
+    axes[0,i].axis('off')
+
+for i in range(future_state.observation.shape[1]):
+    transition_from_future_state_i = jax.tree_util.tree_map(lambda x: x[1,i], future_state)
+    axes[1,i].imshow(env.render(env_params, transition_from_future_state_i))
+    axes[1,i].set_title(f'Future Timestep for {i}\nTimestep {goal_index[1,i]}')
+    axes[1,i].axis('off')
+
+plt.tight_layout()
+plt.savefig("render_transition_from_state_all_diff_env.png")
+plt.close()
