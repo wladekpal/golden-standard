@@ -172,3 +172,75 @@ timestep = TimeStepNew(
     )
 timestep = timestep.replace(state=timestep.state.replace(agent=timestep.state.agent.replace(position=jnp.array([3,3]))))
 plt.imshow(env.render(env_params, timestep))
+#%%
+# get concatenated state and agent
+timestep.state.grid.shape
+#%%
+def repeat_tree(tree, n: int):
+    """Replicate every leaf `n` times on a new leading axis."""
+    return jax.tree.map(
+        lambda x: jnp.broadcast_to(x, (n,) + x.shape),  # cheap: stride-0 view
+        tree,
+    )
+
+def get_concatenated_state(timestep):
+    @jax.jit
+    def _ravel_one(sample_tree):
+        flat, _ = jax.flatten_util.ravel_pytree(sample_tree)   # 1-D feature vector
+        return flat                           # shape (F,)
+
+    if timestep.state.grid.ndim == 3:
+        grid_state = timestep.state.grid.reshape(-1, timestep.state.grid.size)
+        agent_state = jax.flatten_util.ravel_pytree(timestep.state.agent)[0].reshape(1, -1)
+        return jnp.concatenate([grid_state, agent_state], axis=1)
+    elif timestep.state.grid.ndim == 4:
+        grid_state = jax.tree_util.tree_map(lambda x: x.reshape(x.shape[0], x[0].size), timestep.state.grid)
+        print(f"grid_state.shape: {grid_state.shape}")
+        agent_state = jax.vmap(_ravel_one)(timestep.state.agent)
+        print(f"agent_state.shape: {agent_state.shape}")
+        return jnp.concatenate([grid_state, agent_state], axis=1)
+
+        
+print(f"timestep.state.grid.shape: {timestep.state.grid.shape}")
+concatenated_state = get_concatenated_state(timestep)
+print(f"concatenated_state.shape: {concatenated_state.shape}")
+
+
+# batch_timestep = jax.tree_util.tree_map(lambda x: x[None], timestep)
+batch_timestep = repeat_tree(timestep, 256)
+print(f"batch_timestep.observation.shape: {batch_timestep.observation.shape}")
+print(f"batch_timestep.state.grid.shape: {batch_timestep.state.grid.shape}")
+print(f"batch_timestep.state.agent.position.shape: {batch_timestep.state.agent.position.shape}")
+concatenated_state_2 = get_concatenated_state(batch_timestep)
+print(f"concatenated_state_2.shape: {concatenated_state_2.shape}")
+
+
+#%%
+batch_timestep.state.agent.position.shape
+
+# print(concatenated_state_2.shape)
+
+#%%
+# jax.tree_util.tree_map(lambda x: jax.flatten_util.ravel_pytree(x)[0], batch_timestep.state.agent)
+print(f"batch_timestep.state.agent.position.shape: {batch_timestep.state.agent.position.shape}")
+jax.flatten_util.ravel_pytree(batch_timestep.state.agent)[0]
+
+
+#%%
+# ----- helper that ravels ONE sample (a single slice along axis-0) -----
+def _ravel_one(sample_tree):
+    flat, _ = jax.flatten_util.ravel_pytree(sample_tree)   # 1-D feature vector
+    return flat                           # shape (F,)
+
+# ----- ravel the entire agent state while keeping the batch axis intact -----
+# If the leaves all have shape (B, …), the result has shape (B, F)
+agent_state = jax.vmap(_ravel_one)(batch_timestep.state.agent)
+print(f"agent_state.shape: {agent_state.shape}")
+
+
+#%%
+
+
+batch_timestep = repeat_tree(timestep, 256)
+print(f"batch_timestep.state.agent.position.shape: {batch_timestep.state.agent.position.shape}")
+print(f"batch_timestep.state.grid.shape: {batch_timestep.state.grid.shape}")
