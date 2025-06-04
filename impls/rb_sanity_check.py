@@ -48,7 +48,7 @@ replay_buffer = jit_wrap(
         dummy_data_sample=timestep,
         sample_batch_size=256,
         num_envs=256,
-        episode_length=10,
+        episode_length=20,
     )
 )
 buffer_state = jax.jit(replay_buffer.init)(buffer_key)

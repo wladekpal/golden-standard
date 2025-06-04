@@ -225,6 +225,11 @@ def flatten_batch(buffer_config, transition, sample_key):
     # the same result can be obtained using probs = is_future_mask * (gamma ** jnp.cumsum(is_future_mask, axis=-1))
 
     single_trajectories = segment_ids_per_row(transition.state.step_num)
+    single_trajectories = jnp.concatenate(
+            [single_trajectories[:, jnp.newaxis].T] * seq_len,
+            axis=0,
+    )
+
     # jax.debug.print("single_trajectories: {x} ", x=single_trajectories)
     # array of seq_len x seq_len where a row is an array of traj_ids that correspond to the episode index from which that time-step was collected
     # timesteps collected from the same episode will have the same traj_id. All rows of the single_trajectories are same.
@@ -241,49 +246,6 @@ def flatten_batch(buffer_config, transition, sample_key):
 
     return states, future_state, goal_index
 
-@functools.partial(jax.jit, static_argnames=("buffer_config"))
-def flatten_batch_sanity_check(buffer_config, transition, sample_key):
-    gamma, state_size, goal_indices = buffer_config
-
-    # Because it's vmaped transition.obs.shape is of shape (episode_len, obs_dim)
-    seq_len = transition.observation.shape[0]
-    arrangement = jnp.arange(seq_len)
-    is_future_mask = jnp.array(
-        arrangement[:, None] < arrangement[None], dtype=jnp.float32
-    )  # upper triangular matrix of shape seq_len, seq_len where all non-zero entries are 1
-    discount = gamma ** jnp.array(arrangement[None] - arrangement[:, None], dtype=jnp.float32)
-    probs = is_future_mask * discount
-
-    # probs is an upper triangular matrix of shape seq_len, seq_len of the form:
-    #    [[0.        , 0.99      , 0.98010004, 0.970299  , 0.960596 ],
-    #    [0.        , 0.        , 0.99      , 0.98010004, 0.970299  ],
-    #    [0.        , 0.        , 0.        , 0.99      , 0.98010004],
-    #    [0.        , 0.        , 0.        , 0.        , 0.99      ],
-    #    [0.        , 0.        , 0.        , 0.        , 0.        ]]
-    # assuming seq_len = 5
-    # the same result can be obtained using probs = is_future_mask * (gamma ** jnp.cumsum(is_future_mask, axis=-1))
-
-    single_trajectories = segment_ids_per_row(transition.state.step_num)
-    # jax.debug.print("single_trajectories: {x} ", x=single_trajectories)
-    # array of seq_len x seq_len where a row is an array of traj_ids that correspond to the episode index from which that time-step was collected
-    # timesteps collected from the same episode will have the same traj_id. All rows of the single_trajectories are same.
-
-    probs = probs * jnp.equal(single_trajectories, single_trajectories.T) + jnp.eye(seq_len) * 1e-5
-    # jax.debug.print("probs: {x} ", x=probs)
-    # ith row of probs will be non zero only for time indices that
-    # 1) are greater than i
-    # 2) have the same traj_id as the ith time index
-
-    goal_index = jax.random.categorical(sample_key, jnp.log(probs))
-    future_state = jax.tree_util.tree_map(lambda x: jnp.take(x, goal_index[:-1], axis=0), transition)  # the last goal_index cannot be considered as there is no future.
-
-    # jax.debug.print("future_state.shape: {x} ", x=future_state.shape)
-    # goals = future_state[:, :, future_state.shape[2]//2, :]
-    # jax.debug.print("goal: {x} ", x=goal)
-    states = jax.tree_util.tree_map(lambda x: x[:-1], transition) 
-    actions = transition.action[:-1]
-
-    return states, actions, future_state, goal_index
 
 
 if __name__ == "__main__":
@@ -296,4 +258,13 @@ if __name__ == "__main__":
                     [16,17,18,19,20,21,22,23,24, 0],
                     [14,15,16,17,18,19,20,21, 0, 1],
                     [23,24,25,26,27,28,29,30,31,32]])
-    print(segment_ids_per_row(mat)) 
+    single_trajectories = segment_ids_per_row(mat)
+    print(single_trajectories) 
+
+    single_trajectories_row = segment_ids_per_row(row)
+    single_trajectories = jnp.concatenate(
+        [single_trajectories_row[:, jnp.newaxis].T] * len(row),
+        axis=0,
+    )
+    print(single_trajectories)
+    print(jnp.equal(single_trajectories.T, single_trajectories))
