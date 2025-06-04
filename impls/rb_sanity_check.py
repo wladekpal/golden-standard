@@ -1,3 +1,5 @@
+#%%
+import copy
 import os
 
 from matplotlib import pyplot as plt
@@ -13,7 +15,7 @@ from absl import app, flags
 from ml_collections import config_flags
 
 from agents import agents
-from rb import TrajectoryUniformSamplingQueue, flatten_batch, flatten_batch_sanity_check, jit_wrap
+from rb import TrajectoryUniformSamplingQueue, flatten_batch, jit_wrap
 from config import ROOT_DIR
 
 # Environment parameters
@@ -65,8 +67,8 @@ buffer_state, transitions = replay_buffer.sample(buffer_state)
 # Process transitions for training
 batch_keys = jax.random.split(buffer_state.key, transitions.observation.shape[0])
 print(f"batch_keys: {batch_keys.shape}")
-state, action, future_state, goal_index = jax.vmap(flatten_batch_sanity_check, in_axes=(None, 0, 0))((0.99, 171, 0), transitions, batch_keys)
-print(f"action.shape: {action.shape}")
+state, future_state, goal_index = jax.vmap(flatten_batch, in_axes=(None, 0, 0))((0.99, 171, 0), transitions, batch_keys)
+print(f"action.shape: {state.action.shape}")
 print(f"future_state.observation.shape: {future_state.observation.shape}")
 print(f"goal_index.shape: {goal_index.shape}")
 
@@ -99,7 +101,7 @@ fig, axes = plt.subplots(2, state.observation.shape[1], figsize=(20, 4))
 for i in range(state.observation.shape[1]):
     transition_from_state_i = jax.tree_util.tree_map(lambda x: x[0,i], state)
     axes[0,i].imshow(env.render(env_params, transition_from_state_i))
-    axes[0,i].set_title(f'Timestep {i}\nAction: {action[0,i]}')
+    axes[0,i].set_title(f'Timestep {i}\nAction: {state.action[0,i]}')
     axes[0,i].axis('off')
 
 for i in range(future_state.observation.shape[1]):
@@ -121,7 +123,7 @@ fig, axes = plt.subplots(2, state.observation.shape[1], figsize=(20, 4))
 for i in range(state.observation.shape[1]):
     transition_from_state_i = jax.tree_util.tree_map(lambda x: x[1,i], state)
     axes[0,i].imshow(env.render(env_params, transition_from_state_i))
-    axes[0,i].set_title(f'Timestep {i}\nAction: {action[1,i]}')
+    axes[0,i].set_title(f'Timestep {i}\nAction: {state.action[1,i]}')
     axes[0,i].axis('off')
 
 for i in range(future_state.observation.shape[1]):
@@ -133,3 +135,40 @@ for i in range(future_state.observation.shape[1]):
 plt.tight_layout()
 plt.savefig("render_transition_from_state_all_diff_env.png")
 plt.close()
+
+#%%
+plt.imshow(env.render(env_params, transition_from_future_state_i))
+
+transition_from_future_state_i.state.grid[:,:,0]
+transition_from_future_state_i.state.grid[:,:,1]
+
+#%%
+transition_from_future_state_i.state.agent
+
+#%%
+jax.tree_util.tree_flatten(transition_from_future_state_i.state.agent)
+
+#%%
+jax.flatten_util.ravel_pytree(transition_from_future_state_i.state.agent)[0]
+
+
+#%%
+goal_state = copy.deepcopy(transition_from_future_state_i)
+goal_state = goal_state.replace(state=goal_state.state.replace(agent=goal_state.state.agent.replace(position=jnp.array([3,3]))))
+
+plt.imshow(env.render(env_params, goal_state))
+
+#%%
+env, env_params = xminigrid.make(env_name)
+env_params = env_params.replace(view_size=VIEW_SIZE)
+timestep = jax.jit(env.reset)(env_params, reset_key)
+timestep = TimeStepNew(
+    state=timestep.state,
+    step_type=timestep.step_type,
+    reward=timestep.reward,
+    discount=timestep.discount,
+    observation=timestep.observation,
+    action=jnp.zeros((1,), dtype=jnp.int32),
+    )
+timestep = timestep.replace(state=timestep.state.replace(agent=timestep.state.agent.replace(position=jnp.array([3,3]))))
+plt.imshow(env.render(env_params, timestep))
