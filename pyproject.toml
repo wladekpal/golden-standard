@@ -17,3 +17,8 @@ dependencies = [
     "wandb>=0.19.11",
     "xminigrid>=0.9.1",
 ]
+
+[dependency-groups]
+dev = [
+    "ipykernel>=6.29.5",
+]
