@@ -29,6 +29,8 @@ class CRLAgent(flax.struct.PyTreeNode):
             actions = batch['actions']
         else:
             actions = None
+        # jax.debug.print("batch['observations']: {x}", x=batch['observations'])
+        # jax.debug.print("batch['value_goals']: {x}", x=batch['value_goals'])
         v, phi, psi = self.network.select(module_name)(
             batch['observations'],
             batch['value_goals'],
@@ -36,10 +38,15 @@ class CRLAgent(flax.struct.PyTreeNode):
             info=True,
             params=grad_params,
         )
+        # jax.debug.print("phi1.shape: {x}", x=phi.shape)
+        # jax.debug.print("psi1.shape: {x}", x=psi.shape)
         if len(phi.shape) == 2:  # Non-ensemble.
             phi = phi[None, ...]
             psi = psi[None, ...]
+        # jax.debug.print("phi2.shape: {x}", x=phi.shape)
+        # jax.debug.print("psi2.shape: {x}", x=psi.shape)
         logits = jnp.einsum('eik,ejk->ije', phi, psi) / jnp.sqrt(phi.shape[-1])
+        # jax.debug.print("logits.shape: {x}", x=logits.shape)
         # logits.shape is (B, B, e) with one term for positive pair and (B - 1) terms for negative pairs in each row.
         I = jnp.eye(batch_size)
         contrastive_loss = jax.vmap(
