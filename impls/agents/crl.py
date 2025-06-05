@@ -9,6 +9,8 @@ from utils.encoders import GCEncoder, encoder_modules
 from utils.flax_utils import ModuleDict, TrainState, nonpytree_field
 from utils.networks import GCActor, GCBilinearValue, GCDiscreteActor, GCDiscreteBilinearCritic
 
+# jnp.printoptions(precision=3, threshold=10000, linewidth=200)
+
 
 class CRLAgent(flax.struct.PyTreeNode):
     """Contrastive RL (CRL) agent.
@@ -31,6 +33,9 @@ class CRLAgent(flax.struct.PyTreeNode):
             actions = None
         # jax.debug.print("batch['observations']: {x}", x=batch['observations'])
         # jax.debug.print("batch['value_goals']: {x}", x=batch['value_goals'])
+        jax.debug.print("batch['observations'][:,-1]: {x}", x=batch['observations'][:,-1])
+        jax.debug.print("batch['value_goals'][:,-1]: {x}", x=batch['value_goals'][:,-1])
+        jax.debug.print("batch concat: {x}", x=jnp.concatenate([batch['observations'][:,-1][:, None], batch['value_goals'][:,-1][:, None]], axis=1))
         v, phi, psi = self.network.select(module_name)(
             batch['observations'],
             batch['value_goals'],
@@ -329,7 +334,7 @@ def get_config():
             alpha=0.1,  # Temperature in AWR or BC coefficient in DDPG+BC.
             actor_log_q=True,  # Whether to maximize log Q (True) or Q itself (False) in the actor loss.
             const_std=True,  # Whether to use constant standard deviation for the actor.
-            discrete=False,  # Whether the action space is discrete.
+            discrete=True,  # Whether the action space is discrete.
             encoder=ml_collections.config_dict.placeholder(str),  # Visual encoder name (None, 'impala_small', etc.).
             # Dataset hyperparameters.
             dataset_class='GCDataset',  # Dataset class name.
