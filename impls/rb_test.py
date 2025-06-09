@@ -3,7 +3,7 @@ import os
 from matplotlib import pyplot as plt
 
 os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"   
-os.environ['CUDA_VISIBLE_DEVICES'] = '2'
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 # os.environ['WANDB_MODE'] = 'offline'
 
 import jax
@@ -28,13 +28,13 @@ config_flags.DEFINE_config_file('agent', ROOT_DIR + '/agents/crl.py', lock_confi
 
 def main(_):
     # Wandb
-    wandb.init(project="xminigrid-crl_full_state", name="rb_test", config=FLAGS)
+    wandb.init(project="xminigrid-crl_full_state", name="rb_test_scan_1000_big_no_num_step", config=FLAGS)
     # Environment parameters
     VIEW_SIZE = 3
-    BATCH_SIZE = 256
+    BATCH_SIZE = 512
     NUM_ENVS = 256
-    MAX_REPLAY_SIZE = 1000
-    EPISODE_LENGTH = 20
+    MAX_REPLAY_SIZE = 10000
+    EPISODE_LENGTH = 100
     env_name = 'MiniGrid-EmptyRandom-5x5'
 
     # Random seed TODO: Need to make sure that latter everything is correctly seeded
@@ -113,26 +113,52 @@ def main(_):
         # insert data into buffer
         buffer_state = replay_buffer.insert(buffer_state, timesteps_all)
 
-        for j in range(1):        
-            buffer_state, transitions = replay_buffer.sample(buffer_state) 
+        def update_step(carry, _):
+            buffer_state, agent, key = carry
+            
+            # Sample and process transitions
+            buffer_state, transitions = replay_buffer.sample(buffer_state)
             batch_keys = jax.random.split(buffer_state.key, transitions.observation.shape[0])
             state, future_state, goal_index = jax.vmap(flatten_batch, in_axes=(None, 0, 0))((0.99, None, None), transitions, batch_keys)
 
-
-            random_index = jax.random.randint(key, (), minval=0, maxval=state.observation.shape[1])
-            state, future_state, goal_index = jax.tree_util.tree_map(lambda x: x[:,random_index], state), jax.tree_util.tree_map(lambda x: x[:,random_index], future_state), jax.tree_util.tree_map(lambda x: x[:,random_index], goal_index)
+            # Get random index for each batch
+            key, subkey = jax.random.split(key)
+            random_index = jax.random.randint(subkey, (), minval=0, maxval=state.observation.shape[1])
+            
+            # Extract data at random index
+            state = jax.tree_util.tree_map(lambda x: x[:,random_index], state)
+            future_state = jax.tree_util.tree_map(lambda x: x[:,random_index], future_state)
+            goal_index = jax.tree_util.tree_map(lambda x: x[:,random_index], goal_index)
             actions = state.action
 
+            # Create valid batch
             valid_batch = {
-                'observations':get_concatenated_state(state),
-                'actions':actions.squeeze(),
-                'value_goals':get_concatenated_state(future_state),
-                'actor_goals':get_concatenated_state(future_state),
+                'observations': get_concatenated_state(state),
+                'actions': actions.squeeze(),
+                'value_goals': get_concatenated_state(future_state),
+                'actor_goals': get_concatenated_state(future_state),
             }
 
+            # Update agent
             agent, update_info = agent.update(valid_batch)
-            update_info.update({"eval/reward_min": timesteps_all.reward.min(), "eval/reward_max": timesteps_all.reward.max(), "eval/reward_mean": timesteps_all.reward.mean()})
-        wandb.log(update_info)
+            update_info.update({
+                "eval/reward_min": timesteps_all.reward.min(),
+                "eval/reward_max": timesteps_all.reward.max(), 
+                "eval/reward_mean": timesteps_all.reward.mean()
+            })
+
+            return (buffer_state, agent, key), update_info
+
+        # Run scan for updates
+        (buffer_state, agent, key), update_infos = jax.lax.scan(
+            update_step,
+            (buffer_state, agent, key),
+            None,
+            length=1000
+        )
+
+        print(f"update_infos: {update_infos}")
+        wandb.log(jax.tree_util.tree_map(lambda x: x[-1], update_infos))
 
 
 
