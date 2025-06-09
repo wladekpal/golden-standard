@@ -28,14 +28,14 @@ config_flags.DEFINE_config_file('agent', ROOT_DIR + '/agents/crl.py', lock_confi
 
 def main(_):
     # Wandb
-    wandb.init(project="xminigrid-crl_full_state", name="rb_test_scan_1000_big_no_num_step", config=FLAGS)
+    wandb.init(project="xminigrid-crl_full_state", name="rb_test_scan_1000_big_no_num_step_8x8", config=FLAGS)
     # Environment parameters
     VIEW_SIZE = 3
     BATCH_SIZE = 512
     NUM_ENVS = 256
     MAX_REPLAY_SIZE = 10000
     EPISODE_LENGTH = 100
-    env_name = 'MiniGrid-EmptyRandom-5x5'
+    env_name = 'MiniGrid-EmptyRandom-8x8'
 
     # Random seed TODO: Need to make sure that latter everything is correctly seeded
     key = jax.random.PRNGKey(0)
