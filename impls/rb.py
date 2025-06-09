@@ -223,19 +223,15 @@ def flatten_batch(buffer_config, transition, sample_key):
     #    [0.        , 0.        , 0.        , 0.        , 0.        ]]
     # assuming seq_len = 5
     # the same result can be obtained using probs = is_future_mask * (gamma ** jnp.cumsum(is_future_mask, axis=-1))
-
     single_trajectories = segment_ids_per_row(transition.state.step_num)
     single_trajectories = jnp.concatenate(
             [single_trajectories[:, jnp.newaxis].T] * seq_len,
             axis=0,
     )
-
-    # jax.debug.print("single_trajectories: {x} ", x=single_trajectories)
     # array of seq_len x seq_len where a row is an array of traj_ids that correspond to the episode index from which that time-step was collected
     # timesteps collected from the same episode will have the same traj_id. All rows of the single_trajectories are same.
 
     probs = probs * jnp.equal(single_trajectories, single_trajectories.T) + jnp.eye(seq_len) * 1e-5
-    # jax.debug.print("probs: {x} ", x=probs)
     # ith row of probs will be non zero only for time indices that
     # 1) are greater than i
     # 2) have the same traj_id as the ith time index
@@ -250,7 +246,7 @@ def flatten_batch(buffer_config, transition, sample_key):
 
 if __name__ == "__main__":
     # test segment_ids_per_row
-    row = jnp.array([13, 14, 15,  0, 1, 2, 3])
+    row = jnp.array([13, 14, 15,  0, 1, 2, 3, 0, 2])
     print(segment_ids_per_row(row))          # → [0 0 0 1 1 1 1]
 
     mat = jnp.array([[37,38,39,40,41,42,43,44,45,46],
@@ -268,3 +264,4 @@ if __name__ == "__main__":
     )
     print(single_trajectories)
     print(jnp.equal(single_trajectories.T, single_trajectories))
+    print(jnp.equal(single_trajectories, single_trajectories.T))

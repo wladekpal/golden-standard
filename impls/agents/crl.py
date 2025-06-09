@@ -31,11 +31,7 @@ class CRLAgent(flax.struct.PyTreeNode):
             actions = batch['actions']
         else:
             actions = None
-        # jax.debug.print("batch['observations']: {x}", x=batch['observations'])
-        # jax.debug.print("batch['value_goals']: {x}", x=batch['value_goals'])
-        jax.debug.print("batch['observations'][:,-1]: {x}", x=batch['observations'][:,-1])
-        jax.debug.print("batch['value_goals'][:,-1]: {x}", x=batch['value_goals'][:,-1])
-        jax.debug.print("batch concat: {x}", x=jnp.concatenate([batch['observations'][:,-1][:, None], batch['value_goals'][:,-1][:, None]], axis=1))
+
         v, phi, psi = self.network.select(module_name)(
             batch['observations'],
             batch['value_goals'],
@@ -43,15 +39,10 @@ class CRLAgent(flax.struct.PyTreeNode):
             info=True,
             params=grad_params,
         )
-        # jax.debug.print("phi1.shape: {x}", x=phi.shape)
-        # jax.debug.print("psi1.shape: {x}", x=psi.shape)
         if len(phi.shape) == 2:  # Non-ensemble.
             phi = phi[None, ...]
             psi = psi[None, ...]
-        # jax.debug.print("phi2.shape: {x}", x=phi.shape)
-        # jax.debug.print("psi2.shape: {x}", x=psi.shape)
         logits = jnp.einsum('eik,ejk->ije', phi, psi) / jnp.sqrt(phi.shape[-1])
-        # jax.debug.print("logits.shape: {x}", x=logits.shape)
         # logits.shape is (B, B, e) with one term for positive pair and (B - 1) terms for negative pairs in each row.
         I = jnp.eye(batch_size)
         contrastive_loss = jax.vmap(
@@ -332,7 +323,7 @@ def get_config():
             discount=0.99,  # Discount factor.
             actor_loss='awr',  # Actor loss type ('awr' or 'ddpgbc').
             alpha=0.1,  # Temperature in AWR or BC coefficient in DDPG+BC.
-            actor_log_q=True,  # Whether to maximize log Q (True) or Q itself (False) in the actor loss.
+            actor_log_q=False,  # Whether to maximize log Q (True) or Q itself (False) in the actor loss.
             const_std=True,  # Whether to use constant standard deviation for the actor.
             discrete=True,  # Whether the action space is discrete.
             encoder=ml_collections.config_dict.placeholder(str),  # Visual encoder name (None, 'impala_small', etc.).

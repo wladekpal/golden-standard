@@ -4,6 +4,8 @@ import os
 
 from matplotlib import pyplot as plt
 
+from data_collection import get_concatenated_state, repeat_tree
+
 os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"   
 os.environ['CUDA_VISIBLE_DEVICES'] = '4'
 
@@ -176,29 +178,7 @@ plt.imshow(env.render(env_params, timestep))
 # get concatenated state and agent
 timestep.state.grid.shape
 #%%
-def repeat_tree(tree, n: int):
-    """Replicate every leaf `n` times on a new leading axis."""
-    return jax.tree.map(
-        lambda x: jnp.broadcast_to(x, (n,) + x.shape),  # cheap: stride-0 view
-        tree,
-    )
 
-def get_concatenated_state(timestep):
-    @jax.jit
-    def _ravel_one(sample_tree):
-        flat, _ = jax.flatten_util.ravel_pytree(sample_tree)   # 1-D feature vector
-        return flat                           # shape (F,)
-
-    if timestep.state.grid.ndim == 3:
-        grid_state = timestep.state.grid.reshape(-1, timestep.state.grid.size)
-        agent_state = jax.flatten_util.ravel_pytree(timestep.state.agent)[0].reshape(1, -1)
-        return jnp.concatenate([grid_state, agent_state], axis=1)
-    elif timestep.state.grid.ndim == 4:
-        grid_state = jax.tree_util.tree_map(lambda x: x.reshape(x.shape[0], x[0].size), timestep.state.grid)
-        print(f"grid_state.shape: {grid_state.shape}")
-        agent_state = jax.vmap(_ravel_one)(timestep.state.agent)
-        print(f"agent_state.shape: {agent_state.shape}")
-        return jnp.concatenate([grid_state, agent_state], axis=1)
 
         
 print(f"timestep.state.grid.shape: {timestep.state.grid.shape}")
