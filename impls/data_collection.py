@@ -20,13 +20,13 @@ def get_concatenated_state(timestep):
     if timestep.state.grid.ndim == 3:
         grid_state = timestep.state.grid.reshape(-1, timestep.state.grid.size)
         agent_state = jax.flatten_util.ravel_pytree(timestep.state.agent)[0].reshape(1, -1)
-        return jnp.concatenate([grid_state, agent_state, timestep.state.step_num.reshape((-1, 1))], axis=1)
+        return jnp.concatenate([grid_state, agent_state], axis=1)
     elif timestep.state.grid.ndim == 4:
         grid_state = jax.tree_util.tree_map(lambda x: x.reshape(x.shape[0], x[0].size), timestep.state.grid)
         print(f"grid_state.shape: {grid_state.shape}")
         agent_state = jax.vmap(_ravel_one)(timestep.state.agent)
         print(f"agent_state.shape: {agent_state.shape}")
-        return jnp.concatenate([grid_state, agent_state, timestep.state.step_num.reshape((-1, 1))], axis=1)
+        return jnp.concatenate([grid_state, agent_state], axis=1)
 
 
 class TimeStepNew(TimeStep):
