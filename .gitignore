@@ -321,3 +321,4 @@ pyrightconfig.json
 *.vscode
 
 wandb/
+*.png

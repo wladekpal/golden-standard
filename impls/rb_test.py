@@ -3,7 +3,7 @@ import os
 from matplotlib import pyplot as plt
 
 os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"   
-os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+os.environ['CUDA_VISIBLE_DEVICES'] = '3'
 # os.environ['WANDB_MODE'] = 'offline'
 
 import jax
@@ -28,7 +28,7 @@ config_flags.DEFINE_config_file('agent', ROOT_DIR + '/agents/crl.py', lock_confi
 
 def main(_):
     # Wandb
-    wandb.init(project="xminigrid-crl_full_state", name="rb_test_scan_1000_big_no_num_step_8x8", config=FLAGS)
+    wandb.init(project="xminigrid-crl_full_state", name="rb_test_scan_1000_big_no_num_step_8x8_correct_goal_log_q_true", config=FLAGS)
     # Environment parameters
     VIEW_SIZE = 3
     BATCH_SIZE = 512
@@ -53,7 +53,7 @@ def main(_):
         observation=timestep.observation,
         action=jnp.zeros((1,), dtype=jnp.int32),
     )
-    exemplary_goal = timestep.replace(state=timestep.state.replace(agent=timestep.state.agent.replace(position=jnp.array([3,3]))))
+    exemplary_goal = timestep.replace(state=timestep.state.replace(agent=timestep.state.agent.replace(position=jnp.array([6,6]))))
     exemplary_goals = repeat_tree(exemplary_goal, 256)
 
 

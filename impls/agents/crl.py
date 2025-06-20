@@ -323,7 +323,7 @@ def get_config():
             discount=0.99,  # Discount factor.
             actor_loss='awr',  # Actor loss type ('awr' or 'ddpgbc').
             alpha=0.1,  # Temperature in AWR or BC coefficient in DDPG+BC.
-            actor_log_q=False,  # Whether to maximize log Q (True) or Q itself (False) in the actor loss.
+            actor_log_q=True,  # Whether to maximize log Q (True) or Q itself (False) in the actor loss.
             const_std=True,  # Whether to use constant standard deviation for the actor.
             discrete=True,  # Whether the action space is discrete.
             encoder=ml_collections.config_dict.placeholder(str),  # Visual encoder name (None, 'impala_small', etc.).
