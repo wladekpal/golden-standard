@@ -117,7 +117,6 @@ class BoxPushingEnv:
         
         return state, info
     
-    
     def _generate_target_cells(self, key: jax.Array) -> jax.Array:
         """Generate target cells in right quarter."""
         target_start_row = self.grid_size // 2
@@ -263,7 +262,6 @@ class BoxPushingEnv:
         
         return new_pos, new_grid, new_agent_has_box
 
-
     def _handle_putdown(self, state: BoxPushingState) -> Tuple[jax.Array, bool]:
         """Handle putdown action."""
 
@@ -286,12 +284,10 @@ class BoxPushingEnv:
         )
         return new_grid, new_agent_has_box
 
-
     def _is_goal_reached(self, grid: jax.Array) -> bool:
         """Check if all boxes are in target cells."""
         return jnp.sum(grid) == 0
 
-    
     def _handle_pickup(self, state: BoxPushingState) -> Tuple[jax.Array, bool]:
         """Handle pickup action."""
             
