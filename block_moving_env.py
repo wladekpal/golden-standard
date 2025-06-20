@@ -1,17 +1,22 @@
+import os
+os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"   
+os.environ['CUDA_VISIBLE_DEVICES'] = '4'
+
 import jax
 import jax.numpy as jnp
 from jax import random
 from typing import Tuple, Dict, Any, Optional
 from dataclasses import dataclass
 import chex
+from flax import struct
 
-@dataclass
-class BoxPushingState:
+
+class BoxPushingState(struct.PyTreeNode):
     """State representation for the box pushing environment."""
     grid: jax.Array  # N x N grid where 0=empty, 1=box
     agent_pos: jax.Array  # [row, col] position of agent
-    agent_has_box: bool  # Whether agent is carrying a box
-    steps: int  # Current step count
+    agent_has_box: jax.Array  # Whether agent is carrying a box
+    steps: jax.Array  # Current step count
     target_cells: jax.Array  # Target cell coordinates for boxes
 
 @dataclass
@@ -40,7 +45,7 @@ ACTIONS = {
 }
         
 
-@dataclass
+
 class BoxPushingEnv:
     """JAX-based box pushing environment."""
     
@@ -65,16 +70,23 @@ class BoxPushingEnv:
         
         # Place boxes at valid positions
         grid = grid.at[box_rows, box_cols].set(GridStatesEnum.BOX)
+        
         # Generate target cells in right quarter
         target_cells = self._generate_target_cells(key3)
         
         # Check if there's already a box at target positions and use BOX_ON_TARGET if so
-        for i in range(len(target_cells)):
-            row, col = target_cells[i]
-            if grid[row, col] == GridStatesEnum.BOX:
-                grid = grid.at[row, col].set(GridStatesEnum.BOX_ON_TARGET)
-            else:
-                grid = grid.at[row, col].set(GridStatesEnum.TARGET)
+        # Use vectorized operations instead of for loop
+        target_rows = target_cells[:, 0]
+        target_cols = target_cells[:, 1]
+        target_cell_values = grid[target_rows, target_cols]
+        
+        # Create mask for boxes at target positions
+        box_at_target_mask = target_cell_values == GridStatesEnum.BOX
+        
+        # Update grid using vectorized operations
+        grid = grid.at[target_rows, target_cols].set(
+            jnp.where(box_at_target_mask, GridStatesEnum.BOX_ON_TARGET, GridStatesEnum.TARGET)
+        )
         
         # Place agent randomly
         row = random.randint(key2, (), 0, self.grid_size)
@@ -133,16 +145,21 @@ class BoxPushingEnv:
         reward = 0 
         done = False
 
-        if action < 4:  # Movement action
-            new_pos, new_grid, new_agent_has_box = self.handle_movement(state, action)
-        elif action == 4:  # PICK_UP
-            new_pos = state.agent_pos
-            new_grid, new_agent_has_box = self._handle_pickup(state)
-        elif action == 5:  # PUT_DOWN
-            new_pos = state.agent_pos
-            new_grid, new_agent_has_box = self._handle_putdown(state)
-        else:
-            raise ValueError(f"Invalid action: {action}")
+        # Use jax.lax.switch instead of if-elif to handle traced arrays
+        action_result = jax.lax.switch(
+            action,
+            branches=[
+                lambda _: self.handle_movement(state, 0),  # Movement action 0
+                lambda _: self.handle_movement(state, 1),  # Movement action 1
+                lambda _: self.handle_movement(state, 2),  # Movement action 2
+                lambda _: self.handle_movement(state, 3),  # Movement action 3
+                lambda _: (state.agent_pos, *self._handle_pickup(state)),  # PICK_UP
+                lambda _: (state.agent_pos, *self._handle_putdown(state)),  # PUT_DOWN
+            ],
+            operand=None
+        )
+        
+        new_pos, new_grid, new_agent_has_box = action_result
         
         # Check if done
         done = (new_steps >= self.max_steps) | self._is_goal_reached(new_grid)
@@ -156,7 +173,6 @@ class BoxPushingEnv:
         )
         
         info = {
-            'boxes_moved': self._count_boxes_in_target(new_grid),
             'total_boxes': jnp.sum(new_grid)
         }
         
@@ -176,76 +192,76 @@ class BoxPushingEnv:
             # ((grid[new_row, new_col] == GridStatesEnum.EMPTY) | (grid[new_row, new_col] == GridStatesEnum.TARGET) | (grid[new_row, new_col] == GridStatesEnum.BOX))
         )
 
-        if not valid_move:
-            return state.agent_pos, grid, state.agent_has_box
-        
-        new_pos = jax.lax.cond(
-            valid_move,
-            lambda: jnp.array([new_row, new_col]),
-            lambda: state.agent_pos
-        )
-        
-        # Check if agent was on box or target or box on target before clearing
-        grid = jax.lax.switch(
-            jnp.array([
-                grid[row, col] == GridStatesEnum.AGENT_ON_BOX,
-                grid[row, col] == GridStatesEnum.AGENT_ON_TARGET,
-                grid[row, col] == GridStatesEnum.AGENT_ON_TARGET_WITH_BOX,
-                grid[row, col] == GridStatesEnum.AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX,
-                grid[row, col] == GridStatesEnum.AGENT_ON_TARGET_CARRYING_BOX,
-                grid[row, col] == GridStatesEnum.AGENT_ON_BOX_CARRYING_BOX,
-                grid[row, col] == GridStatesEnum.AGENT,
-                grid[row, col] == GridStatesEnum.AGENT_CARRYING_BOX,
-            ]).astype(jnp.int32).argmax(),
-            [
-                lambda: grid.at[row, col].set(GridStatesEnum.BOX),  # Leave box if agent was on box
-                lambda: grid.at[row, col].set(GridStatesEnum.TARGET),  # Leave target if agent was on target
-                lambda: grid.at[row, col].set(GridStatesEnum.BOX_ON_TARGET),  # Leave box on target if agent was on box on target
-                lambda: grid.at[row, col].set(GridStatesEnum.BOX_ON_TARGET),  # Leave box on target if agent was on box on target
-                lambda: grid.at[row, col].set(GridStatesEnum.TARGET),  # Leave target if agent was on target
-                lambda: grid.at[row, col].set(GridStatesEnum.BOX),  # Leave box on target if agent was on box on target
-                lambda: grid.at[row, col].set(GridStatesEnum.EMPTY),  # Clear if agent was just on empty cell
-                lambda: grid.at[row, col].set(GridStatesEnum.EMPTY),  # Clear if agent was just on empty cell
-            ]
-        )
-        
-        # Check if agent is now on box, target, or empty cell
-        new_grid = jax.lax.cond(
-            valid_move,
-            lambda: jax.lax.cond(
+        # Use jax.lax.cond instead of if statement to handle traced arrays
+        def move_valid():
+            # Check if agent was on box or target or box on target before clearing
+            grid_after_clear = jax.lax.switch(
+                jnp.array([
+                    grid[row, col] == GridStatesEnum.AGENT_ON_BOX,
+                    grid[row, col] == GridStatesEnum.AGENT_ON_TARGET,
+                    grid[row, col] == GridStatesEnum.AGENT_ON_TARGET_WITH_BOX,
+                    grid[row, col] == GridStatesEnum.AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX,
+                    grid[row, col] == GridStatesEnum.AGENT_ON_TARGET_CARRYING_BOX,
+                    grid[row, col] == GridStatesEnum.AGENT_ON_BOX_CARRYING_BOX,
+                    grid[row, col] == GridStatesEnum.AGENT,
+                    grid[row, col] == GridStatesEnum.AGENT_CARRYING_BOX,
+                ]).astype(jnp.int32).argmax(),
+                [
+                    lambda: grid.at[row, col].set(GridStatesEnum.BOX),  # Leave box if agent was on box
+                    lambda: grid.at[row, col].set(GridStatesEnum.TARGET),  # Leave target if agent was on target
+                    lambda: grid.at[row, col].set(GridStatesEnum.BOX_ON_TARGET),  # Leave box on target if agent was on box on target
+                    lambda: grid.at[row, col].set(GridStatesEnum.BOX_ON_TARGET),  # Leave box on target if agent was on box on target
+                    lambda: grid.at[row, col].set(GridStatesEnum.TARGET),  # Leave target if agent was on target
+                    lambda: grid.at[row, col].set(GridStatesEnum.BOX),  # Leave box on target if agent was on box on target
+                    lambda: grid.at[row, col].set(GridStatesEnum.EMPTY),  # Clear if agent was just on empty cell
+                    lambda: grid.at[row, col].set(GridStatesEnum.EMPTY),  # Clear if agent was just on empty cell
+                ]
+            )
+            
+            # Check if agent is now on box, target, or empty cell
+            new_grid = jax.lax.cond(
                 state.agent_has_box,
                 lambda: jax.lax.switch(
                     jnp.array([
-                        grid[new_row, new_col] == GridStatesEnum.BOX,
-                        grid[new_row, new_col] == GridStatesEnum.TARGET,
-                        grid[new_row, new_col] == GridStatesEnum.BOX_ON_TARGET,
-                        grid[new_row, new_col] == GridStatesEnum.EMPTY,
+                        grid_after_clear[new_row, new_col] == GridStatesEnum.BOX,
+                        grid_after_clear[new_row, new_col] == GridStatesEnum.TARGET,
+                        grid_after_clear[new_row, new_col] == GridStatesEnum.BOX_ON_TARGET,
+                        grid_after_clear[new_row, new_col] == GridStatesEnum.EMPTY,
                     ]).astype(jnp.int32).argmax(),
                     [
-                        lambda: grid.at[new_row, new_col].set(GridStatesEnum.AGENT_ON_BOX_CARRYING_BOX),  # Agent on box carrying box
-                        lambda: grid.at[new_row, new_col].set(GridStatesEnum.AGENT_ON_TARGET_CARRYING_BOX),  # Agent on target carrying box
-                        lambda: grid.at[new_row, new_col].set(GridStatesEnum.AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX),  # Agent on box on target carrying box
-                        lambda: grid.at[new_row, new_col].set(GridStatesEnum.AGENT_CARRYING_BOX),  # Agent on empty cell carrying box
+                        lambda: grid_after_clear.at[new_row, new_col].set(GridStatesEnum.AGENT_ON_BOX_CARRYING_BOX),  # Agent on box carrying box
+                        lambda: grid_after_clear.at[new_row, new_col].set(GridStatesEnum.AGENT_ON_TARGET_CARRYING_BOX),  # Agent on target carrying box
+                        lambda: grid_after_clear.at[new_row, new_col].set(GridStatesEnum.AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX),  # Agent on box on target carrying box
+                        lambda: grid_after_clear.at[new_row, new_col].set(GridStatesEnum.AGENT_CARRYING_BOX),  # Agent on empty cell carrying box
                     ]
                 ),
                 lambda: jax.lax.switch(
                     jnp.array([
-                        grid[new_row, new_col] == GridStatesEnum.BOX,
-                        grid[new_row, new_col] == GridStatesEnum.TARGET,
-                        grid[new_row, new_col] == GridStatesEnum.BOX_ON_TARGET,
-                        grid[new_row, new_col] == GridStatesEnum.EMPTY,
+                        grid_after_clear[new_row, new_col] == GridStatesEnum.BOX,
+                        grid_after_clear[new_row, new_col] == GridStatesEnum.TARGET,
+                        grid_after_clear[new_row, new_col] == GridStatesEnum.BOX_ON_TARGET,
+                        grid_after_clear[new_row, new_col] == GridStatesEnum.EMPTY,
                     ]).astype(jnp.int32).argmax(),
                     [
-                        lambda: grid.at[new_row, new_col].set(GridStatesEnum.AGENT_ON_BOX),  # Agent on box
-                        lambda: grid.at[new_row, new_col].set(GridStatesEnum.AGENT_ON_TARGET),  # Agent on target
-                        lambda: grid.at[new_row, new_col].set(GridStatesEnum.AGENT_ON_TARGET_WITH_BOX),  # Agent on box on target
-                        lambda: grid.at[new_row, new_col].set(GridStatesEnum.AGENT),  # Agent on empty cell
+                        lambda: grid_after_clear.at[new_row, new_col].set(GridStatesEnum.AGENT_ON_BOX),  # Agent on box
+                        lambda: grid_after_clear.at[new_row, new_col].set(GridStatesEnum.AGENT_ON_TARGET),  # Agent on target
+                        lambda: grid_after_clear.at[new_row, new_col].set(GridStatesEnum.AGENT_ON_TARGET_WITH_BOX),  # Agent on box on target
+                        lambda: grid_after_clear.at[new_row, new_col].set(GridStatesEnum.AGENT),  # Agent on empty cell
                     ]
                 )
-            ),
-            lambda: grid
+            )
+            return jnp.array([new_row, new_col]), new_grid, state.agent_has_box
+        
+        def move_invalid():
+            return state.agent_pos, grid, state.agent_has_box
+        
+        new_pos, new_grid, new_agent_has_box = jax.lax.cond(
+            valid_move,
+            move_valid,
+            move_invalid
         )
-        return new_pos, new_grid, state.agent_has_box
+        
+        return new_pos, new_grid, new_agent_has_box
 
 
     def _handle_putdown(self, state: BoxPushingState) -> Tuple[jax.Array, bool]:
@@ -253,40 +269,47 @@ class BoxPushingEnv:
 
         row, col = state.agent_pos[0], state.agent_pos[1]
         current_cell = state.grid[row, col]
-        if not(current_cell == GridStatesEnum.AGENT_ON_TARGET_CARRYING_BOX or current_cell == GridStatesEnum.AGENT_CARRYING_BOX):
+        def putdown_valid():
+            new_grid = state.grid.at[row, col].set(GridStatesEnum.AGENT_ON_TARGET_WITH_BOX)
+            return new_grid, False
+        
+        def putdown_invalid():
             return state.grid, state.agent_has_box
         
-        grid = state.grid
-        grid = jax.lax.switch(
-            jnp.array([
-                grid[row, col] == GridStatesEnum.AGENT_ON_TARGET_CARRYING_BOX,
-                grid[row, col] == GridStatesEnum.AGENT_CARRYING_BOX,
-            ]).astype(jnp.int32).argmax(),
-            [
-                lambda: grid.at[row, col].set(GridStatesEnum.AGENT_ON_TARGET_WITH_BOX),  # Agent on target carrying box
-                lambda: grid.at[row, col].set(GridStatesEnum.AGENT_ON_BOX),  # Agent on box
-            ]
+        new_grid, new_agent_has_box = jax.lax.cond(
+            jnp.logical_or(
+                current_cell == GridStatesEnum.AGENT_ON_TARGET_CARRYING_BOX,
+                current_cell == GridStatesEnum.AGENT_CARRYING_BOX
+            ),
+            putdown_valid,
+            putdown_invalid
         )
-        return grid, False
+        return new_grid, new_agent_has_box
+
 
     def _is_goal_reached(self, grid: jax.Array) -> bool:
         """Check if all boxes are in target cells."""
         return jnp.sum(grid) == 0
 
-    def _count_boxes_in_target(self, grid: jax.Array) -> int:
-        """Count boxes in target cells."""
-        return jnp.sum(grid)
     
     def _handle_pickup(self, state: BoxPushingState) -> Tuple[jax.Array, bool]:
         """Handle pickup action."""
             
         row, col = state.agent_pos[0], state.agent_pos[1]
         current_cell = state.grid[row, col]
-        if current_cell != GridStatesEnum.AGENT_ON_BOX:
+        def pickup_valid():
+            new_grid = state.grid.at[row, col].set(GridStatesEnum.AGENT_CARRYING_BOX)
+            return new_grid, True
+        
+        def pickup_invalid():
             return state.grid, state.agent_has_box
         
-        new_grid = state.grid.at[row, col].set(GridStatesEnum.AGENT_CARRYING_BOX)
-        return new_grid, True
+        new_grid, new_agent_has_box = jax.lax.cond(
+            current_cell == GridStatesEnum.AGENT_ON_BOX,
+            pickup_valid,
+            pickup_invalid
+        )
+        return new_grid, new_agent_has_box
 
     def play_game(self, key: jax.Array):
         """Interactive game loop using input() for controls."""
@@ -356,7 +379,42 @@ class BoxPushingEnv:
 
 if __name__ == "__main__":
     # Create and run the game
-    import jax.random as random
-    key = random.PRNGKey(2)
+    # import jax.random as random
+    # key = random.PRNGKey(2)
+    # env = BoxPushingEnv(grid_size=5, max_steps=2000, number_of_boxes=5)
+    # env.play_game(key)
+
+
+    # vmap environment
+    NUM_ENVS = 4
     env = BoxPushingEnv(grid_size=5, max_steps=2000, number_of_boxes=5)
-    env.play_game(key)
+    key = random.PRNGKey(2)
+    keys = random.split(key, NUM_ENVS)
+    # state, _ = env.reset(key)
+    # action = jnp.array([0, 1, 2, 3, 4, 5])
+    new_state, info = jax.vmap(env.reset)(keys)
+    print(new_state.grid.shape)
+    print(info)
+    # vmap step for 5 consecutive steps using jax.lax.scan
+    def step_fn(carry, step_num):
+        state = carry
+        actions = jnp.array([3] * NUM_ENVS)
+        new_state, reward, done, info = jax.vmap(env.step)(state, actions)
+        print(f"\n=== Step {step_num + 1} ===")
+        return new_state, (new_state, reward, done, info)
+    
+    final_state, (states, rewards, dones, infos) = jax.lax.scan(
+        step_fn, 
+        new_state, 
+        jnp.arange(5)
+    )
+    new_state = final_state
+    print(new_state.grid.shape)
+    print(states.grid.shape)
+
+    # Show consecutive states from first environment
+    print("\n=== Consecutive States from First Environment ===")
+    for step in range(5):
+        state = jax.tree_util.tree_map(lambda x: x[step, 0], states)
+        print(f"\nStep {step + 1}:")
+        env._display_state(state)
