@@ -5,7 +5,7 @@ os.environ['CUDA_VISIBLE_DEVICES'] = '4'
 import jax
 import jax.numpy as jnp
 from jax import random
-from typing import Tuple, Dict, Any, Optional
+from typing import Tuple, Dict, Any
 from dataclasses import dataclass
 import chex
 from flax import struct
@@ -372,6 +372,40 @@ class BoxPushingEnv:
             print("|")
         print("=" * (self.grid_size * 2 + 1))
 
+    def create_solved_state(self, state: BoxPushingState) -> BoxPushingState:
+        """Create a solved state."""
+        # Change all target cells to box on target
+        target_rows = state.target_cells[:, 0]
+        target_cols = state.target_cells[:, 1]
+        state = state.replace(
+            grid=state.grid.at[target_rows, target_cols].set(GridStatesEnum.BOX_ON_TARGET)
+        )
+
+        # Change all boxes to empty
+        state = state.replace(
+            grid=state.grid.at[state.grid == GridStatesEnum.BOX].set(GridStatesEnum.EMPTY)
+        )
+        
+        # Check what cell the agent is currently on and update accordingly
+        agent_row, agent_col = state.agent_pos[0], state.agent_pos[1]
+        current_cell = state.grid[agent_row, agent_col]
+        
+        # Update grid based on current cell type
+        new_cell_value = jax.lax.cond(
+            current_cell == GridStatesEnum.BOX_ON_TARGET,
+            lambda: GridStatesEnum.AGENT_ON_TARGET_WITH_BOX,  # Agent on target with box
+            lambda: jax.lax.cond(
+                current_cell == GridStatesEnum.EMPTY,
+                lambda: GridStatesEnum.AGENT,  # Agent on empty cell
+                lambda: current_cell  # Keep current cell if it's already an agent state
+            )
+        )
+        
+        state = state.replace(
+            grid=state.grid.at[agent_row, agent_col].set(new_cell_value),
+            agent_has_box=jnp.array(False)
+        )
+        return state
 
 if __name__ == "__main__":
     # Create and run the game
@@ -386,8 +420,6 @@ if __name__ == "__main__":
     env = BoxPushingEnv(grid_size=5, max_steps=2000, number_of_boxes=5)
     key = random.PRNGKey(2)
     keys = random.split(key, NUM_ENVS)
-    # state, _ = env.reset(key)
-    # action = jnp.array([0, 1, 2, 3, 4, 5])
     new_state, info = jax.vmap(env.reset)(keys)
     print(new_state.grid.shape)
     print(info)
@@ -414,3 +446,8 @@ if __name__ == "__main__":
         state = jax.tree_util.tree_map(lambda x: x[step, 0], states)
         print(f"\nStep {step + 1}:")
         env._display_state(state)
+
+    # Create a solved state
+    solved_state = env.create_solved_state(jax.tree_util.tree_map(lambda x: x[0, 0], states))
+    print("\n=== Solved State ===")
+    env._display_state(solved_state)
