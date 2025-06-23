@@ -13,11 +13,17 @@ from flax import struct
 
 class BoxPushingState(struct.PyTreeNode):
     """State representation for the box pushing environment."""
+    key: jax.Array
     grid: jax.Array  # N x N grid where 0=empty, 1=box
     agent_pos: jax.Array  # [row, col] position of agent
     agent_has_box: jax.Array  # Whether agent is carrying a box
     steps: jax.Array  # Current step count
     target_cells: jax.Array  # Target cell coordinates for boxes
+
+
+class TimeStepNew(BoxPushingState):
+    action: jax.Array
+
 
 @dataclass
 class GridStatesEnum:
@@ -58,7 +64,7 @@ class BoxPushingEnv:
         
     def reset(self, key: jax.Array) -> Tuple[BoxPushingState, Dict[str, Any]]:
         """Reset environment to initial state."""
-        key1, key2, key3 = random.split(key, 3)
+        key1, key2, key3, key4 = random.split(key, 4)
         
         # Initialize empty grid
         grid = jnp.zeros((self.grid_size, self.grid_size), dtype=jnp.int32)
@@ -106,6 +112,7 @@ class BoxPushingEnv:
         )
         grid = grid.at[agent_pos[0], agent_pos[1]].set(agent_state)
         state = BoxPushingState(
+            key=key4,
             grid=grid,
             agent_pos=agent_pos,
             agent_has_box=False,
@@ -113,7 +120,9 @@ class BoxPushingEnv:
             target_cells=target_cells
         )
         
-        info = {}
+        info = {
+            'boxes_on_target': jnp.sum(grid == GridStatesEnum.BOX_ON_TARGET)
+        }
         
         return state, info
     
@@ -164,6 +173,7 @@ class BoxPushingEnv:
         done = (new_steps >= self.max_steps) | self._is_goal_reached(new_grid)
         
         new_state = BoxPushingState(
+            key=state.key,
             grid=new_grid,
             agent_pos=new_pos,
             agent_has_box=new_agent_has_box,
@@ -172,7 +182,7 @@ class BoxPushingEnv:
         )
         
         info = {
-            'total_boxes': jnp.sum(new_grid)
+            'boxes_on_target': jnp.sum(new_grid == GridStatesEnum.BOX_ON_TARGET)
         }
         
         return new_state, reward, done, info
@@ -286,7 +296,7 @@ class BoxPushingEnv:
 
     def _is_goal_reached(self, grid: jax.Array) -> bool:
         """Check if all boxes are in target cells."""
-        return jnp.sum(grid) == 0
+        return jnp.sum(grid == GridStatesEnum.BOX_ON_TARGET) == self.number_of_boxes
 
     def _handle_pickup(self, state: BoxPushingState) -> Tuple[jax.Array, bool]:
         """Handle pickup action."""
@@ -407,6 +417,40 @@ class BoxPushingEnv:
         )
         return state
 
+
+class Wrapper(BoxPushingEnv):
+    def __init__(self, env: BoxPushingEnv):
+        self._env = env
+        # Copy attributes from wrapped environment
+        for attr in ['grid_size', 'max_steps', 'number_of_boxes']:
+            if hasattr(env, attr):
+                setattr(self, attr, getattr(env, attr))
+    
+    def reset(self, key: jax.Array) -> Tuple[BoxPushingState, Dict[str, Any]]:
+        return self._env.reset(key)
+    
+    def step(self, state: BoxPushingState, action: int) -> Tuple[BoxPushingState, float, bool, Dict[str, Any]]:
+        return self._env.step(state, action)
+
+class AutoResetWrapper(Wrapper):
+    def __init__(self, env: BoxPushingEnv):
+        super().__init__(env)
+    
+    def step(self, state: BoxPushingState, action: int) -> Tuple[BoxPushingState, float, bool, Dict[str, Any]]:
+        state, reward, done, info = self._env.step(state, action)
+        key_new, _ = jax.random.split(state.key, 2)
+        
+        def reset_fn(key):
+            reset_state, reset_info = self._env.reset(key)
+            return reset_state, 0, False, reset_info
+        
+        state, reward, done, info = jax.lax.cond(
+            done,
+            lambda: reset_fn(key_new),
+            lambda: (state, reward, done, info)
+        )
+        return state, reward, done, info
+
 if __name__ == "__main__":
     # Create and run the game
     # import jax.random as random
@@ -451,3 +495,14 @@ if __name__ == "__main__":
     solved_state = env.create_solved_state(jax.tree_util.tree_map(lambda x: x[0, 0], states))
     print("\n=== Solved State ===")
     env._display_state(solved_state)
+    print(env._is_goal_reached(solved_state.grid))
+
+    # Test AutoResetWrapper
+    env = AutoResetWrapper(env)
+    print(solved_state.key)
+    state, reward, done, info = env.step(solved_state, 0)
+    print(state.key)
+    print(done)
+    env._display_state(state)
+
+    
