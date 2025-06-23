@@ -1,4 +1,6 @@
 import os
+
+from impls.rb import TrajectoryUniformSamplingQueue, jit_wrap
 os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"   
 os.environ['CUDA_VISIBLE_DEVICES'] = '4'
 
@@ -21,7 +23,7 @@ class BoxPushingState(struct.PyTreeNode):
     target_cells: jax.Array  # Target cell coordinates for boxes
 
 
-class TimeStepNew(BoxPushingState):
+class TimeStep(BoxPushingState):
     action: jax.Array
 
 
@@ -452,7 +454,7 @@ class AutoResetWrapper(Wrapper):
         return state, reward, done, info
 
 if __name__ == "__main__":
-    # Create and run the game
+    # Create and play the game
     # import jax.random as random
     # key = random.PRNGKey(2)
     # env = BoxPushingEnv(grid_size=5, max_steps=2000, number_of_boxes=5)
@@ -461,7 +463,12 @@ if __name__ == "__main__":
 
     # vmap environment
     NUM_ENVS = 4
+    MAX_REPLAY_SIZE = 10000
+    BATCH_SIZE = 128
+    EPISODE_LENGTH = 100
+
     env = BoxPushingEnv(grid_size=5, max_steps=2000, number_of_boxes=5)
+    env = AutoResetWrapper(env)
     key = random.PRNGKey(2)
     keys = random.split(key, NUM_ENVS)
     new_state, info = jax.vmap(env.reset)(keys)
@@ -473,12 +480,23 @@ if __name__ == "__main__":
         actions = jnp.array([3] * NUM_ENVS)
         new_state, reward, done, info = jax.vmap(env.step)(state, actions)
         print(f"\n=== Step {step_num + 1} ===")
-        return new_state, (new_state, reward, done, info)
+        timestep = TimeStep(
+            key=state.key,
+            grid=state.grid,
+            target_cells=state.target_cells,
+            agent_pos=state.agent_pos,
+            agent_has_box=state.agent_has_box,
+            steps=state.steps,
+            action=actions,
+        )
+        # return new_state, (new_state, reward, done, info)
+        return new_state, (new_state, timestep)
     
-    final_state, (states, rewards, dones, infos) = jax.lax.scan(
+    # final_state, (states, rewards, dones, infos) = jax.lax.scan(
+    final_state, (states, timesteps) = jax.lax.scan(
         step_fn, 
         new_state, 
-        jnp.arange(5)
+        jnp.arange(EPISODE_LENGTH)
     )
     new_state = final_state
     print(new_state.grid.shape)
@@ -498,11 +516,35 @@ if __name__ == "__main__":
     print(env._is_goal_reached(solved_state.grid))
 
     # Test AutoResetWrapper
-    env = AutoResetWrapper(env)
     print(solved_state.key)
     state, reward, done, info = env.step(solved_state, 0)
     print(state.key)
     print(done)
     env._display_state(state)
 
-    
+
+    print(timesteps.action)
+    timestep = jax.tree_util.tree_map(lambda x: x[0, 0], timesteps)
+
+    replay_buffer = jit_wrap(
+        TrajectoryUniformSamplingQueue(
+            max_replay_size=MAX_REPLAY_SIZE,
+            dummy_data_sample=timestep,
+            sample_batch_size=BATCH_SIZE,
+            num_envs=NUM_ENVS,
+            episode_length=EPISODE_LENGTH,
+        )
+    )
+    buffer_state = jax.jit(replay_buffer.init)(key)
+    buffer_state = replay_buffer.insert(buffer_state, timesteps)
+    print(buffer_state.data.shape)
+    print(buffer_state.insert_position)
+    print(buffer_state.sample_position)
+    print(buffer_state.key)
+    print(buffer_state.data[0, 0])
+    print(buffer_state.data[0, 1])
+    print(buffer_state.data[0, 2])
+    buffer_state, transitions = replay_buffer.sample(buffer_state)
+    print(transitions.grid.shape)
+    env._display_state(jax.tree_util.tree_map(lambda x: x[0, 0], transitions))
+    env._display_state(jax.tree_util.tree_map(lambda x: x[1, 0], transitions))
