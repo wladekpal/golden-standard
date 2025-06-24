@@ -28,7 +28,7 @@ config_flags.DEFINE_config_file('agent', ROOT_DIR + '/agents/crl.py', lock_confi
 
 def main(_):
     # Wandb
-    wandb.init(project="xminigrid-crl_full_state", name="rb_test_scan_1000_big_no_num_step_8x8_correct_goal_log_q_true", config=FLAGS)
+    wandb.init(project="xminigrid-crl_full_state", name="fixed_index_test", config=FLAGS)
     # Environment parameters
     VIEW_SIZE = 3
     BATCH_SIZE = 512
@@ -123,12 +123,12 @@ def main(_):
 
             # Get random index for each batch
             key, subkey = jax.random.split(key)
-            random_index = jax.random.randint(subkey, (), minval=0, maxval=state.observation.shape[1])
+            random_indices = jax.random.randint(subkey, (state.observation.shape[0],), minval=0, maxval=state.observation.shape[1])
             
             # Extract data at random index
-            state = jax.tree_util.tree_map(lambda x: x[:,random_index], state)
-            future_state = jax.tree_util.tree_map(lambda x: x[:,random_index], future_state)
-            goal_index = jax.tree_util.tree_map(lambda x: x[:,random_index], goal_index)
+            state = jax.tree_util.tree_map(lambda x: x[jnp.arange(x.shape[0]), random_indices], state)
+            future_state = jax.tree_util.tree_map(lambda x: x[jnp.arange(x.shape[0]), random_indices], future_state)
+            goal_index = jax.tree_util.tree_map(lambda x: x[jnp.arange(x.shape[0]), random_indices], goal_index)
             actions = state.action
 
             # Create valid batch
