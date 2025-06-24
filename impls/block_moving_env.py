@@ -1,6 +1,6 @@
 import os
 
-from impls.rb import TrajectoryUniformSamplingQueue, jit_wrap
+from rb import TrajectoryUniformSamplingQueue, jit_wrap
 os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"   
 os.environ['CUDA_VISIBLE_DEVICES'] = '4'
 
@@ -11,6 +11,10 @@ from typing import Tuple, Dict, Any
 from dataclasses import dataclass
 import chex
 from flax import struct
+from absl import app, flags
+from ml_collections import config_flags
+
+from config import ROOT_DIR
 
 
 class BoxPushingState(struct.PyTreeNode):
@@ -453,6 +457,12 @@ class AutoResetWrapper(Wrapper):
         )
         return state, reward, done, info
 
+
+FLAGS = flags.FLAGS
+flags.DEFINE_integer('seed', 0, 'Random seed.')
+
+config_flags.DEFINE_config_file('agent', ROOT_DIR + '/agents/crl.py', lock_config=False)
+
 if __name__ == "__main__":
     # Create and play the game
     # import jax.random as random
@@ -462,7 +472,7 @@ if __name__ == "__main__":
 
 
     # vmap environment
-    NUM_ENVS = 4
+    NUM_ENVS = 512
     MAX_REPLAY_SIZE = 10000
     BATCH_SIZE = 128
     EPISODE_LENGTH = 100
@@ -548,3 +558,6 @@ if __name__ == "__main__":
     print(transitions.grid.shape)
     env._display_state(jax.tree_util.tree_map(lambda x: x[0, 0], transitions))
     env._display_state(jax.tree_util.tree_map(lambda x: x[1, 0], transitions))
+
+
+    # Agent
