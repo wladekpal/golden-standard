@@ -637,10 +637,28 @@ def main(_):
 
     env_step, info, timesteps_all = collect_data(agent, key)
 
+    # Visualize the states
+    replay_buffer = jit_wrap(
+        TrajectoryUniformSamplingQueue(
+            max_replay_size=MAX_REPLAY_SIZE,
+            dummy_data_sample=timestep,
+            sample_batch_size=BATCH_SIZE,
+            num_envs=NUM_ENVS,
+            episode_length=EPISODE_LENGTH,
+        )
+    )
+    buffer_state = jax.jit(replay_buffer.init)(key)
 
-    # buffer_state, transitions = replay_buffer.sample(buffer_state)
-    # batch_keys = jax.random.split(buffer_state.key, transitions.grid.shape[0])
-    # state, future_state, goal_index = jax.vmap(flatten_batch, in_axes=(None, 0, 0))((0.99, None, None), transitions, batch_keys)
+    buffer_state = replay_buffer.insert(buffer_state, timesteps_all)
+
+    buffer_state, transitions = replay_buffer.sample(buffer_state)
+    batch_keys = jax.random.split(buffer_state.key, transitions.grid.shape[0])
+    state, future_state, goal_index = jax.vmap(flatten_batch, in_axes=(None, 0, 0))((0.99, None, None), transitions, batch_keys)
+    print(state.grid.shape)
+    print(future_state.grid.shape)
+    print(goal_index.shape)
+
+
 
     # for epoch in range(1000):
     #     key, new_key = jax.random.split(key)
@@ -654,6 +672,9 @@ def main(_):
     #         buffer_state, transitions = replay_buffer.sample(buffer_state)
     #         batch_keys = jax.random.split(buffer_state.key, transitions.grid.shape[0])
     #         state, future_state, goal_index = jax.vmap(flatten_batch, in_axes=(None, 0, 0))((0.99, None, None), transitions, batch_keys)
+
+
+
 
 
 if __name__ == "__main__":
