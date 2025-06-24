@@ -1,9 +1,11 @@
 import functools
 import os
 
+import wandb
+
 from rb import TrajectoryUniformSamplingQueue, jit_wrap, segment_ids_per_row
 os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"   
-os.environ['CUDA_VISIBLE_DEVICES'] = '4'
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 
 import jax
 import jax.numpy as jnp
@@ -523,11 +525,12 @@ config_flags.DEFINE_config_file('agent', ROOT_DIR + '/agents/crl.py', lock_confi
 
 
 def main(_):
+    wandb.init(project="moving_blocks", name="first_run", config=FLAGS)
     
     # vmap environment
-    NUM_ENVS = 4
+    NUM_ENVS = 256
     MAX_REPLAY_SIZE = 10000
-    BATCH_SIZE = 128
+    BATCH_SIZE = 256
     EPISODE_LENGTH = 100
     NUM_ACTIONS = 6
 
@@ -660,20 +663,72 @@ def main(_):
 
 
 
-    # for epoch in range(1000):
-    #     key, new_key = jax.random.split(key)
-    #     env_step, info, timesteps_all = collect_data(agent, new_key)
-    #     buffer_state = replay_buffer.insert(buffer_state, timesteps_all)
+    for epoch in range(1000):
+        key, new_key = jax.random.split(key)
+        env_step, info, timesteps_all = collect_data(agent, new_key)
+        buffer_state = replay_buffer.insert(buffer_state, timesteps_all)
         
-    #     def update_step(carry, _):
-    #         buffer_state, agent, key = carry
+        def update_step(carry, _):
+            buffer_state, agent, key = carry
             
-    #         # Sample and process transitions
-    #         buffer_state, transitions = replay_buffer.sample(buffer_state)
-    #         batch_keys = jax.random.split(buffer_state.key, transitions.grid.shape[0])
-    #         state, future_state, goal_index = jax.vmap(flatten_batch, in_axes=(None, 0, 0))((0.99, None, None), transitions, batch_keys)
+            # Sample and process transitions
+            buffer_state, transitions = replay_buffer.sample(buffer_state)
+            batch_keys = jax.random.split(buffer_state.key, transitions.grid.shape[0])
+            state, future_state, goal_index = jax.vmap(flatten_batch, in_axes=(None, 0, 0))((0.99, None, None), transitions, batch_keys)
 
+            # Get random index for each batch
+            key, subkey1, subkey2 = jax.random.split(key, 3)
+            random_indices = jax.random.randint(subkey1, (state.grid.shape[0],), minval=0, maxval=state.grid.shape[1])            
 
+            # Extract data at random index
+            state1 = jax.tree_util.tree_map(lambda x: x[jnp.arange(x.shape[0]), random_indices], state)
+            actions = state1.action
+            future_state1 = jax.tree_util.tree_map(lambda x: x[jnp.arange(x.shape[0]), random_indices], future_state)
+            goal_index1 = jax.tree_util.tree_map(lambda x: x[jnp.arange(x.shape[0]), random_indices], goal_index)
+            
+            random_indices2 = jax.random.randint(subkey2, (state.grid.shape[0],), minval=0, maxval=state.grid.shape[1])            
+
+            # Extract data at random index
+            state2 = jax.tree_util.tree_map(lambda x: x[jnp.arange(x.shape[0]), random_indices2], state)
+            actions2 = state2.action
+            future_state2 = jax.tree_util.tree_map(lambda x: x[jnp.arange(x.shape[0]), random_indices2], future_state)
+            goal_index2 = jax.tree_util.tree_map(lambda x: x[jnp.arange(x.shape[0]), random_indices2], goal_index)
+
+            state = jax.tree_util.tree_map(lambda x1, x2: jnp.concatenate([x1, x2], axis=0), state1, state2)
+            actions = jnp.concatenate([actions, actions2], axis=0)
+            future_state = jax.tree_util.tree_map(lambda x1, x2: jnp.concatenate([x1, x2], axis=0), future_state1, future_state2)
+            goal_index = jnp.concatenate([goal_index1, goal_index2], axis=0)
+            
+
+            print(f"!!!sstate.grid.shape: {state.grid.shape}", flush=True)
+            # Create valid batch
+            valid_batch = {
+                'observations': state.grid.reshape(state.grid.shape[0], -1),
+                'actions': actions.squeeze(),
+                'value_goals': future_state.grid.reshape(future_state.grid.shape[0], -1),
+                'actor_goals': future_state.grid.reshape(future_state.grid.shape[0], -1),
+            }
+
+            # Update agent
+            agent, update_info = agent.update(valid_batch)
+            update_info.update({
+                "eval/reward_min": timesteps_all.reward.min(),
+                "eval/reward_max": timesteps_all.reward.max(), 
+                "eval/reward_mean": timesteps_all.reward.mean()
+            })
+
+            return (buffer_state, agent, key), update_info
+
+        # Run scan for updates
+        (buffer_state, agent, key), update_infos = jax.lax.scan(
+            update_step,
+            (buffer_state, agent, key),
+            None,
+            length=1000
+        )
+
+        # print(f"update_infos: {update_infos}")
+        wandb.log(jax.tree_util.tree_map(lambda x: x[-1], update_infos))
 
 
 
