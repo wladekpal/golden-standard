@@ -1,6 +1,7 @@
+import functools
 import os
 
-from rb import TrajectoryUniformSamplingQueue, jit_wrap
+from rb import TrajectoryUniformSamplingQueue, jit_wrap, segment_ids_per_row
 os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"   
 os.environ['CUDA_VISIBLE_DEVICES'] = '4'
 
@@ -13,7 +14,7 @@ import chex
 from flax import struct
 from absl import app, flags
 from ml_collections import config_flags
-
+from agents import agents
 from config import ROOT_DIR
 
 
@@ -25,6 +26,8 @@ class BoxPushingState(struct.PyTreeNode):
     agent_has_box: jax.Array  # Whether agent is carrying a box
     steps: jax.Array  # Current step count
     target_cells: jax.Array  # Target cell coordinates for boxes
+    goal: jax.Array  # Goal cell coordinates for boxes
+    reward: jax.Array  # Reward for the current step
 
 
 class TimeStep(BoxPushingState):
@@ -123,8 +126,12 @@ class BoxPushingEnv:
             agent_pos=agent_pos,
             agent_has_box=False,
             steps=0,
-            target_cells=target_cells
+            target_cells=target_cells,
+            goal=jnp.zeros_like(grid),
+            reward=0
         )
+        goal = self.create_solved_state(state)
+        state = state.replace(goal=goal.grid)
         
         info = {
             'boxes_on_target': jnp.sum(grid == GridStatesEnum.BOX_ON_TARGET)
@@ -177,6 +184,8 @@ class BoxPushingEnv:
         
         # Check if done
         done = (new_steps >= self.max_steps) | self._is_goal_reached(new_grid)
+
+        reward = self._get_reward(new_grid)
         
         new_state = BoxPushingState(
             key=state.key,
@@ -184,7 +193,9 @@ class BoxPushingEnv:
             agent_pos=new_pos,
             agent_has_box=new_agent_has_box,
             steps=new_steps,
-            target_cells=state.target_cells
+            target_cells=state.target_cells,
+            goal=state.goal,
+            reward=reward
         )
         
         info = {
@@ -303,6 +314,10 @@ class BoxPushingEnv:
     def _is_goal_reached(self, grid: jax.Array) -> bool:
         """Check if all boxes are in target cells."""
         return jnp.sum(grid == GridStatesEnum.BOX_ON_TARGET) == self.number_of_boxes
+    
+    def _get_reward(self, grid: jax.Array) -> float:
+        """Get reward for the current state."""
+        return jnp.sum(grid == GridStatesEnum.BOX_ON_TARGET)
 
     def _handle_pickup(self, state: BoxPushingState) -> Tuple[jax.Array, bool]:
         """Handle pickup action."""
@@ -397,9 +412,10 @@ class BoxPushingEnv:
             grid=state.grid.at[target_rows, target_cols].set(GridStatesEnum.BOX_ON_TARGET)
         )
 
-        # Change all boxes to empty
+        # Change all boxes to empty - use where to avoid boolean indexing issue
+        box_mask = state.grid == GridStatesEnum.BOX
         state = state.replace(
-            grid=state.grid.at[state.grid == GridStatesEnum.BOX].set(GridStatesEnum.EMPTY)
+            grid=jnp.where(box_mask, GridStatesEnum.EMPTY, state.grid)
         )
         
         # Check what cell the agent is currently on and update accordingly
@@ -458,26 +474,64 @@ class AutoResetWrapper(Wrapper):
         return state, reward, done, info
 
 
+
+@functools.partial(jax.jit, static_argnames=("buffer_config"))
+def flatten_batch(buffer_config, transition, sample_key):
+    gamma, state_size, goal_indices = buffer_config
+
+    # Because it's vmaped transition.obs.shape is of shape (episode_len, obs_dim)
+    seq_len = transition.grid.shape[0]
+    arrangement = jnp.arange(seq_len)
+    is_future_mask = jnp.array(
+        arrangement[:, None] < arrangement[None], dtype=jnp.float32
+    )  # upper triangular matrix of shape seq_len, seq_len where all non-zero entries are 1
+    discount = gamma ** jnp.array(arrangement[None] - arrangement[:, None], dtype=jnp.float32)
+    probs = is_future_mask * discount
+
+    # probs is an upper triangular matrix of shape seq_len, seq_len of the form:
+    #    [[0.        , 0.99      , 0.98010004, 0.970299  , 0.960596 ],
+    #    [0.        , 0.        , 0.99      , 0.98010004, 0.970299  ],
+    #    [0.        , 0.        , 0.        , 0.99      , 0.98010004],
+    #    [0.        , 0.        , 0.        , 0.        , 0.99      ],
+    #    [0.        , 0.        , 0.        , 0.        , 0.        ]]
+    # assuming seq_len = 5
+    # the same result can be obtained using probs = is_future_mask * (gamma ** jnp.cumsum(is_future_mask, axis=-1))
+    single_trajectories = segment_ids_per_row(transition.steps)
+    single_trajectories = jnp.concatenate(
+            [single_trajectories[:, jnp.newaxis].T] * seq_len,
+            axis=0,
+    )
+    # array of seq_len x seq_len where a row is an array of traj_ids that correspond to the episode index from which that time-step was collected
+    # timesteps collected from the same episode will have the same traj_id. All rows of the single_trajectories are same.
+
+    probs = probs * jnp.equal(single_trajectories, single_trajectories.T) + jnp.eye(seq_len) * 1e-5
+    # ith row of probs will be non zero only for time indices that
+    # 1) are greater than i
+    # 2) have the same traj_id as the ith time index
+
+    goal_index = jax.random.categorical(sample_key, jnp.log(probs))
+    future_state = jax.tree_util.tree_map(lambda x: jnp.take(x, goal_index[:-1], axis=0), transition)  # the last goal_index cannot be considered as there is no future.
+    states = jax.tree_util.tree_map(lambda x: x[:-1], transition) # all states but the last one are considered
+
+    return states, future_state, goal_index
+
+
 FLAGS = flags.FLAGS
 flags.DEFINE_integer('seed', 0, 'Random seed.')
 
 config_flags.DEFINE_config_file('agent', ROOT_DIR + '/agents/crl.py', lock_config=False)
 
-if __name__ == "__main__":
-    # Create and play the game
-    # import jax.random as random
-    # key = random.PRNGKey(2)
-    # env = BoxPushingEnv(grid_size=5, max_steps=2000, number_of_boxes=5)
-    # env.play_game(key)
 
-
+def main(_):
+    
     # vmap environment
-    NUM_ENVS = 512
+    NUM_ENVS = 4
     MAX_REPLAY_SIZE = 10000
     BATCH_SIZE = 128
     EPISODE_LENGTH = 100
+    NUM_ACTIONS = 6
 
-    env = BoxPushingEnv(grid_size=5, max_steps=2000, number_of_boxes=5)
+    env = BoxPushingEnv(grid_size=5, max_steps=200, number_of_boxes=5)
     env = AutoResetWrapper(env)
     key = random.PRNGKey(2)
     keys = random.split(key, NUM_ENVS)
@@ -489,7 +543,6 @@ if __name__ == "__main__":
         state = carry
         actions = jnp.array([3] * NUM_ENVS)
         new_state, reward, done, info = jax.vmap(env.step)(state, actions)
-        print(f"\n=== Step {step_num + 1} ===")
         timestep = TimeStep(
             key=state.key,
             grid=state.grid,
@@ -497,7 +550,9 @@ if __name__ == "__main__":
             agent_pos=state.agent_pos,
             agent_has_box=state.agent_has_box,
             steps=state.steps,
-            action=actions,
+            action=actions, 
+            goal=state.goal,
+            reward=reward
         )
         # return new_state, (new_state, reward, done, info)
         return new_state, (new_state, timestep)
@@ -509,31 +564,7 @@ if __name__ == "__main__":
         jnp.arange(EPISODE_LENGTH)
     )
     new_state = final_state
-    print(new_state.grid.shape)
-    print(states.grid.shape)
 
-    # Show consecutive states from first environment
-    print("\n=== Consecutive States from First Environment ===")
-    for step in range(5):
-        state = jax.tree_util.tree_map(lambda x: x[step, 0], states)
-        print(f"\nStep {step + 1}:")
-        env._display_state(state)
-
-    # Create a solved state
-    solved_state = env.create_solved_state(jax.tree_util.tree_map(lambda x: x[0, 0], states))
-    print("\n=== Solved State ===")
-    env._display_state(solved_state)
-    print(env._is_goal_reached(solved_state.grid))
-
-    # Test AutoResetWrapper
-    print(solved_state.key)
-    state, reward, done, info = env.step(solved_state, 0)
-    print(state.key)
-    print(done)
-    env._display_state(state)
-
-
-    print(timesteps.action)
     timestep = jax.tree_util.tree_map(lambda x: x[0, 0], timesteps)
 
     replay_buffer = jit_wrap(
@@ -547,17 +578,89 @@ if __name__ == "__main__":
     )
     buffer_state = jax.jit(replay_buffer.init)(key)
     buffer_state = replay_buffer.insert(buffer_state, timesteps)
-    print(buffer_state.data.shape)
-    print(buffer_state.insert_position)
-    print(buffer_state.sample_position)
-    print(buffer_state.key)
-    print(buffer_state.data[0, 0])
-    print(buffer_state.data[0, 1])
-    print(buffer_state.data[0, 2])
     buffer_state, transitions = replay_buffer.sample(buffer_state)
-    print(transitions.grid.shape)
-    env._display_state(jax.tree_util.tree_map(lambda x: x[0, 0], transitions))
-    env._display_state(jax.tree_util.tree_map(lambda x: x[1, 0], transitions))
 
 
     # Agent
+    config = FLAGS.agent
+    config['discrete'] = True
+    agent_class = agents[config['agent_name']]
+
+
+    example_batch = {
+        'observations':transitions.grid[:,0,:].reshape(transitions.grid.shape[0], transitions.grid.shape[-1]*transitions.grid.shape[-2]),  # Add batch dimension 
+        'actions': jnp.ones((transitions.grid.shape[0],), dtype=jnp.int32) * (NUM_ACTIONS-1), # TODO: make sure it should be the maximal value of action space  # Single action for batch size 1
+        'value_goals': transitions.grid[:,0,:].reshape(transitions.grid.shape[0], transitions.grid.shape[-1]*transitions.grid.shape[-2]),
+        'actor_goals': transitions.grid[:,0,:].reshape(transitions.grid.shape[0], transitions.grid.shape[-1]*transitions.grid.shape[-2]),
+    }
+
+    print("Testing agent creation")
+    agent = agent_class.create(
+        FLAGS.seed,
+        example_batch['observations'],
+        example_batch['actions'],
+        config,
+        example_batch['value_goals'],
+    )
+    print("Agent created")
+
+    agent, update_info = agent.update(example_batch)
+    print(update_info)
+
+    def collect_data(agent, key):
+        env = BoxPushingEnv(grid_size=5, max_steps=200, number_of_boxes=5)
+        env = AutoResetWrapper(env)
+        
+        def step_fn(carry, step_num):
+            state, info, key = carry
+            key, new_key = jax.random.split(key)
+            print(f"state.grid.shape: {state.grid.shape}", flush=True)
+            actions = agent.sample_actions(state.grid.reshape(NUM_ENVS, -1), state.goal.reshape(NUM_ENVS, -1), seed=key)
+            new_state, reward, done, info = jax.vmap(env.step)(state, actions)
+            timestep = TimeStep(
+                key=state.key,
+                grid=state.grid,
+                target_cells=state.target_cells,
+                agent_pos=state.agent_pos,
+                agent_has_box=state.agent_has_box,
+                steps=state.steps,
+                action=actions,
+                goal=state.goal,
+                reward=reward
+            )
+            return (new_state, info, new_key), timestep
+        
+        keys = jax.random.split(key, NUM_ENVS)
+        state, info = jax.vmap(env.reset)(keys)
+        (timestep, info, key), timesteps_all = jax.lax.scan(step_fn, (state, info, key), (), length=EPISODE_LENGTH)
+        return timestep, info, timesteps_all
+
+    env_step, info, timesteps_all = collect_data(agent, key)
+
+
+    # buffer_state, transitions = replay_buffer.sample(buffer_state)
+    # batch_keys = jax.random.split(buffer_state.key, transitions.grid.shape[0])
+    # state, future_state, goal_index = jax.vmap(flatten_batch, in_axes=(None, 0, 0))((0.99, None, None), transitions, batch_keys)
+
+    # for epoch in range(1000):
+    #     key, new_key = jax.random.split(key)
+    #     env_step, info, timesteps_all = collect_data(agent, new_key)
+    #     buffer_state = replay_buffer.insert(buffer_state, timesteps_all)
+        
+    #     def update_step(carry, _):
+    #         buffer_state, agent, key = carry
+            
+    #         # Sample and process transitions
+    #         buffer_state, transitions = replay_buffer.sample(buffer_state)
+    #         batch_keys = jax.random.split(buffer_state.key, transitions.grid.shape[0])
+    #         state, future_state, goal_index = jax.vmap(flatten_batch, in_axes=(None, 0, 0))((0.99, None, None), transitions, batch_keys)
+
+
+if __name__ == "__main__":
+    # Create and play the game
+    # import jax.random as random
+    # key = random.PRNGKey(2)
+    # env = BoxPushingEnv(grid_size=5, max_steps=2000, number_of_boxes=5)
+    # env.play_game(key)
+
+    app.run(main)
