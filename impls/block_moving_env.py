@@ -486,7 +486,6 @@ def flatten_batch(gamma, transition, sample_key):
     )  # upper triangular matrix of shape seq_len, seq_len where all non-zero entries are 1
     discount = gamma ** jnp.array(arrangement[None] - arrangement[:, None], dtype=jnp.float32)
     probs = is_future_mask * discount
-
     # probs is an upper triangular matrix of shape seq_len, seq_len of the form:
     #    [[0.        , 0.99      , 0.98010004, 0.970299  , 0.960596 ],
     #    [0.        , 0.        , 0.99      , 0.98010004, 0.970299  ],
@@ -495,7 +494,7 @@ def flatten_batch(gamma, transition, sample_key):
     #    [0.        , 0.        , 0.        , 0.        , 0.        ]]
     # assuming seq_len = 5
     # the same result can be obtained using probs = is_future_mask * (gamma ** jnp.cumsum(is_future_mask, axis=-1))
-    single_trajectories = segment_ids_per_row(transition.steps)
+    single_trajectories = segment_ids_per_row(transition.steps.squeeze())
     single_trajectories = jnp.concatenate(
             [single_trajectories[:, jnp.newaxis].T] * seq_len,
             axis=0,
@@ -512,7 +511,35 @@ def flatten_batch(gamma, transition, sample_key):
     future_state = jax.tree_util.tree_map(lambda x: jnp.take(x, goal_index[:-1], axis=0), transition)  # the last goal_index cannot be considered as there is no future.
     states = jax.tree_util.tree_map(lambda x: x[:-1], transition) # all states but the last one are considered
 
+
     return states, future_state, goal_index
+
+
+def collect_data(agent, key, env, num_envs, episode_length):
+    @jax.jit
+    def step_fn(carry, step_num):
+        state, info, key = carry
+        key, new_key = jax.random.split(key)
+        print(f"state.grid.shape: {state.grid.shape}", flush=True)
+        actions = agent.sample_actions(state.grid.reshape(num_envs, -1), state.goal.reshape(num_envs, -1), seed=key)
+        new_state, reward, done, info = env.step(state, actions)
+        timestep = TimeStep(
+            key=state.key,
+            grid=state.grid,
+            target_cells=state.target_cells,
+            agent_pos=state.agent_pos,
+            agent_has_box=state.agent_has_box,
+            steps=state.steps,
+            action=actions,
+            goal=state.goal,
+            reward=reward
+        )
+        return (new_state, info, new_key), timestep
+    
+    keys = jax.random.split(key, num_envs)
+    state, info = env.reset(keys)
+    (timestep, info, key), timesteps_all = jax.lax.scan(step_fn, (state, info, key), (), length=episode_length)
+    return timestep, info, timesteps_all
 
 
 FLAGS = flags.FLAGS
@@ -522,7 +549,7 @@ config_flags.DEFINE_config_file('agent', ROOT_DIR + '/agents/crl.py', lock_confi
 
 
 def main(_):
-    wandb.init(project="moving_blocks", name="first_run_jitted", config=FLAGS)
+    wandb.init(project="moving_blocks", name="first_run_jitted_refactored", config=FLAGS)
     
     # vmap environment
     NUM_ENVS = 256
@@ -530,71 +557,50 @@ def main(_):
     BATCH_SIZE = 256
     EPISODE_LENGTH = 100
     NUM_ACTIONS = 6
+    GRID_SIZE = 5
+    NUM_BOXES = 5
+    SEED = 2
 
-    env = BoxPushingEnv(grid_size=5, max_steps=200, number_of_boxes=5)
+    env = BoxPushingEnv(grid_size=GRID_SIZE, max_steps=EPISODE_LENGTH, number_of_boxes=NUM_BOXES)
     env = AutoResetWrapper(env)
-    key = random.PRNGKey(2)
-    keys = random.split(key, NUM_ENVS)
-    new_state, info = jax.jit(jax.vmap(env.reset))(keys)
-    print(new_state.grid.shape)
-    print(info)
-
+    key = random.PRNGKey(SEED)
     env.step = jax.jit(jax.vmap(env.step))
-    
-    # vmap step for 5 consecutive steps using jax.lax.scan
-    def step_fn(carry, step_num):
-        state = carry
-        actions = jnp.array([3] * NUM_ENVS)
-        new_state, reward, done, info = env.step(state, actions)
-        timestep = TimeStep(
-            key=state.key,
-            grid=state.grid,
-            target_cells=state.target_cells,
-            agent_pos=state.agent_pos,
-            agent_has_box=state.agent_has_box,
-            steps=state.steps,
-            action=actions, 
-            goal=state.goal,
-            reward=reward
-        )
-        # return new_state, (new_state, reward, done, info)
-        return new_state, (new_state, timestep)
-    
-    # final_state, (states, rewards, dones, infos) = jax.lax.scan(
-    final_state, (states, timesteps) = jax.lax.scan(
-        step_fn, 
-        new_state, 
-        jnp.arange(EPISODE_LENGTH)
+    env.reset = jax.jit(jax.vmap(env.reset))
+    jitted_flatten_batch = jax.jit(jax.vmap(flatten_batch, in_axes=(None, 0, 0)), static_argnums=(0,))
+
+    # Replay buffer
+    dummy_timestep = TimeStep(
+        key=key,
+        grid=jnp.zeros((GRID_SIZE, GRID_SIZE), dtype=jnp.int32),
+        target_cells=jnp.zeros((NUM_BOXES, 2), dtype=jnp.int32),
+        agent_pos=jnp.zeros((2,), dtype=jnp.int32),
+        agent_has_box=jnp.zeros((1,), dtype=jnp.int32),
+        steps=jnp.zeros((1,), dtype=jnp.int32),
+        action=jnp.zeros((1,), dtype=jnp.int32),
+        goal=jnp.zeros((GRID_SIZE, GRID_SIZE), dtype=jnp.int32),
+        reward=jnp.zeros((1,), dtype=jnp.int32),
     )
-    new_state = final_state
-
-    timestep = jax.tree_util.tree_map(lambda x: x[0, 0], timesteps)
-
     replay_buffer = jit_wrap(
         TrajectoryUniformSamplingQueue(
             max_replay_size=MAX_REPLAY_SIZE,
-            dummy_data_sample=timestep,
+            dummy_data_sample=dummy_timestep,
             sample_batch_size=BATCH_SIZE,
             num_envs=NUM_ENVS,
             episode_length=EPISODE_LENGTH,
         )
     )
     buffer_state = jax.jit(replay_buffer.init)(key)
-    buffer_state = replay_buffer.insert(buffer_state, timesteps)
-    buffer_state, transitions = replay_buffer.sample(buffer_state)
-
+    
 
     # Agent
     config = FLAGS.agent
     config['discrete'] = True
     agent_class = agents[config['agent_name']]
-
-
     example_batch = {
-        'observations':transitions.grid[:,0,:].reshape(transitions.grid.shape[0], transitions.grid.shape[-1]*transitions.grid.shape[-2]),  # Add batch dimension 
-        'actions': jnp.ones((transitions.grid.shape[0],), dtype=jnp.int32) * (NUM_ACTIONS-1), # TODO: make sure it should be the maximal value of action space  # Single action for batch size 1
-        'value_goals': transitions.grid[:,0,:].reshape(transitions.grid.shape[0], transitions.grid.shape[-1]*transitions.grid.shape[-2]),
-        'actor_goals': transitions.grid[:,0,:].reshape(transitions.grid.shape[0], transitions.grid.shape[-1]*transitions.grid.shape[-2]),
+        'observations':dummy_timestep.grid.reshape(1, -1),  # Add batch dimension 
+        'actions': jnp.ones((1,), dtype=jnp.int32) * (NUM_ACTIONS-1), # TODO: make sure it should be the maximal value of action space  # Single action for batch size 1
+        'value_goals': dummy_timestep.grid.reshape(1, -1),
+        'actor_goals': dummy_timestep.grid.reshape(1, -1),
     }
 
     print("Testing agent creation")
@@ -607,62 +613,6 @@ def main(_):
     )
     print("Agent created")
 
-    agent, update_info = agent.update(example_batch)
-    print(update_info)
-    jitted_flatten_batch = jax.jit(jax.vmap(flatten_batch, in_axes=(None, 0, 0)), static_argnums=(0,))
-
-    def collect_data(agent, key, env):
-        @jax.jit
-        def step_fn(carry, step_num):
-            state, info, key = carry
-            key, new_key = jax.random.split(key)
-            print(f"state.grid.shape: {state.grid.shape}", flush=True)
-            actions = agent.sample_actions(state.grid.reshape(NUM_ENVS, -1), state.goal.reshape(NUM_ENVS, -1), seed=key)
-            new_state, reward, done, info = env.step(state, actions)
-            timestep = TimeStep(
-                key=state.key,
-                grid=state.grid,
-                target_cells=state.target_cells,
-                agent_pos=state.agent_pos,
-                agent_has_box=state.agent_has_box,
-                steps=state.steps,
-                action=actions,
-                goal=state.goal,
-                reward=reward
-            )
-            return (new_state, info, new_key), timestep
-        
-        keys = jax.random.split(key, NUM_ENVS)
-        state, info = env.reset(keys)
-        (timestep, info, key), timesteps_all = jax.lax.scan(step_fn, (state, info, key), (), length=EPISODE_LENGTH)
-        return timestep, info, timesteps_all
-
-    env = BoxPushingEnv(grid_size=5, max_steps=200, number_of_boxes=5)
-    env = AutoResetWrapper(env)
-    env.step = jax.jit(jax.vmap(env.step))
-    env.reset = jax.jit(jax.vmap(env.reset))
-    env_step, info, timesteps_all = collect_data(agent, key, env)
-
-    # Visualize the states
-    replay_buffer = jit_wrap(
-        TrajectoryUniformSamplingQueue(
-            max_replay_size=MAX_REPLAY_SIZE,
-            dummy_data_sample=timestep,
-            sample_batch_size=BATCH_SIZE,
-            num_envs=NUM_ENVS,
-            episode_length=EPISODE_LENGTH,
-        )
-    )
-    buffer_state = jax.jit(replay_buffer.init)(key)
-
-    buffer_state = replay_buffer.insert(buffer_state, timesteps_all)
-
-    buffer_state, transitions = replay_buffer.sample(buffer_state)
-    batch_keys = jax.random.split(buffer_state.key, transitions.grid.shape[0])
-    state, future_state, goal_index = jitted_flatten_batch(0.99, transitions, batch_keys)
-    print(state.grid.shape)
-    print(future_state.grid.shape)
-    print(goal_index.shape)
 
     @jax.jit
     def update_step(carry, _):
@@ -708,20 +658,14 @@ def main(_):
 
         # Update agent
         agent, update_info = agent.update(valid_batch)
-        update_info.update({
-            "eval/reward_min": timesteps_all.reward.min(),
-            "eval/reward_max": timesteps_all.reward.max(), 
-            "eval/reward_mean": timesteps_all.reward.mean()
-        })
-
         return (buffer_state, agent, key), update_info
+
 
     for epoch in range(1000):
         key, new_key = jax.random.split(key)
-        env_step, info, timesteps_all = collect_data(agent, new_key, env)
+        env_step, info, timesteps_all = collect_data(agent, new_key, env, NUM_ENVS, EPISODE_LENGTH)
         buffer_state = replay_buffer.insert(buffer_state, timesteps_all)
         
-
         # Run scan for updates
         (buffer_state, agent, key), update_infos = jax.lax.scan(
             update_step,
@@ -730,16 +674,17 @@ def main(_):
             length=1000
         )
 
+        update_infos = jax.tree_util.tree_map(lambda x: x[-1], update_infos)
         # print(f"update_infos: {update_infos}")
-        wandb.log(jax.tree_util.tree_map(lambda x: x[-1], update_infos))
+        update_infos.update({
+            "eval/reward_min": timesteps_all.reward.min(),
+            "eval/reward_max": timesteps_all.reward.max(), 
+            "eval/reward_mean": timesteps_all.reward.mean()
+        })
+
+        wandb.log(update_infos)
 
 
 
 if __name__ == "__main__":
-    # Create and play the game
-    # import jax.random as random
-    # key = random.PRNGKey(2)
-    # env = BoxPushingEnv(grid_size=5, max_steps=2000, number_of_boxes=5)
-    # env.play_game(key)
-
     app.run(main)
