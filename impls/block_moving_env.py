@@ -519,9 +519,8 @@ def collect_data(agent, key, env, num_envs, episode_length):
     @jax.jit
     def step_fn(carry, step_num):
         state, info, key = carry
-        key, new_key = jax.random.split(key)
-        print(f"state.grid.shape: {state.grid.shape}", flush=True)
-        actions = agent.sample_actions(state.grid.reshape(num_envs, -1), state.goal.reshape(num_envs, -1), seed=key)
+        key, sample_key = jax.random.split(key)
+        actions = agent.sample_actions(state.grid.reshape(num_envs, -1), state.goal.reshape(num_envs, -1), seed=sample_key)
         new_state, reward, done, info = env.step(state, actions)
         timestep = TimeStep(
             key=state.key,
@@ -534,7 +533,7 @@ def collect_data(agent, key, env, num_envs, episode_length):
             goal=state.goal,
             reward=reward
         )
-        return (new_state, info, new_key), timestep
+        return (new_state, info, key), timestep
     
     keys = jax.random.split(key, num_envs)
     state, info = env.reset(keys)
@@ -549,7 +548,7 @@ config_flags.DEFINE_config_file('agent', ROOT_DIR + '/agents/crl.py', lock_confi
 
 
 def main(_):
-    wandb.init(project="moving_blocks", name="first_run_jitted_refactored", config=FLAGS)
+    wandb.init(project="moving_blocks", name="first_run_jitted_refactored_key", config=FLAGS)
     
     # vmap environment
     NUM_ENVS = 256
@@ -617,14 +616,13 @@ def main(_):
     @jax.jit
     def update_step(carry, _):
         buffer_state, agent, key = carry
-        
+        key, batch_key, subkey1, subkey2 = jax.random.split(key, 4)
         # Sample and process transitions
         buffer_state, transitions = replay_buffer.sample(buffer_state)
-        batch_keys = jax.random.split(buffer_state.key, transitions.grid.shape[0])
+        batch_keys = jax.random.split(batch_key, transitions.grid.shape[0])
         state, future_state, goal_index = jitted_flatten_batch(0.99, transitions, batch_keys)
 
         # Get random index for each batch
-        key, subkey1, subkey2 = jax.random.split(key, 3)
         random_indices = jax.random.randint(subkey1, (state.grid.shape[0],), minval=0, maxval=state.grid.shape[1])            
 
         # Extract data at random index
@@ -646,8 +644,6 @@ def main(_):
         future_state = jax.tree_util.tree_map(lambda x1, x2: jnp.concatenate([x1, x2], axis=0), future_state1, future_state2)
         goal_index = jnp.concatenate([goal_index1, goal_index2], axis=0)
         
-
-        print(f"!!!sstate.grid.shape: {state.grid.shape}", flush=True)
         # Create valid batch
         valid_batch = {
             'observations': state.grid.reshape(state.grid.shape[0], -1),
@@ -662,14 +658,14 @@ def main(_):
 
 
     for epoch in range(1000):
-        key, new_key = jax.random.split(key)
-        env_step, info, timesteps_all = collect_data(agent, new_key, env, NUM_ENVS, EPISODE_LENGTH)
+        key, data_collection_key, update_key = jax.random.split(key, 3)
+        env_step, info, timesteps_all = collect_data(agent, data_collection_key, env, NUM_ENVS, EPISODE_LENGTH)
         buffer_state = replay_buffer.insert(buffer_state, timesteps_all)
         
         # Run scan for updates
-        (buffer_state, agent, key), update_infos = jax.lax.scan(
+        (buffer_state, agent, _), update_infos = jax.lax.scan(
             update_step,
-            (buffer_state, agent, key),
+            (buffer_state, agent, update_key),
             None,
             length=1000
         )
