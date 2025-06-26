@@ -545,7 +545,7 @@ config_flags.DEFINE_config_file('agent', ROOT_DIR + '/agents/crl.py', lock_confi
 
 
 def main(_):
-    wandb.init(project="moving_blocks", name="first_run_jitted_refactored_key_1box", config=FLAGS)
+    wandb.init(project="moving_blocks", name="1_box_256_envs_visualization", config=FLAGS)
     
     # vmap environment
     NUM_ENVS = 256
