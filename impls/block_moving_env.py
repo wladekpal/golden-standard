@@ -304,10 +304,7 @@ class BoxPushingEnv:
             return state.grid, state.agent_has_box
         
         new_grid, new_agent_has_box = jax.lax.cond(
-            jnp.logical_or(
-                current_cell == GridStatesEnum.AGENT_ON_TARGET_CARRYING_BOX,
-                current_cell == GridStatesEnum.AGENT_CARRYING_BOX
-            ),
+            current_cell == GridStatesEnum.AGENT_ON_TARGET_CARRYING_BOX,
             putdown_valid,
             putdown_invalid
         )
@@ -548,7 +545,7 @@ config_flags.DEFINE_config_file('agent', ROOT_DIR + '/agents/crl.py', lock_confi
 
 
 def main(_):
-    wandb.init(project="moving_blocks", name="first_run_jitted_refactored_key", config=FLAGS)
+    wandb.init(project="moving_blocks", name="first_run_jitted_refactored_key_1box", config=FLAGS)
     
     # vmap environment
     NUM_ENVS = 256
@@ -557,7 +554,7 @@ def main(_):
     EPISODE_LENGTH = 100
     NUM_ACTIONS = 6
     GRID_SIZE = 5
-    NUM_BOXES = 5
+    NUM_BOXES = 1
     SEED = 2
 
     env = BoxPushingEnv(grid_size=GRID_SIZE, max_steps=EPISODE_LENGTH, number_of_boxes=NUM_BOXES)
@@ -671,12 +668,74 @@ def main(_):
         )
 
         update_infos = jax.tree_util.tree_map(lambda x: x[-1], update_infos)
-        # print(f"update_infos: {update_infos}")
+        
         update_infos.update({
             "eval/reward_min": timesteps_all.reward.min(),
             "eval/reward_max": timesteps_all.reward.max(), 
             "eval/reward_mean": timesteps_all.reward.mean()
         })
+        
+        # Log 100 steps from a single environment for visualization
+        if epoch % 100 == 0:
+            # Create visualization data for GIF
+            import matplotlib.pyplot as plt
+            import matplotlib.animation as animation
+            from matplotlib.patches import Rectangle
+            
+            # Create figure for GIF
+            fig, ax = plt.subplots(figsize=(8, 8))
+            
+            def animate(frame):
+                ax.clear()
+                grid_state = timesteps_all.grid[frame, 0]
+                action = timesteps_all.action[frame, 0]
+                reward = timesteps_all.reward[frame, 0]
+                
+                # Create color mapping for grid states
+                colors = {
+                    0: 'white',      # EMPTY
+                    1: 'brown',      # BOX
+                    2: 'green',      # TARGET
+                    3: 'blue',       # AGENT
+                    4: 'purple',     # AGENT_CARRYING_BOX
+                    5: 'orange',     # AGENT_ON_BOX
+                    6: 'cyan',       # AGENT_ON_TARGET
+                    7: 'magenta',    # AGENT_ON_TARGET_CARRYING_BOX
+                    8: 'yellow',     # AGENT_ON_TARGET_WITH_BOX
+                    9: 'pink',       # AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX
+                    10: 'red',       # BOX_ON_TARGET
+                    11: 'darkorange' # AGENT_ON_BOX_CARRYING_BOX
+                }
+                
+                # Plot grid
+                for i in range(grid_state.shape[0]):
+                    for j in range(grid_state.shape[1]):
+                        color = colors.get(int(grid_state[i, j]), 'white')
+                        rect = Rectangle((j, i), 1, 1, facecolor=color, edgecolor='black')
+                        ax.add_patch(rect)
+                        
+                        # Add text labels
+                        if grid_state[i, j] in [3, 4, 5, 6, 7, 8, 9, 11]:  # Agent states
+                            ax.text(j + 0.5, i + 0.5, 'A', ha='center', va='center', fontsize=12, fontweight='bold')
+                        elif grid_state[i, j] in [1, 10]:  # Box states
+                            ax.text(j + 0.5, i + 0.5, 'B', ha='center', va='center', fontsize=12, fontweight='bold')
+                        elif grid_state[i, j] == 2:  # Target
+                            ax.text(j + 0.5, i + 0.5, 'T', ha='center', va='center', fontsize=12, fontweight='bold')
+                
+                ax.set_xlim(0, grid_state.shape[1])
+                ax.set_ylim(0, grid_state.shape[0])
+                ax.set_title(f'Step {frame} | Action: {action} | Reward: {reward:.2f}')
+                ax.set_aspect('equal')
+                ax.invert_yaxis()
+            
+            # Create animation
+            anim = animation.FuncAnimation(fig, animate, frames=100, interval=200, repeat=False)
+            
+            # Save as GIF
+            gif_path = f"/tmp/block_moving_epoch_{epoch}.gif"
+            anim.save(gif_path, writer='pillow')
+            plt.close()
+
 
         wandb.log(update_infos)
 
@@ -684,3 +743,9 @@ def main(_):
 
 if __name__ == "__main__":
     app.run(main)
+
+    # Create and play the game
+    # import jax.random as random
+    # key = random.PRNGKey(2)
+    # env = BoxPushingEnv(grid_size=5, max_steps=2000, number_of_boxes=1)
+    # env.play_game(key)
