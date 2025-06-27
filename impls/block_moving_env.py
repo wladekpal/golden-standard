@@ -6,7 +6,7 @@ import wandb
 
 from rb import TrajectoryUniformSamplingQueue, jit_wrap, segment_ids_per_row
 os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"   
-os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 
 import jax
 import jax.numpy as jnp
@@ -474,7 +474,6 @@ class AutoResetWrapper(Wrapper):
         return state, reward, done, info
 
 
-
 def flatten_batch(gamma, transition, sample_key):
     # Because it's vmaped transition.obs.shape is of shape (episode_len, obs_dim)
     seq_len = transition.grid.shape[0]
@@ -537,6 +536,35 @@ def collect_data(agent, key, env, num_envs, episode_length):
     state, info = env.reset(keys)
     (timestep, info, key), timesteps_all = jax.lax.scan(step_fn, (state, info, key), (), length=episode_length)
     return timestep, info, timesteps_all
+    
+
+@jax.jit
+def extract_at_indices(data, indices):
+    return jax.tree_util.tree_map(lambda x: x[jnp.arange(x.shape[0]), indices], data)
+
+
+@jax.jit
+def apply_double_batch_trick(state, future_state, goal_index, key):
+    """Sample two random indices and concatenate the results."""
+    # Sample two random indices for each batch
+    subkey1, subkey2 = jax.random.split(key, 2)
+    random_indices1 = jax.random.randint(subkey1, (state.grid.shape[0],), minval=0, maxval=state.grid.shape[1])
+    random_indices2 = jax.random.randint(subkey2, (state.grid.shape[0],), minval=0, maxval=state.grid.shape[1])
+
+    state1 = extract_at_indices(state, random_indices1)
+    state2 = extract_at_indices(state, random_indices2)
+    future_state1 = extract_at_indices(future_state, random_indices1)
+    future_state2 = extract_at_indices(future_state, random_indices2)
+    goal_index1 = extract_at_indices(goal_index, random_indices1)
+    goal_index2 = extract_at_indices(goal_index, random_indices2)
+    
+    # Concatenate the two samples
+    state = jax.tree_util.tree_map(lambda x1, x2: jnp.concatenate([x1, x2], axis=0), state1, state2)
+    actions = jnp.concatenate([state1.action, state2.action], axis=0)
+    future_state = jax.tree_util.tree_map(lambda x1, x2: jnp.concatenate([x1, x2], axis=0), future_state1, future_state2)
+    goal_index = jnp.concatenate([goal_index1, goal_index2], axis=0)
+    
+    return state, actions, future_state, goal_index
 
 
 FLAGS = flags.FLAGS
@@ -546,7 +574,7 @@ config_flags.DEFINE_config_file('agent', ROOT_DIR + '/agents/crl.py', lock_confi
 
 
 def main(_):
-    wandb.init(project="moving_blocks", name="1_box_256_envs_visualization_fix_reward_big_batch_profile_done", config=FLAGS)
+    wandb.init(project="moving_blocks", name="refactored_3_boxes", config=FLAGS)
     
     # vmap environment
     NUM_ENVS = 1024
@@ -555,7 +583,7 @@ def main(_):
     EPISODE_LENGTH = 100
     NUM_ACTIONS = 6
     GRID_SIZE = 5
-    NUM_BOXES = 1
+    NUM_BOXES = 3
     SEED = 2
 
     env = BoxPushingEnv(grid_size=GRID_SIZE, max_steps=EPISODE_LENGTH, number_of_boxes=NUM_BOXES)
@@ -620,28 +648,7 @@ def main(_):
         batch_keys = jax.random.split(batch_key, transitions.grid.shape[0])
         state, future_state, goal_index = jitted_flatten_batch(0.99, transitions, batch_keys)
 
-        # Get random index for each batch
-        random_indices = jax.random.randint(subkey1, (state.grid.shape[0],), minval=0, maxval=state.grid.shape[1])            
-
-        # Extract data at random index
-        state1 = jax.tree_util.tree_map(lambda x: x[jnp.arange(x.shape[0]), random_indices], state)
-        actions = state1.action
-        future_state1 = jax.tree_util.tree_map(lambda x: x[jnp.arange(x.shape[0]), random_indices], future_state)
-        goal_index1 = jax.tree_util.tree_map(lambda x: x[jnp.arange(x.shape[0]), random_indices], goal_index)
-        
-        random_indices2 = jax.random.randint(subkey2, (state.grid.shape[0],), minval=0, maxval=state.grid.shape[1])            
-
-        # Extract data at random index
-        state2 = jax.tree_util.tree_map(lambda x: x[jnp.arange(x.shape[0]), random_indices2], state)
-        actions2 = state2.action
-        future_state2 = jax.tree_util.tree_map(lambda x: x[jnp.arange(x.shape[0]), random_indices2], future_state)
-        goal_index2 = jax.tree_util.tree_map(lambda x: x[jnp.arange(x.shape[0]), random_indices2], goal_index)
-
-        state = jax.tree_util.tree_map(lambda x1, x2: jnp.concatenate([x1, x2], axis=0), state1, state2)
-        actions = jnp.concatenate([actions, actions2], axis=0)
-        future_state = jax.tree_util.tree_map(lambda x1, x2: jnp.concatenate([x1, x2], axis=0), future_state1, future_state2)
-        goal_index = jnp.concatenate([goal_index1, goal_index2], axis=0)
-        
+        state, actions, future_state, goal_index = apply_double_batch_trick(state, future_state, goal_index, subkey1)
         # Create valid batch
         valid_batch = {
             'observations': state.grid.reshape(state.grid.shape[0], -1),
@@ -673,33 +680,6 @@ def main(_):
             length=10,
         )
         return buffer_state, agent, key
-    
-    @jax.jit
-    def extract_at_indices(data, indices):
-        return jax.tree_util.tree_map(lambda x: x[jnp.arange(x.shape[0]), indices], data)
-
-    @jax.jit
-    def apply_double_batch_trick(state, future_state, goal_index, key):
-        """Sample two random indices and concatenate the results."""
-        # Sample two random indices for each batch
-        subkey1, subkey2 = jax.random.split(key, 2)
-        random_indices1 = jax.random.randint(subkey1, (state.grid.shape[0],), minval=0, maxval=state.grid.shape[1])
-        random_indices2 = jax.random.randint(subkey2, (state.grid.shape[0],), minval=0, maxval=state.grid.shape[1])
-
-        state1 = extract_at_indices(state, random_indices1)
-        state2 = extract_at_indices(state, random_indices2)
-        future_state1 = extract_at_indices(future_state, random_indices1)
-        future_state2 = extract_at_indices(future_state, random_indices2)
-        goal_index1 = extract_at_indices(goal_index, random_indices1)
-        goal_index2 = extract_at_indices(goal_index, random_indices2)
-        
-        # Concatenate the two samples
-        state = jax.tree_util.tree_map(lambda x1, x2: jnp.concatenate([x1, x2], axis=0), state1, state2)
-        actions = jnp.concatenate([state1.action, state2.action], axis=0)
-        future_state = jax.tree_util.tree_map(lambda x1, x2: jnp.concatenate([x1, x2], axis=0), future_state1, future_state2)
-        goal_index = jnp.concatenate([goal_index1, goal_index2], axis=0)
-        
-        return state, actions, future_state, goal_index
 
     def evaluate_agent(agent, env, key, num_envs=1024, episode_length=100):
         """Evaluate agent by running rollouts using collect_data and computing losses."""
