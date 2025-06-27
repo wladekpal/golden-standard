@@ -1,11 +1,12 @@
 import functools
 import os
+import jax.profiler
 
 import wandb
 
 from rb import TrajectoryUniformSamplingQueue, jit_wrap, segment_ids_per_row
 os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"   
-os.environ['CUDA_VISIBLE_DEVICES'] = '1'
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 
 import jax
 import jax.numpy as jnp
@@ -185,7 +186,7 @@ class BoxPushingEnv:
         new_pos, new_grid, new_agent_has_box = action_result
         
         # Check if done
-        done = (new_steps >= self.max_steps) | self._is_goal_reached(new_grid)
+        done = (new_steps >= self.max_steps) # | self._is_goal_reached(new_grid)
 
         reward = self._get_reward(new_grid)
         
@@ -312,11 +313,11 @@ class BoxPushingEnv:
 
     def _is_goal_reached(self, grid: jax.Array) -> bool:
         """Check if all boxes are in target cells."""
-        return jnp.sum(grid == GridStatesEnum.BOX_ON_TARGET) == self.number_of_boxes
+        return jnp.sum(grid == GridStatesEnum.BOX_ON_TARGET) + jnp.sum(grid == GridStatesEnum.AGENT_ON_TARGET_WITH_BOX) == self.number_of_boxes
     
     def _get_reward(self, grid: jax.Array) -> float:
         """Get reward for the current state."""
-        return jnp.sum(grid == GridStatesEnum.BOX_ON_TARGET)
+        return jnp.sum(grid == GridStatesEnum.BOX_ON_TARGET) + jnp.sum(grid == GridStatesEnum.AGENT_ON_TARGET_WITH_BOX) 
 
     def _handle_pickup(self, state: BoxPushingState) -> Tuple[jax.Array, bool]:
         """Handle pickup action."""
@@ -545,12 +546,12 @@ config_flags.DEFINE_config_file('agent', ROOT_DIR + '/agents/crl.py', lock_confi
 
 
 def main(_):
-    wandb.init(project="moving_blocks", name="1_box_256_envs_visualization", config=FLAGS)
+    wandb.init(project="moving_blocks", name="1_box_256_envs_visualization_fix_reward_big_batch_profile_done", config=FLAGS)
     
     # vmap environment
-    NUM_ENVS = 256
+    NUM_ENVS = 1024
     MAX_REPLAY_SIZE = 10000
-    BATCH_SIZE = 256
+    BATCH_SIZE = 1024
     EPISODE_LENGTH = 100
     NUM_ACTIONS = 6
     GRID_SIZE = 5
@@ -654,98 +655,157 @@ def main(_):
         return (buffer_state, agent, key), update_info
 
 
-    for epoch in range(1000):
-        key, data_collection_key, update_key = jax.random.split(key, 3)
-        env_step, info, timesteps_all = collect_data(agent, data_collection_key, env, NUM_ENVS, EPISODE_LENGTH)
-        buffer_state = replay_buffer.insert(buffer_state, timesteps_all)
-        
-        # Run scan for updates
-        (buffer_state, agent, _), update_infos = jax.lax.scan(
-            update_step,
-            (buffer_state, agent, update_key),
+    @jax.jit
+    def train_epoch(carry, _):
+        buffer_state, agent, key = carry
+        key, data_key, up_key = jax.random.split(key, 3)
+        _, _, timesteps = collect_data(agent, data_key, env, NUM_ENVS, EPISODE_LENGTH)
+        buffer_state = replay_buffer.insert(buffer_state, timesteps)
+        (buffer_state, agent, _), _ = jax.lax.scan(update_step, (buffer_state, agent, up_key), None, length=1000)
+        return (buffer_state, agent, key), None
+
+    @jax.jit
+    def train_n_epochs(buffer_state, agent, key):
+        (buffer_state, agent, key), _ = jax.lax.scan(
+            train_epoch,
+            (buffer_state, agent, key),
             None,
-            length=1000
+            length=10,
         )
+        return buffer_state, agent, key
+    
+    @jax.jit
+    def extract_at_indices(data, indices):
+        return jax.tree_util.tree_map(lambda x: x[jnp.arange(x.shape[0]), indices], data)
 
-        update_infos = jax.tree_util.tree_map(lambda x: x[-1], update_infos)
+    @jax.jit
+    def apply_double_batch_trick(state, future_state, goal_index, key):
+        """Sample two random indices and concatenate the results."""
+        # Sample two random indices for each batch
+        subkey1, subkey2 = jax.random.split(key, 2)
+        random_indices1 = jax.random.randint(subkey1, (state.grid.shape[0],), minval=0, maxval=state.grid.shape[1])
+        random_indices2 = jax.random.randint(subkey2, (state.grid.shape[0],), minval=0, maxval=state.grid.shape[1])
+
+        state1 = extract_at_indices(state, random_indices1)
+        state2 = extract_at_indices(state, random_indices2)
+        future_state1 = extract_at_indices(future_state, random_indices1)
+        future_state2 = extract_at_indices(future_state, random_indices2)
+        goal_index1 = extract_at_indices(goal_index, random_indices1)
+        goal_index2 = extract_at_indices(goal_index, random_indices2)
         
-        update_infos.update({
-            "eval/reward_min": timesteps_all.reward.min(),
-            "eval/reward_max": timesteps_all.reward.max(), 
-            "eval/reward_mean": timesteps_all.reward.mean()
-        })
+        # Concatenate the two samples
+        state = jax.tree_util.tree_map(lambda x1, x2: jnp.concatenate([x1, x2], axis=0), state1, state2)
+        actions = jnp.concatenate([state1.action, state2.action], axis=0)
+        future_state = jax.tree_util.tree_map(lambda x1, x2: jnp.concatenate([x1, x2], axis=0), future_state1, future_state2)
+        goal_index = jnp.concatenate([goal_index1, goal_index2], axis=0)
         
-        # Log 100 steps from a single environment for visualization
-        if epoch % 100 == 0:
-            # Create visualization data for GIF
-            import matplotlib.pyplot as plt
-            import matplotlib.animation as animation
-            from matplotlib.patches import Rectangle
+        return state, actions, future_state, goal_index
+
+    def evaluate_agent(agent, env, key, num_envs=1024, episode_length=100):
+        """Evaluate agent by running rollouts using collect_data and computing losses."""
+        key, data_key, double_batch_key = jax.random.split(key, 3)
+        # Use collect_data for evaluation rollouts
+        _, _, timesteps = collect_data(agent, data_key, env, num_envs, episode_length)
+        timesteps = jax.tree_util.tree_map(lambda x: x.swapaxes(1, 0), timesteps)
+
+        batch_keys = jax.random.split(data_key, num_envs)
+        state, future_state, goal_index = jitted_flatten_batch(0.99, timesteps, batch_keys)
+        
+        # Sample and concatenate batch using the new function
+        state, actions, future_state, goal_index = apply_double_batch_trick(state, future_state, goal_index, double_batch_key)
+        
+        # Create valid batch
+        valid_batch = {
+            'observations': state.grid.reshape(state.grid.shape[0], -1),
+            'actions': actions.squeeze(),
+            'value_goals': future_state.grid.reshape(future_state.grid.shape[0], -1),
+            'actor_goals': future_state.grid.reshape(future_state.grid.shape[0], -1),
+        }
+
+        # Compute losses on example batch
+        loss, loss_info = agent.total_loss(valid_batch, None)
+        
+        # Compile evaluation info
+        eval_info = {
+            'eval/mean_reward': timesteps.reward.mean(),
+            'eval/min_reward': timesteps.reward.min(),
+            'eval/max_reward': timesteps.reward.max(),
+            'eval/total_loss': loss,
+        }
+        eval_info.update(loss_info)
+        wandb.log(eval_info)
+
+        # Create visualization data for GIF
+        import matplotlib.pyplot as plt
+        import matplotlib.animation as animation
+        from matplotlib.patches import Rectangle
+        
+        # Create figure for GIF
+        fig, ax = plt.subplots(figsize=(8, 8))
+        
+        def animate(frame):
+            ax.clear()
+            grid_state = timesteps.grid[0, frame]
+            action = timesteps.action[0, frame]
+            reward = timesteps.reward[0, frame]
             
-            # Create figure for GIF
-            fig, ax = plt.subplots(figsize=(8, 8))
+            # Create color mapping for grid states
+            colors = {
+                0: 'white',      # EMPTY
+                1: 'brown',      # BOX
+                2: 'green',      # TARGET
+                3: 'blue',       # AGENT
+                4: 'purple',     # AGENT_CARRYING_BOX
+                5: 'orange',     # AGENT_ON_BOX
+                6: 'cyan',       # AGENT_ON_TARGET
+                7: 'magenta',    # AGENT_ON_TARGET_CARRYING_BOX
+                8: 'yellow',     # AGENT_ON_TARGET_WITH_BOX
+                9: 'pink',       # AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX
+                10: 'red',       # BOX_ON_TARGET
+                11: 'darkorange' # AGENT_ON_BOX_CARRYING_BOX
+            }
             
-            def animate(frame):
-                ax.clear()
-                grid_state = timesteps_all.grid[frame, 0]
-                action = timesteps_all.action[frame, 0]
-                reward = timesteps_all.reward[frame, 0]
-                
-                # Create color mapping for grid states
-                colors = {
-                    0: 'white',      # EMPTY
-                    1: 'brown',      # BOX
-                    2: 'green',      # TARGET
-                    3: 'blue',       # AGENT
-                    4: 'purple',     # AGENT_CARRYING_BOX
-                    5: 'orange',     # AGENT_ON_BOX
-                    6: 'cyan',       # AGENT_ON_TARGET
-                    7: 'magenta',    # AGENT_ON_TARGET_CARRYING_BOX
-                    8: 'yellow',     # AGENT_ON_TARGET_WITH_BOX
-                    9: 'pink',       # AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX
-                    10: 'red',       # BOX_ON_TARGET
-                    11: 'darkorange' # AGENT_ON_BOX_CARRYING_BOX
-                }
-                
-                # Plot grid
-                for i in range(grid_state.shape[0]):
-                    for j in range(grid_state.shape[1]):
-                        color = colors.get(int(grid_state[i, j]), 'white')
-                        rect = Rectangle((j, i), 1, 1, facecolor=color, edgecolor='black')
-                        ax.add_patch(rect)
-                        
-                        # Add text labels
-                        if grid_state[i, j] in [3, 4, 5, 6, 7, 8, 9, 11]:  # Agent states
-                            ax.text(j + 0.5, i + 0.5, 'A', ha='center', va='center', fontsize=12, fontweight='bold')
-                        elif grid_state[i, j] in [1, 10]:  # Box states
-                            ax.text(j + 0.5, i + 0.5, 'B', ha='center', va='center', fontsize=12, fontweight='bold')
-                        elif grid_state[i, j] == 2:  # Target
-                            ax.text(j + 0.5, i + 0.5, 'T', ha='center', va='center', fontsize=12, fontweight='bold')
-                
-                ax.set_xlim(0, grid_state.shape[1])
-                ax.set_ylim(0, grid_state.shape[0])
-                ax.set_title(f'Step {frame} | Action: {action} | Reward: {reward:.2f}')
-                ax.set_aspect('equal')
-                ax.invert_yaxis()
+            # Plot grid
+            for i in range(grid_state.shape[0]):
+                for j in range(grid_state.shape[1]):
+                    color = colors.get(int(grid_state[i, j]), 'white')
+                    rect = Rectangle((j, i), 1, 1, facecolor=color, edgecolor='black')
+                    ax.add_patch(rect)
+                    
+                    # Add text labels
+                    if grid_state[i, j] in [3, 4, 5, 6, 7, 8, 9, 11]:  # Agent states
+                        ax.text(j + 0.5, i + 0.5, 'A', ha='center', va='center', fontsize=12, fontweight='bold')
+                    elif grid_state[i, j] in [1, 10]:  # Box states
+                        ax.text(j + 0.5, i + 0.5, 'B', ha='center', va='center', fontsize=12, fontweight='bold')
+                    elif grid_state[i, j] == 2:  # Target
+                        ax.text(j + 0.5, i + 0.5, 'T', ha='center', va='center', fontsize=12, fontweight='bold')
             
-            # Create animation
-            anim = animation.FuncAnimation(fig, animate, frames=100, interval=200, repeat=False)
-            
-            # Save as GIF
-            gif_path = f"/tmp/block_moving_epoch_{epoch}.gif"
-            anim.save(gif_path, writer='pillow')
-            plt.close()
+            ax.set_xlim(0, grid_state.shape[1])
+            ax.set_ylim(0, grid_state.shape[0])
+            ax.set_title(f'Step {frame} | Action: {action} | Reward: {reward:.2f}')
+            ax.set_aspect('equal')
+            ax.invert_yaxis()
+        
+        # Create animation
+        anim = animation.FuncAnimation(fig, animate, frames=100, interval=200, repeat=False)
+        
+        # Save as GIF
+        gif_path = f"/tmp/block_moving_epoch_{epoch}.gif"
+        anim.save(gif_path, writer='pillow')
+        plt.close()
+
+        wandb.log({"gif": wandb.Video(gif_path)})
+        
 
 
-        wandb.log(update_infos)
 
+    for epoch in range(10):
+        for _ in range(10):
+            buffer_state, agent, key = train_n_epochs(buffer_state, agent, key)
+
+        evaluate_agent(agent, env, key, NUM_ENVS, EPISODE_LENGTH)
 
 
 if __name__ == "__main__":
     app.run(main)
 
-    # Create and play the game
-    # import jax.random as random
-    # key = random.PRNGKey(2)
-    # env = BoxPushingEnv(grid_size=5, max_steps=2000, number_of_boxes=1)
-    # env.play_game(key)
