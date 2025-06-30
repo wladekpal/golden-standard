@@ -315,10 +315,10 @@ def get_config():
             # Agent hyperparameters.
             agent_name='crl',  # Agent name.
             lr=3e-4,  # Learning rate.
-            batch_size=1024,  # Batch size.
-            actor_hidden_dims=(512, 512, 512),  # Actor network hidden dimensions.
-            value_hidden_dims=(512, 512, 512),  # Value network hidden dimensions.
-            latent_dim=512,  # Latent dimension for phi and psi.
+            batch_size=256,  # Batch size.
+            actor_hidden_dims=(256, 256),  # Actor network hidden dimensions.
+            value_hidden_dims=(256, 256),  # Value network hidden dimensions.
+            latent_dim=64, 
             layer_norm=True,  # Whether to use layer normalization.
             discount=0.99,  # Discount factor.
             actor_loss='awr',  # Actor loss type ('awr' or 'ddpgbc').
