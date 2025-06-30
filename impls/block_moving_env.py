@@ -718,10 +718,11 @@ def main(_):
         # Create visualization data for GIF
         import matplotlib.pyplot as plt
         import matplotlib.animation as animation
-        from matplotlib.patches import Rectangle
+        import matplotlib
         
         # Create figure for GIF
-        fig, ax = plt.subplots(figsize=(8, 8))
+        grid_size = state.grid.shape[-2:]
+        fig, ax = plt.subplots(figsize=grid_size)
         
         def animate(frame):
             ax.clear()
@@ -730,35 +731,27 @@ def main(_):
             reward = timesteps.reward[0, frame]
             
             # Create color mapping for grid states
-            colors = {
-                0: 'white',      # EMPTY
-                1: 'brown',      # BOX
-                2: 'green',      # TARGET
-                3: 'blue',       # AGENT
-                4: 'purple',     # AGENT_CARRYING_BOX
-                5: 'orange',     # AGENT_ON_BOX
-                6: 'cyan',       # AGENT_ON_TARGET
-                7: 'magenta',    # AGENT_ON_TARGET_CARRYING_BOX
-                8: 'yellow',     # AGENT_ON_TARGET_WITH_BOX
-                9: 'pink',       # AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX
-                10: 'red',       # BOX_ON_TARGET
-                11: 'darkorange' # AGENT_ON_BOX_CARRYING_BOX
+            imgs = {
+                0: 'assets/floor.png',                                  # EMPTY
+                1: 'assets/box.png',                                    # BOX
+                2: 'assets/box_target.png',                             # TARGET
+                3: 'assets/agent.png',                                  # AGENT
+                4: 'assets/agent_carrying_box.png',                     # AGENT_CARRYING_BOX
+                5: 'assets/agent_on_box.png',                           # AGENT_ON_BOX
+                6: 'assets/agent_on_target.png',                        # AGENT_ON_TARGET
+                7: 'assets/agent_on_target_carrying_box.png',           # AGENT_ON_TARGET_CARRYING_BOX
+                8: 'assets/agent_on_target_with_box.png',               # AGENT_ON_TARGET_WITH_BOX
+                9: 'assets/agent_on_target_with_box_carrying_box.png',  # AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX
+                10: 'assets/box_on_target.png',                         # BOX_ON_TARGET
+                11: 'assets/agent_on_box_carrying_box.png'              # AGENT_ON_BOX_CARRYING_BOX
             }
             
             # Plot grid
             for i in range(grid_state.shape[0]):
                 for j in range(grid_state.shape[1]):
-                    color = colors.get(int(grid_state[i, j]), 'white')
-                    rect = Rectangle((j, i), 1, 1, facecolor=color, edgecolor='black')
-                    ax.add_patch(rect)
-                    
-                    # Add text labels
-                    if grid_state[i, j] in [3, 4, 5, 6, 7, 8, 9, 11]:  # Agent states
-                        ax.text(j + 0.5, i + 0.5, 'A', ha='center', va='center', fontsize=12, fontweight='bold')
-                    elif grid_state[i, j] in [1, 10]:  # Box states
-                        ax.text(j + 0.5, i + 0.5, 'B', ha='center', va='center', fontsize=12, fontweight='bold')
-                    elif grid_state[i, j] == 2:  # Target
-                        ax.text(j + 0.5, i + 0.5, 'T', ha='center', va='center', fontsize=12, fontweight='bold')
+                    img = matplotlib.image.imread(imgs[int(grid_state[i, j])])
+                    ax.imshow(img, extent = [i+1, i, j+1, j])
+                
             
             ax.set_xlim(0, grid_state.shape[1])
             ax.set_ylim(0, grid_state.shape[0])
