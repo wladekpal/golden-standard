@@ -322,3 +322,5 @@ pyrightconfig.json
 
 wandb/
 *.png
+
+!assets/*
