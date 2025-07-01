@@ -10,11 +10,11 @@ import jax
 import jax.numpy as jnp
 import xminigrid
 import wandb
-from data_collection import TimeStepNew, build_benchmark, collect_data, get_concatenated_state, repeat_tree
+from minigrid_data_collection import TimeStepNew, build_benchmark, collect_data, get_concatenated_state, repeat_tree
 from absl import app, flags
 from ml_collections import config_flags
 from xminigrid.core.constants import NUM_ACTIONS
-from agents import agents
+from impls.agents import agents
 from rb import TrajectoryUniformSamplingQueue, flatten_batch, jit_wrap
 from config import ROOT_DIR
 
