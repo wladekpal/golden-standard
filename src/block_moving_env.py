@@ -19,7 +19,7 @@ import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 import matplotlib
 
-from agents import agents
+from impls.agents import agents
 from config import ROOT_DIR
 
 
@@ -653,11 +653,11 @@ def evaluate_agent(agent, env, key, jitted_flatten_batch, epoch, num_envs=1024, 
 FLAGS = flags.FLAGS
 flags.DEFINE_integer('seed', 0, 'Random seed.')
 
-config_flags.DEFINE_config_file('agent', ROOT_DIR + '/agents/crl.py', lock_config=False)
+config_flags.DEFINE_config_file('agent', ROOT_DIR + '/impls/agents/crl.py', lock_config=False)
 
 
 def main(_):
-    wandb.init(project="moving_blocks", name="refactored_7x7_grid_5_boxes_autoreset_100_steps_1024_envs", config=FLAGS)
+    wandb.init(project="moving_blocks", name="refactored_7x7_grid_2_boxes_autoreset_100_steps_1024_envs", config=FLAGS)
     
     # vmap environment
     NUM_ENVS = 1024
@@ -666,7 +666,7 @@ def main(_):
     EPISODE_LENGTH = 100
     NUM_ACTIONS = 6
     GRID_SIZE = 7
-    NUM_BOXES = 5
+    NUM_BOXES = 2
     SEED = 2
 
     env = BoxPushingEnv(grid_size=GRID_SIZE, max_steps=EPISODE_LENGTH, number_of_boxes=NUM_BOXES)

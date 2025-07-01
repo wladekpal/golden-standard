@@ -5,9 +5,9 @@ import jax
 import jax.numpy as jnp
 import ml_collections
 import optax
-from utils.encoders import GCEncoder, encoder_modules
-from utils.flax_utils import ModuleDict, TrainState, nonpytree_field
-from utils.networks import GCActor, GCDiscreteActor
+from impls.utils.encoders import GCEncoder, encoder_modules
+from impls.utils.flax_utils import ModuleDict, TrainState, nonpytree_field
+from impls.utils.networks import GCActor, GCDiscreteActor
 
 
 class GCBCAgent(flax.struct.PyTreeNode):
