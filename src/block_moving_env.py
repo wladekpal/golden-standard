@@ -21,6 +21,7 @@ class BoxPushingState(struct.PyTreeNode):
 
 class TimeStep(BoxPushingState):
     action: jax.Array
+    done: jax.Array
 
 
 @dataclass
@@ -173,7 +174,7 @@ class BoxPushingEnv:
         # Check if done
         done = (new_steps >= self.max_steps) | self._is_goal_reached(new_grid)
 
-        reward = self._get_reward(new_grid)
+        reward = self._is_goal_reached(new_grid).astype(jnp.int32)
         
         new_state = BoxPushingState(
             key=state.key,

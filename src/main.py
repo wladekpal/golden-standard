@@ -72,7 +72,8 @@ def collect_data(agent, key, env, num_envs, episode_length):
             steps=state.steps,
             action=actions,
             goal=state.goal,
-            reward=reward
+            reward=reward,
+            done=done,
         )
         return (new_state, info, key), timestep
     
@@ -135,10 +136,12 @@ def evaluate_agent(agent, env, key, jitted_flatten_batch, epoch, num_envs=1024, 
     loss, loss_info = agent.total_loss(valid_batch, None)
     
     # Compile evaluation info
+    # Only consider episodes that are done
+    done_mask = timesteps.done
     eval_info = {
-        'eval/mean_reward': timesteps.reward.mean(),
-        'eval/min_reward': timesteps.reward.min(),
-        'eval/max_reward': timesteps.reward.max(),
+        'eval/mean_reward': timesteps.reward[done_mask].mean(),
+        'eval/min_reward': timesteps.reward[done_mask].min(),
+        'eval/max_reward': timesteps.reward[done_mask].max(),
         'eval/total_loss': loss,
     }
     eval_info.update(loss_info)
@@ -200,17 +203,18 @@ config_flags.DEFINE_config_file('agent', ROOT_DIR + '/impls/agents/crl.py', lock
 
 
 def main(_):
-    wandb.init(project="moving_blocks", name="refactored_7x7_grid_2_boxes_autoreset_100_steps_1024_envs", config=FLAGS)
-    
     # vmap environment
     NUM_ENVS = 1024
     MAX_REPLAY_SIZE = 10000
     BATCH_SIZE = 1024
     EPISODE_LENGTH = 100
     NUM_ACTIONS = 6
-    GRID_SIZE = 7
+    GRID_SIZE = 5
     NUM_BOXES = 2
-    SEED = 2
+    SEED = 3
+    SUFFIX = "reward_is_goal_reached"
+
+    wandb.init(project="moving_blocks", name=f"{GRID_SIZE}x{GRID_SIZE}_grid_{NUM_BOXES}_boxes_{EPISODE_LENGTH}_el_{NUM_ENVS}_num_envs__{SUFFIX}", config=FLAGS)
 
     env = BoxPushingEnv(grid_size=GRID_SIZE, max_steps=EPISODE_LENGTH, number_of_boxes=NUM_BOXES)
     env = AutoResetWrapper(env)
@@ -230,6 +234,7 @@ def main(_):
         action=jnp.zeros((1,), dtype=jnp.int8),
         goal=jnp.zeros((GRID_SIZE, GRID_SIZE), dtype=jnp.int8),
         reward=jnp.zeros((1,), dtype=jnp.int8),
+        done=jnp.zeros((1,), dtype=jnp.int8),
     )
     
     replay_buffer = jit_wrap(
@@ -242,7 +247,6 @@ def main(_):
         )
     )
     buffer_state = jax.jit(replay_buffer.init)(key)
-    
 
     # Agent
     config = FLAGS.agent
@@ -298,6 +302,7 @@ def main(_):
         (buffer_state, agent, _), _ = jax.lax.scan(update_step, (buffer_state, agent, up_key), None, length=1000)
         return (buffer_state, agent, key), None
 
+
     @jax.jit
     def train_n_epochs(buffer_state, agent, key):
         (buffer_state, agent, key), _ = jax.lax.scan(
@@ -308,7 +313,9 @@ def main(_):
         )
         return buffer_state, agent, key
 
+
     for epoch in range(10):
+        evaluate_agent(agent, env, key, jitted_flatten_batch, epoch, NUM_ENVS, EPISODE_LENGTH)
         for _ in range(10):
             buffer_state, agent, key = train_n_epochs(buffer_state, agent, key)
 
