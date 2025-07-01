@@ -5,8 +5,6 @@ import jax.profiler
 import wandb
 
 from rb import TrajectoryUniformSamplingQueue, jit_wrap, segment_ids_per_row
-os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"   
-os.environ['CUDA_VISIBLE_DEVICES'] = '6'
 
 import jax
 import jax.numpy as jnp
@@ -44,28 +42,27 @@ class TimeStep(BoxPushingState):
 @dataclass
 class GridStatesEnum:
     """Grid states representation for the box pushing environment."""
-    EMPTY = 0
-    BOX = 1
-    TARGET = 2
-    AGENT = 3
-    AGENT_CARRYING_BOX = 4 # Agent is carrying a box
-    AGENT_ON_BOX = 5 # Agent is on box
-    AGENT_ON_TARGET = 6 # Agent is on target
-    AGENT_ON_TARGET_CARRYING_BOX = 7 # Agent is on target carrying the box
-    AGENT_ON_TARGET_WITH_BOX = 8 # Agent is on target on which there is a box
-    AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX = 9 # Agent is on target on which there is a box and is carrying a box
-    BOX_ON_TARGET = 10 # Box is on target
-    AGENT_ON_BOX_CARRYING_BOX = 11 # Agent is on box carrying a box
+    EMPTY = jnp.int8(0)
+    BOX = jnp.int8(1)
+    TARGET = jnp.int8(2)
+    AGENT = jnp.int8(3)
+    AGENT_CARRYING_BOX = jnp.int8(4) # Agent is carrying a box
+    AGENT_ON_BOX = jnp.int8(5) # Agent is on box
+    AGENT_ON_TARGET = jnp.int8(6) # Agent is on target
+    AGENT_ON_TARGET_CARRYING_BOX = jnp.int8(7) # Agent is on target carrying the box
+    AGENT_ON_TARGET_WITH_BOX = jnp.int8(8) # Agent is on target on which there is a box
+    AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX = jnp.int8(9) # Agent is on target on which there is a box and is carrying a box
+    BOX_ON_TARGET = jnp.int8(10) # Box is on target
+    AGENT_ON_BOX_CARRYING_BOX = jnp.int8(11) # Agent is on box carrying a box
 
 ACTIONS = {
-    0: (-1, 0),   # UP
-    1: (1, 0),    # DOWN
-    2: (0, -1),   # LEFT
-    3: (0, 1),    # RIGHT
+    0: (jnp.int8(-1), jnp.int8(0)),   # UP
+    1: (jnp.int8(1), jnp.int8(0)),    # DOWN
+    2: (jnp.int8(0), jnp.int8(-1)),   # LEFT
+    3: (jnp.int8(0), jnp.int8(1)),    # RIGHT
     4: None,      # PICK_UP
     5: None       # PUT_DOWN
 }
-        
 
 
 class BoxPushingEnv:
@@ -83,7 +80,7 @@ class BoxPushingEnv:
         key1, key2, key3, key4 = random.split(key, 4)
         
         # Initialize empty grid
-        grid = jnp.zeros((self.grid_size, self.grid_size), dtype=jnp.int32)
+        grid = jnp.zeros((self.grid_size, self.grid_size), dtype=jnp.int8)
         
         # Place exactly number_of_boxes boxes
         box_positions = random.choice(key1, self.grid_size * self.grid_size, shape=(self.number_of_boxes,), replace=False)
@@ -141,7 +138,7 @@ class BoxPushingEnv:
         state = state.replace(goal=goal.grid)
         
         info = {
-            'boxes_on_target': jnp.sum(grid == GridStatesEnum.BOX_ON_TARGET)
+            'boxes_on_target': jnp.sum(grid == GridStatesEnum.BOX_ON_TARGET) + jnp.sum(grid == GridStatesEnum.AGENT_ON_TARGET_WITH_BOX)
         }
         
         return state, info
@@ -190,7 +187,7 @@ class BoxPushingEnv:
         new_pos, new_grid, new_agent_has_box = action_result
         
         # Check if done
-        done = (new_steps >= self.max_steps) # | self._is_goal_reached(new_grid)
+        done = (new_steps >= self.max_steps) | self._is_goal_reached(new_grid)
 
         reward = self._get_reward(new_grid)
         
@@ -206,7 +203,7 @@ class BoxPushingEnv:
         )
         
         info = {
-            'boxes_on_target': jnp.sum(new_grid == GridStatesEnum.BOX_ON_TARGET)
+            'boxes_on_target': jnp.sum(new_grid == GridStatesEnum.BOX_ON_TARGET) + jnp.sum(new_grid == GridStatesEnum.AGENT_ON_TARGET_WITH_BOX)
         }
         
         return new_state, reward, done, info
@@ -238,7 +235,7 @@ class BoxPushingEnv:
                     grid[row, col] == GridStatesEnum.AGENT_ON_BOX_CARRYING_BOX,
                     grid[row, col] == GridStatesEnum.AGENT,
                     grid[row, col] == GridStatesEnum.AGENT_CARRYING_BOX,
-                ]).astype(jnp.int32).argmax(),
+                ]).astype(jnp.int8).argmax(),
                 [
                     lambda: grid.at[row, col].set(GridStatesEnum.BOX),  # Leave box if agent was on box
                     lambda: grid.at[row, col].set(GridStatesEnum.TARGET),  # Leave target if agent was on target
@@ -260,7 +257,7 @@ class BoxPushingEnv:
                         grid_after_clear[new_row, new_col] == GridStatesEnum.TARGET,
                         grid_after_clear[new_row, new_col] == GridStatesEnum.BOX_ON_TARGET,
                         grid_after_clear[new_row, new_col] == GridStatesEnum.EMPTY,
-                    ]).astype(jnp.int32).argmax(),
+                    ]).astype(jnp.int8).argmax(),
                     [
                         lambda: grid_after_clear.at[new_row, new_col].set(GridStatesEnum.AGENT_ON_BOX_CARRYING_BOX),  # Agent on box carrying box
                         lambda: grid_after_clear.at[new_row, new_col].set(GridStatesEnum.AGENT_ON_TARGET_CARRYING_BOX),  # Agent on target carrying box
@@ -274,7 +271,7 @@ class BoxPushingEnv:
                         grid_after_clear[new_row, new_col] == GridStatesEnum.TARGET,
                         grid_after_clear[new_row, new_col] == GridStatesEnum.BOX_ON_TARGET,
                         grid_after_clear[new_row, new_col] == GridStatesEnum.EMPTY,
-                    ]).astype(jnp.int32).argmax(),
+                    ]).astype(jnp.int8).argmax(),
                     [
                         lambda: grid_after_clear.at[new_row, new_col].set(GridStatesEnum.AGENT_ON_BOX),  # Agent on box
                         lambda: grid_after_clear.at[new_row, new_col].set(GridStatesEnum.AGENT_ON_TARGET),  # Agent on target
@@ -468,12 +465,12 @@ class AutoResetWrapper(Wrapper):
         
         def reset_fn(key):
             reset_state, reset_info = self._env.reset(key)
-            return reset_state, 0, False, reset_info
+            return reset_state
         
-        state, reward, done, info = jax.lax.cond(
+        state = jax.lax.cond(
             done,
             lambda: reset_fn(key_new),
-            lambda: (state, reward, done, info)
+            lambda: state
         )
         return state, reward, done, info
 
@@ -660,7 +657,7 @@ config_flags.DEFINE_config_file('agent', ROOT_DIR + '/agents/crl.py', lock_confi
 
 
 def main(_):
-    wandb.init(project="moving_blocks", name="refactored_3_boxes_jit_collect_data", config=FLAGS)
+    wandb.init(project="moving_blocks", name="refactored_7x7_grid_5_boxes_autoreset_100_steps_1024_envs", config=FLAGS)
     
     # vmap environment
     NUM_ENVS = 1024
@@ -668,8 +665,8 @@ def main(_):
     BATCH_SIZE = 1024
     EPISODE_LENGTH = 100
     NUM_ACTIONS = 6
-    GRID_SIZE = 5
-    NUM_BOXES = 3
+    GRID_SIZE = 7
+    NUM_BOXES = 5
     SEED = 2
 
     env = BoxPushingEnv(grid_size=GRID_SIZE, max_steps=EPISODE_LENGTH, number_of_boxes=NUM_BOXES)
@@ -682,14 +679,14 @@ def main(_):
     # Replay buffer
     dummy_timestep = TimeStep(
         key=key,
-        grid=jnp.zeros((GRID_SIZE, GRID_SIZE), dtype=jnp.int32),
-        target_cells=jnp.zeros((NUM_BOXES, 2), dtype=jnp.int32),
-        agent_pos=jnp.zeros((2,), dtype=jnp.int32),
-        agent_has_box=jnp.zeros((1,), dtype=jnp.int32),
-        steps=jnp.zeros((1,), dtype=jnp.int32),
-        action=jnp.zeros((1,), dtype=jnp.int32),
-        goal=jnp.zeros((GRID_SIZE, GRID_SIZE), dtype=jnp.int32),
-        reward=jnp.zeros((1,), dtype=jnp.int32),
+        grid=jnp.zeros((GRID_SIZE, GRID_SIZE), dtype=jnp.int8),
+        target_cells=jnp.zeros((NUM_BOXES, 2), dtype=jnp.int8),
+        agent_pos=jnp.zeros((2,), dtype=jnp.int8),
+        agent_has_box=jnp.zeros((1,), dtype=jnp.int8),
+        steps=jnp.zeros((1,), dtype=jnp.int8),
+        action=jnp.zeros((1,), dtype=jnp.int8),
+        goal=jnp.zeros((GRID_SIZE, GRID_SIZE), dtype=jnp.int8),
+        reward=jnp.zeros((1,), dtype=jnp.int8),
     )
     
     replay_buffer = jit_wrap(
@@ -710,7 +707,7 @@ def main(_):
     agent_class = agents[config['agent_name']]
     example_batch = {
         'observations':dummy_timestep.grid.reshape(1, -1),  # Add batch dimension 
-        'actions': jnp.ones((1,), dtype=jnp.int32) * (NUM_ACTIONS-1), # TODO: make sure it should be the maximal value of action space  # Single action for batch size 1
+        'actions': jnp.ones((1,), dtype=jnp.int8) * (NUM_ACTIONS-1), # TODO: make sure it should be the maximal value of action space  # Single action for batch size 1
         'value_goals': dummy_timestep.grid.reshape(1, -1),
         'actor_goals': dummy_timestep.grid.reshape(1, -1),
     }
