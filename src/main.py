@@ -247,7 +247,7 @@ def main(_):
     EPISODE_LENGTH = 100
     NUM_ACTIONS = 6
     GRID_SIZE = 5
-    NUM_BOXES = 5
+    NUM_BOXES = 2
     SEED = 3
     USE_TARGETS = False
     TRUNCATE_WHEN_SUCCESS = False
@@ -294,8 +294,8 @@ def main(_):
     config['discrete'] = True
     agent_class = agents[config['agent_name']]
     example_batch = {
-        'observations':dummy_timestep.grid.reshape(1, -1),  # Add batch dimension 
-        'actions': jnp.ones((1,), dtype=jnp.int8) * (NUM_ACTIONS-1), # TODO: make sure it should be the maximal value of action space  # Single action for batch size 1
+        'observations':dummy_timestep.grid.reshape(1, -1),
+        'actions': jnp.ones((1,), dtype=jnp.int8) * (NUM_ACTIONS-1),
         'value_goals': dummy_timestep.grid.reshape(1, -1),
         'actor_goals': dummy_timestep.grid.reshape(1, -1),
     }
@@ -365,7 +365,7 @@ def main(_):
     
     for epoch in range(EPOCHS):
         for _ in range(10):
-            buffer_state, agent, key = train_n_epochs(buffer_state, agent, key, epochs=10)
+            buffer_state, agent, key = train_n_epochs(buffer_state, agent, key, epochs=6)
         evaluate_agent(agent, env, key, jitted_flatten_batch, epoch+1, NUM_ENVS, EPISODE_LENGTH, use_targets=USE_TARGETS, use_double_batch_trick=USE_DOUBLE_BATCH_TRICK)
 
 
