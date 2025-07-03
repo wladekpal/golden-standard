@@ -40,6 +40,31 @@ class GridStatesEnum:
     BOX_ON_TARGET = jnp.int8(10) # Box is on target
     AGENT_ON_BOX_CARRYING_BOX = jnp.int8(11) # Agent is on box carrying a box
 
+    @staticmethod
+    @jax.jit
+    def remove_targets(grid_state: jax.Array) -> jax.Array:
+        """Project grid states with targets to states without targets."""
+        # Create a mapping array for vectorized lookup
+        # Map each state to its corresponding no-target state
+        mapping_array = jnp.array([
+            0,   # EMPTY -> EMPTY
+            1,   # BOX -> BOX
+            0,   # TARGET -> EMPTY
+            3,   # AGENT -> AGENT
+            4,   # AGENT_CARRYING_BOX -> AGENT_CARRYING_BOX
+            5,   # AGENT_ON_BOX -> AGENT_ON_BOX
+            3,   # AGENT_ON_TARGET -> AGENT
+            4,   # AGENT_ON_TARGET_CARRYING_BOX -> AGENT_CARRYING_BOX
+            5,   # AGENT_ON_TARGET_WITH_BOX -> AGENT_ON_BOX
+            11,  # AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX -> AGENT_ON_BOX_CARRYING_BOX
+            1,   # BOX_ON_TARGET -> BOX
+            11,  # AGENT_ON_BOX_CARRYING_BOX -> AGENT_ON_BOX_CARRYING_BOX
+        ], dtype=jnp.int8)
+        
+        # Apply the mapping
+        return mapping_array[grid_state]
+
+
 ACTIONS = {
     0: (jnp.int8(-1), jnp.int8(0)),   # UP
     1: (jnp.int8(1), jnp.int8(0)),    # DOWN
@@ -53,13 +78,13 @@ ACTIONS = {
 class BoxPushingEnv:
     """JAX-based box pushing environment."""
     
-    def __init__(self, grid_size: int = 20, max_steps: int = 2000, number_of_boxes: int = 3):
-
+    def __init__(self, grid_size: int = 20, max_steps: int = 2000, number_of_boxes: int = 3, truncate_when_success: bool = False):
         self.grid_size = grid_size
         self.max_steps = max_steps
         self.action_space = 6  # UP, DOWN, LEFT, RIGHT, PICK_UP, PUT_DOWN
         self.number_of_boxes = number_of_boxes
-        
+        self.truncate_when_success = truncate_when_success
+
     def reset(self, key: jax.Array) -> Tuple[BoxPushingState, Dict[str, Any]]:
         """Reset environment to initial state."""
         key1, key2, key3, key4 = random.split(key, 4)
@@ -172,7 +197,10 @@ class BoxPushingEnv:
         new_pos, new_grid, new_agent_has_box = action_result
         
         # Check if done
-        done = (new_steps >= self.max_steps) | self._is_goal_reached(new_grid)
+        if self.truncate_when_success:
+            done = (new_steps >= self.max_steps) | self._is_goal_reached(new_grid)
+        else:
+            done = new_steps >= self.max_steps
 
         reward = self._is_goal_reached(new_grid).astype(jnp.int32)
         
