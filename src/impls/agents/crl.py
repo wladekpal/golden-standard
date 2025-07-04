@@ -310,7 +310,7 @@ class CRLAgent(flax.struct.PyTreeNode):
 
 
 def get_config():
-    config = ml_collections.ConfigDict(
+    config = ml_collections.FrozenConfigDict(
         dict(
             # Agent hyperparameters.
             agent_name='crl',  # Agent name.
