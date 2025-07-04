@@ -205,7 +205,7 @@ def train(config: Config):
         # Sample and process transitions
         buffer_state, transitions = replay_buffer.sample(buffer_state)
         batch_keys = jax.random.split(batch_key, transitions.grid.shape[0])
-        state, future_state, goal_index = jitted_flatten_batch(0.99, transitions, batch_keys)
+        state, future_state, goal_index = jitted_flatten_batch(config.agent.discount, transitions, batch_keys)
 
         state, actions, future_state, goal_index = apply_double_batch_trick(state, future_state, goal_index, double_batch_key)
         # Create valid batch

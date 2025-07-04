@@ -5,6 +5,8 @@ import tyro
 from dataclasses import asdict
 
 
+#TODO: this is needed, because otherwise tyro doesn't treat legal_envs union as union, but a simple type
+# Once we add any other environment this can be removed
 @dataclass
 class DummyEnv:
     x: int = 5
