@@ -111,7 +111,7 @@ def get_single_pair_from_every_env(state, future_state, goal_index, key, use_dou
     )
 
 
-def evaluate_agent(agent, env, key, jitted_flatten_batch, epoch, num_envs=1024, episode_length=100, use_double_batch_trick=False):
+def evaluate_agent(agent, env, key, jitted_flatten_batch, epoch, num_envs=1024, episode_length=100, use_double_batch_trick=False, gamma=0.99, use_targets=False):
     """Evaluate agent by running rollouts using collect_data and computing losses."""
     key, data_key, double_batch_key = jax.random.split(key, 3)
     # Use collect_data for evaluation rollouts
@@ -119,11 +119,14 @@ def evaluate_agent(agent, env, key, jitted_flatten_batch, epoch, num_envs=1024, 
     timesteps = jax.tree_util.tree_map(lambda x: x.swapaxes(1, 0), timesteps)
 
     batch_keys = jax.random.split(data_key, num_envs)
-    state, future_state, goal_index = jitted_flatten_batch(0.99, timesteps, batch_keys)
+    state, future_state, goal_index = jitted_flatten_batch(gamma, timesteps, batch_keys)
     
     # Sample and concatenate batch using the new function
     state, actions, future_state, goal_index = get_single_pair_from_every_env(state, future_state, goal_index, double_batch_key, use_double_batch_trick=use_double_batch_trick) # state.grid is of shape (batch_size * 2, grid_size, grid_size)
-    
+    if not use_targets:
+        state = state.replace(grid=GridStatesEnum.remove_targets(state.grid))
+        future_state = future_state.replace(grid=GridStatesEnum.remove_targets(future_state.grid))
+
     # Create valid batch
     valid_batch = {
         'observations': state.grid.reshape(state.grid.shape[0], -1),
@@ -241,7 +244,7 @@ def train(config: Config):
         # Sample and process transitions
         buffer_state, transitions = replay_buffer.sample(buffer_state)
         batch_keys = jax.random.split(batch_key, transitions.grid.shape[0])
-        state, future_state, goal_index = jitted_flatten_batch(0.99, transitions, batch_keys)
+        state, future_state, goal_index = jitted_flatten_batch(config.exp.gamma, transitions, batch_keys)
 
         state, actions, future_state, goal_index = get_single_pair_from_every_env(state, future_state, goal_index, double_batch_key, use_double_batch_trick=config.exp.use_double_batch_trick)
         if not config.exp.use_targets:
@@ -286,13 +289,13 @@ def train(config: Config):
         return buffer_state, agent, key
 
     # Evaluate before training
-    evaluate_agent(agent, env, key, jitted_flatten_batch, 0, config.exp.num_envs, config.env.episode_length, config.exp.use_double_batch_trick)
+    evaluate_agent(agent, env, key, jitted_flatten_batch, 0, config.exp.num_envs, config.env.episode_length, config.exp.use_double_batch_trick, config.exp.gamma, config.exp.use_targets)
     
     for epoch in range(config.exp.epochs):
         for _ in range(10):
             buffer_state, agent, key = train_n_epochs(buffer_state, agent, key)
 
-        evaluate_agent(agent, env, key, jitted_flatten_batch, epoch+1, config.exp.num_envs, config.env.episode_length,  config.exp.use_double_batch_trick)
+        evaluate_agent(agent, env, key, jitted_flatten_batch, epoch+1, config.exp.num_envs, config.env.episode_length,  config.exp.use_double_batch_trick, config.exp.gamma, config.exp.use_targets)
 
 
 if __name__ == "__main__":

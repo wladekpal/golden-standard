@@ -85,7 +85,9 @@ class BoxPushingConfig:
 
 class BoxPushingEnv:
     """JAX-based box pushing environment."""
-    
+
+    # TODO: I should define here a maximum and minimum number of boxes, so that every env during reset gets different number of them
+    #  also, I need to add an argument that defines the number of boxes that need to be on target from start
     def __init__(self, grid_size: int = 20, episode_length: int = 2000, number_of_boxes: int = 3, truncate_when_success: bool = False, **kwargs):
         print(f"BOX PUSHING {grid_size}, {episode_length}, {number_of_boxes}")
         self.grid_size = grid_size
@@ -164,19 +166,16 @@ class BoxPushingEnv:
     
     def _generate_target_cells(self, key: jax.Array) -> jax.Array:
         """Generate target cells in right quarter."""
-        target_start_row = self.grid_size // 2
-        target_start_col = self.grid_size // 2
-        
         # Create candidate cells
-        rows = jnp.arange(target_start_row, self.grid_size)
-        cols = jnp.arange(target_start_col, self.grid_size)
+        rows = jnp.arange(0, self.grid_size)
+        cols = jnp.arange(0, self.grid_size)
         row_grid, col_grid = jnp.meshgrid(rows, cols, indexing='ij')
         candidates = jnp.stack([row_grid.flatten(), col_grid.flatten()], axis=1)
-        
+
         # Shuffle and select
         shuffled_indices = random.permutation(key, len(candidates))
         candidates = candidates[shuffled_indices]
-        
+
         return candidates[:self.number_of_boxes]
     
     def step(self, state: BoxPushingState, action: int) -> Tuple[BoxPushingState, float, bool, Dict[str, Any]]:

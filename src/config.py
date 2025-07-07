@@ -21,6 +21,7 @@ class ExpConfig:
     epochs: int = 10
     use_targets: bool = False
     use_double_batch_trick: bool = False
+    gamma: float = 0.99
 
 
 
