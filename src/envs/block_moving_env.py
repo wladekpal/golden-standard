@@ -77,8 +77,10 @@ ACTIONS = {
 @dataclass
 class BoxPushingConfig:
     grid_size: int = 5
-    number_of_boxes: int = 3
+    number_of_boxes: int = 5
     episode_length: int = 100
+    truncate_when_success: bool = False
+
 
 
 class BoxPushingEnv:
@@ -204,7 +206,10 @@ class BoxPushingEnv:
         new_pos, new_grid, new_agent_has_box = action_result
         
         # Check if done
-        done = (new_steps >= self.episode_length) | self._is_goal_reached(new_grid)
+        if self.truncate_when_success:
+            done = (new_steps >= self.episode_length) | self._is_goal_reached(new_grid)
+        else:
+            done = new_steps >= self.episode_length
 
         reward = self._is_goal_reached(new_grid).astype(jnp.int32)
         

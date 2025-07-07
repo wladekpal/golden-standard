@@ -14,7 +14,7 @@ import matplotlib.animation as animation
 import matplotlib
 
 from impls.agents import agents
-from config import ROOT_DIR
+from config import SRC_ROOT_DIR
 from block_moving_env import BoxPushingEnv, AutoResetWrapper, GridStatesEnum, TimeStep
 
 
@@ -236,7 +236,7 @@ def evaluate_agent(agent, env, key, jitted_flatten_batch, epoch, num_envs=1024, 
 FLAGS = flags.FLAGS
 flags.DEFINE_integer('seed', 0, 'Random seed.')
 
-config_flags.DEFINE_config_file('agent', ROOT_DIR + '/impls/agents/crl.py', lock_config=False)
+config_flags.DEFINE_config_file('agent', SRC_ROOT_DIR + '/impls/agents/crl.py', lock_config=False)
 
 
 def main(_):
