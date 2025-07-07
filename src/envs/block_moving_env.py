@@ -74,13 +74,20 @@ ACTIONS = {
     5: None       # PUT_DOWN
 }
 
+@dataclass
+class BoxPushingConfig:
+    grid_size: int = 5
+    number_of_boxes: int = 3
+    episode_length: int = 100
+
 
 class BoxPushingEnv:
     """JAX-based box pushing environment."""
     
-    def __init__(self, grid_size: int = 20, max_steps: int = 2000, number_of_boxes: int = 3, truncate_when_success: bool = False):
+    def __init__(self, grid_size: int = 20, episode_length: int = 2000, number_of_boxes: int = 3, truncate_when_success: bool = False, **kwargs):
+        print(f"BOX PUSHING {grid_size}, {episode_length}, {number_of_boxes}")
         self.grid_size = grid_size
-        self.max_steps = max_steps
+        self.episode_length = episode_length
         self.action_space = 6  # UP, DOWN, LEFT, RIGHT, PICK_UP, PUT_DOWN
         self.number_of_boxes = number_of_boxes
         self.truncate_when_success = truncate_when_success
@@ -197,10 +204,7 @@ class BoxPushingEnv:
         new_pos, new_grid, new_agent_has_box = action_result
         
         # Check if done
-        if self.truncate_when_success:
-            done = (new_steps >= self.max_steps) | self._is_goal_reached(new_grid)
-        else:
-            done = new_steps >= self.max_steps
+        done = (new_steps >= self.episode_length) | self._is_goal_reached(new_grid)
 
         reward = self._is_goal_reached(new_grid).astype(jnp.int32)
         
@@ -452,13 +456,29 @@ class BoxPushingEnv:
             agent_has_box=jnp.array(False)
         )
         return state
+    
+    def get_dummy_timestep(self, key):
+        dummy_timestep = TimeStep(
+            key=key,
+            grid=jnp.zeros((self.grid_size, self.grid_size), dtype=jnp.int8),
+            target_cells=jnp.zeros((self.number_of_boxes, 2), dtype=jnp.int8),
+            agent_pos=jnp.zeros((2,), dtype=jnp.int8),
+            agent_has_box=jnp.zeros((1,), dtype=jnp.int8),
+            steps=jnp.zeros((1,), dtype=jnp.int8),
+            action=jnp.zeros((1,), dtype=jnp.int8),
+            goal=jnp.zeros((self.grid_size, self.grid_size), dtype=jnp.int8),
+            reward=jnp.zeros((1,), dtype=jnp.int8),
+            done=jnp.zeros((1,), dtype=jnp.int8),
+        )
+
+        return dummy_timestep
 
 
 class Wrapper(BoxPushingEnv):
     def __init__(self, env: BoxPushingEnv):
         self._env = env
         # Copy attributes from wrapped environment
-        for attr in ['grid_size', 'max_steps', 'number_of_boxes']:
+        for attr in ['grid_size', 'episode_length', 'number_of_boxes']:
             if hasattr(env, attr):
                 setattr(self, attr, getattr(env, attr))
     

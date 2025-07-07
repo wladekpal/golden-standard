@@ -202,19 +202,15 @@ def segment_ids_per_row(x: jnp.ndarray) -> jnp.ndarray:
 
 
 
-@functools.partial(jax.jit, static_argnames=("buffer_config"))
-def flatten_batch(buffer_config, transition, sample_key):
-    gamma, state_size, goal_indices = buffer_config
-
+def flatten_batch(gamma, transition, sample_key):
     # Because it's vmaped transition.obs.shape is of shape (episode_len, obs_dim)
-    seq_len = transition.observation.shape[0]
+    seq_len = transition.grid.shape[0]
     arrangement = jnp.arange(seq_len)
     is_future_mask = jnp.array(
         arrangement[:, None] < arrangement[None], dtype=jnp.float32
     )  # upper triangular matrix of shape seq_len, seq_len where all non-zero entries are 1
     discount = gamma ** jnp.array(arrangement[None] - arrangement[:, None], dtype=jnp.float32)
     probs = is_future_mask * discount
-
     # probs is an upper triangular matrix of shape seq_len, seq_len of the form:
     #    [[0.        , 0.99      , 0.98010004, 0.970299  , 0.960596 ],
     #    [0.        , 0.        , 0.99      , 0.98010004, 0.970299  ],
@@ -223,7 +219,7 @@ def flatten_batch(buffer_config, transition, sample_key):
     #    [0.        , 0.        , 0.        , 0.        , 0.        ]]
     # assuming seq_len = 5
     # the same result can be obtained using probs = is_future_mask * (gamma ** jnp.cumsum(is_future_mask, axis=-1))
-    single_trajectories = segment_ids_per_row(transition.state.step_num)
+    single_trajectories = segment_ids_per_row(transition.steps.squeeze())
     single_trajectories = jnp.concatenate(
             [single_trajectories[:, jnp.newaxis].T] * seq_len,
             axis=0,
@@ -239,6 +235,7 @@ def flatten_batch(buffer_config, transition, sample_key):
     goal_index = jax.random.categorical(sample_key, jnp.log(probs))
     future_state = jax.tree_util.tree_map(lambda x: jnp.take(x, goal_index[:-1], axis=0), transition)  # the last goal_index cannot be considered as there is no future.
     states = jax.tree_util.tree_map(lambda x: x[:-1], transition) # all states but the last one are considered
+
 
     return states, future_state, goal_index
 

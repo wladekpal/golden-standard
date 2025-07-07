@@ -14,6 +14,7 @@ dependencies = [
     "ogbench>=1.1.2",
     "ruff>=0.11.11",
     "tqdm>=4.67.1",
+    "tyro>=0.9.26",
     "wandb>=0.19.11",
     "xminigrid>=0.9.1",
 ]
