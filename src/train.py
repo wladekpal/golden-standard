@@ -208,8 +208,8 @@ def train(config: Config):
         return buffer_state, agent, key
     
 
+    evaluate_agent(agent, env, key, jitted_flatten_batch, epoch, config.exp.num_envs, config.env.episode_length)
     for epoch in range(config.exp.epochs):
-        evaluate_agent(agent, env, key, jitted_flatten_batch, epoch, config.exp.num_envs, config.env.episode_length)
         for _ in range(10):
             buffer_state, agent, key = train_n_epochs(buffer_state, agent, key)
 
