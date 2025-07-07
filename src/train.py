@@ -198,10 +198,6 @@ def evaluate_agent(agent, env, key, jitted_flatten_batch, epoch, num_envs=1024, 
 
 
 def train(config: Config):
-
-    USE_DOUBLE_BATCH_TRICK = False
-    USE_TARGETS = False
-
     wandb.init(
         project=config.exp.project,
         name=config.exp.name,
@@ -230,7 +226,6 @@ def train(config: Config):
     )
     buffer_state = jax.jit(replay_buffer.init)(key)
 
-    print(f"Actoion space: {env._env.action_space}")
     example_batch = {
         'observations':dummy_timestep.grid.reshape(1, -1),  # Add batch dimension 
         'actions': jnp.ones((1,), dtype=jnp.int8) * (env._env.action_space-1), # TODO: make sure it should be the maximal value of action space  # Single action for batch size 1
@@ -241,7 +236,6 @@ def train(config: Config):
     agent = create_agent(config.agent, example_batch, config.exp.seed)
 
 
-
     def make_batch(buffer_state, key):
         key, batch_key, double_batch_key = jax.random.split(key, 3)
         # Sample and process transitions
@@ -249,8 +243,8 @@ def train(config: Config):
         batch_keys = jax.random.split(batch_key, transitions.grid.shape[0])
         state, future_state, goal_index = jitted_flatten_batch(0.99, transitions, batch_keys)
 
-        state, actions, future_state, goal_index = get_single_pair_from_every_env(state, future_state, goal_index, double_batch_key, use_double_batch_trick=USE_DOUBLE_BATCH_TRICK)
-        if not USE_TARGETS:
+        state, actions, future_state, goal_index = get_single_pair_from_every_env(state, future_state, goal_index, double_batch_key, use_double_batch_trick=config.exp.use_double_batch_trick)
+        if not config.exp.use_targets:
             state = state.replace(grid=GridStatesEnum.remove_targets(state.grid))
             future_state = future_state.replace(grid=GridStatesEnum.remove_targets(future_state.grid))
         # Create valid batch
@@ -275,7 +269,7 @@ def train(config: Config):
     def train_epoch(carry, _):
         buffer_state, agent, key = carry
         key, data_key, up_key = jax.random.split(key, 3)
-        _, _, timesteps = collect_data(agent, data_key, env, config.exp.num_envs, config.env.episode_length, use_targets=USE_TARGETS)
+        _, _, timesteps = collect_data(agent, data_key, env, config.exp.num_envs, config.env.episode_length, use_targets=config.exp.use_targets)
         buffer_state = replay_buffer.insert(buffer_state, timesteps)
         (buffer_state, agent, _), _ = jax.lax.scan(update_step, (buffer_state, agent, up_key), None, length=1000)
         return (buffer_state, agent, key), None
@@ -292,13 +286,13 @@ def train(config: Config):
         return buffer_state, agent, key
 
     # Evaluate before training
-    evaluate_agent(agent, env, key, jitted_flatten_batch, 0, config.exp.num_envs, config.env.episode_length, USE_DOUBLE_BATCH_TRICK)
+    evaluate_agent(agent, env, key, jitted_flatten_batch, 0, config.exp.num_envs, config.env.episode_length, config.exp.use_double_batch_trick)
     
     for epoch in range(config.exp.epochs):
         for _ in range(10):
             buffer_state, agent, key = train_n_epochs(buffer_state, agent, key)
 
-        evaluate_agent(agent, env, key, jitted_flatten_batch, epoch+1, config.exp.num_envs, config.env.episode_length, USE_DOUBLE_BATCH_TRICK)
+        evaluate_agent(agent, env, key, jitted_flatten_batch, epoch+1, config.exp.num_envs, config.env.episode_length,  config.exp.use_double_batch_trick)
 
 
 if __name__ == "__main__":
