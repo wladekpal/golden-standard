@@ -16,7 +16,7 @@ from ml_collections import config_flags
 from xminigrid.core.constants import NUM_ACTIONS
 from impls.agents import agents
 from rb import TrajectoryUniformSamplingQueue, flatten_batch, jit_wrap
-from config import ROOT_DIR
+from config import SRC_ROOT_DIR
 
 
 
@@ -24,7 +24,7 @@ from config import ROOT_DIR
 FLAGS = flags.FLAGS
 flags.DEFINE_integer('seed', 0, 'Random seed.')
 
-config_flags.DEFINE_config_file('agent', ROOT_DIR + '/agents/crl.py', lock_config=False)
+config_flags.DEFINE_config_file('agent', SRC_ROOT_DIR + '/agents/crl.py', lock_config=False)
 
 def main(_):
     # Wandb

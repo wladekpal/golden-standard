@@ -201,7 +201,7 @@ def segment_ids_per_row(x: jnp.ndarray) -> jnp.ndarray:
 
 
 
-
+# TODO: will need to adjust it later for minigrid envs (if we would like to use them)
 def flatten_batch(gamma, transition, sample_key):
     # Because it's vmaped transition.obs.shape is of shape (episode_len, obs_dim)
     seq_len = transition.grid.shape[0]

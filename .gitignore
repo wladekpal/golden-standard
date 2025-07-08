@@ -324,3 +324,4 @@ wandb/
 *.png
 
 !assets/*
+.idea/

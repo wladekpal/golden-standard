@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import chex
 from flax import struct
 import matplotlib
+import os
 
 
 class BoxPushingState(struct.PyTreeNode):
@@ -41,6 +42,31 @@ class GridStatesEnum:
     BOX_ON_TARGET = jnp.int8(10) # Box is on target
     AGENT_ON_BOX_CARRYING_BOX = jnp.int8(11) # Agent is on box carrying a box
 
+    @staticmethod
+    @jax.jit
+    def remove_targets(grid_state: jax.Array) -> jax.Array:
+        """Project grid states with targets to states without targets."""
+        # Create a mapping array for vectorized lookup
+        # Map each state to its corresponding no-target state
+        mapping_array = jnp.array([
+            0,   # EMPTY -> EMPTY
+            1,   # BOX -> BOX
+            0,   # TARGET -> EMPTY
+            3,   # AGENT -> AGENT
+            4,   # AGENT_CARRYING_BOX -> AGENT_CARRYING_BOX
+            5,   # AGENT_ON_BOX -> AGENT_ON_BOX
+            3,   # AGENT_ON_TARGET -> AGENT
+            4,   # AGENT_ON_TARGET_CARRYING_BOX -> AGENT_CARRYING_BOX
+            5,   # AGENT_ON_TARGET_WITH_BOX -> AGENT_ON_BOX
+            11,  # AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX -> AGENT_ON_BOX_CARRYING_BOX
+            1,   # BOX_ON_TARGET -> BOX
+            11,  # AGENT_ON_BOX_CARRYING_BOX -> AGENT_ON_BOX_CARRYING_BOX
+        ], dtype=jnp.int8)
+        
+        # Apply the mapping
+        return mapping_array[grid_state]
+
+
 ACTIONS = {
     0: (jnp.int8(-1), jnp.int8(0)),   # UP
     1: (jnp.int8(1), jnp.int8(0)),    # DOWN
@@ -53,20 +79,25 @@ ACTIONS = {
 @dataclass
 class BoxPushingConfig:
     grid_size: int = 5
-    number_of_boxes: int = 3
+    number_of_boxes: int = 5
     episode_length: int = 100
+    truncate_when_success: bool = False
+
 
 
 class BoxPushingEnv:
     """JAX-based box pushing environment."""
-    
-    def __init__(self, grid_size: int = 20, episode_length: int = 2000, number_of_boxes: int = 3, **kwargs):
-        print(f"BOX PUSHING {grid_size}, {episode_length}, {number_of_boxes}")
+
+    # TODO: I should define here a maximum and minimum number of boxes, so that every env during reset gets different number of them
+    #  also, I need to add an argument that defines the number of boxes that need to be on target from start
+    def __init__(self, grid_size: int = 20, episode_length: int = 2000, number_of_boxes: int = 3, truncate_when_success: bool = False, **kwargs):
+        logger.info(f"Initializing BoxPushingEnv with grid_size={grid_size}, episode_length={episode_length}, number_of_boxes={number_of_boxes}")
         self.grid_size = grid_size
         self.episode_length = episode_length
         self.action_space = 6  # UP, DOWN, LEFT, RIGHT, PICK_UP, PUT_DOWN
         self.number_of_boxes = number_of_boxes
-        
+        self.truncate_when_success = truncate_when_success
+
     def reset(self, key: jax.Array) -> Tuple[BoxPushingState, Dict[str, Any]]:
         """Reset environment to initial state."""
         key1, key2, key3, key4 = random.split(key, 4)
@@ -137,19 +168,16 @@ class BoxPushingEnv:
     
     def _generate_target_cells(self, key: jax.Array) -> jax.Array:
         """Generate target cells in right quarter."""
-        target_start_row = self.grid_size // 2
-        target_start_col = self.grid_size // 2
-        
         # Create candidate cells
-        rows = jnp.arange(target_start_row, self.grid_size)
-        cols = jnp.arange(target_start_col, self.grid_size)
+        rows = jnp.arange(0, self.grid_size)
+        cols = jnp.arange(0, self.grid_size)
         row_grid, col_grid = jnp.meshgrid(rows, cols, indexing='ij')
         candidates = jnp.stack([row_grid.flatten(), col_grid.flatten()], axis=1)
-        
+
         # Shuffle and select
         shuffled_indices = random.permutation(key, len(candidates))
         candidates = candidates[shuffled_indices]
-        
+
         return candidates[:self.number_of_boxes]
     
     def step(self, state: BoxPushingState, action: int) -> Tuple[BoxPushingState, float, bool, Dict[str, Any]]:
@@ -179,7 +207,10 @@ class BoxPushingEnv:
         new_pos, new_grid, new_agent_has_box = action_result
         
         # Check if done
-        done = (new_steps >= self.episode_length) | self._is_goal_reached(new_grid)
+        if self.truncate_when_success:
+            done = (new_steps >= self.episode_length) | self._is_goal_reached(new_grid)
+        else:
+            done = new_steps >= self.episode_length
 
         reward = self._is_goal_reached(new_grid).astype(jnp.int32)
         
@@ -449,7 +480,7 @@ class BoxPushingEnv:
         return dummy_timestep
     
     @staticmethod
-    def animate(ax, timesteps, frame):
+    def animate(ax, timesteps, frame, img_prefix='assets'):
         ax.clear()
         grid_state = timesteps.grid[0, frame]
         action = timesteps.action[0, frame]
@@ -457,24 +488,26 @@ class BoxPushingEnv:
         
         # Create color mapping for grid states
         imgs = {
-            0: 'assets/floor.png',                                  # EMPTY
-            1: 'assets/box.png',                                    # BOX
-            2: 'assets/box_target.png',                             # TARGET
-            3: 'assets/agent.png',                                  # AGENT
-            4: 'assets/agent_carrying_box.png',                     # AGENT_CARRYING_BOX
-            5: 'assets/agent_on_box.png',                           # AGENT_ON_BOX
-            6: 'assets/agent_on_target.png',                        # AGENT_ON_TARGET
-            7: 'assets/agent_on_target_carrying_box.png',           # AGENT_ON_TARGET_CARRYING_BOX
-            8: 'assets/agent_on_target_with_box.png',               # AGENT_ON_TARGET_WITH_BOX
-            9: 'assets/agent_on_target_with_box_carrying_box.png',  # AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX
-            10: 'assets/box_on_target.png',                         # BOX_ON_TARGET
-            11: 'assets/agent_on_box_carrying_box.png'              # AGENT_ON_BOX_CARRYING_BOX
+            0: 'floor.png',                                  # EMPTY
+            1: 'box.png',                                    # BOX
+            2: 'box_target.png',                             # TARGET
+            3: 'agent.png',                                  # AGENT
+            4: 'agent_carrying_box.png',                     # AGENT_CARRYING_BOX
+            5: 'agent_on_box.png',                           # AGENT_ON_BOX
+            6: 'agent_on_target.png',                        # AGENT_ON_TARGET
+            7: 'agent_on_target_carrying_box.png',           # AGENT_ON_TARGET_CARRYING_BOX
+            8: 'agent_on_target_with_box.png',               # AGENT_ON_TARGET_WITH_BOX
+            9: 'agent_on_target_with_box_carrying_box.png',  # AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX
+            10: 'box_on_target.png',                         # BOX_ON_TARGET
+            11: 'agent_on_box_carrying_box.png'              # AGENT_ON_BOX_CARRYING_BOX
         }
         
         # Plot grid
         for i in range(grid_state.shape[0]):
             for j in range(grid_state.shape[1]):
-                img = matplotlib.image.imread(imgs[int(grid_state[i, j])])
+                img_name = imgs[int(grid_state[i, j])]
+                img_path = os.path.join(img_prefix, img_name)
+                img = matplotlib.image.imread(img_path)
                 ax.imshow(img, extent = [i+1, i, j+1, j])
             
         
