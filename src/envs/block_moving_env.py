@@ -89,7 +89,7 @@ class BoxPushingEnv:
     # TODO: I should define here a maximum and minimum number of boxes, so that every env during reset gets different number of them
     #  also, I need to add an argument that defines the number of boxes that need to be on target from start
     def __init__(self, grid_size: int = 20, episode_length: int = 2000, number_of_boxes: int = 3, truncate_when_success: bool = False, **kwargs):
-        print(f"BOX PUSHING {grid_size}, {episode_length}, {number_of_boxes}")
+        logger.info(f"Initializing BoxPushingEnv with grid_size={grid_size}, episode_length={episode_length}, number_of_boxes={number_of_boxes}")
         self.grid_size = grid_size
         self.episode_length = episode_length
         self.action_space = 6  # UP, DOWN, LEFT, RIGHT, PICK_UP, PUT_DOWN
