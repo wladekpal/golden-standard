@@ -45,6 +45,7 @@ def collect_data(agent, key, env, num_envs, episode_length, use_targets=False):
             agent_pos=state.agent_pos,
             agent_has_box=state.agent_has_box,
             steps=state.steps,
+            number_of_boxes=state.number_of_boxes,
             action=actions,
             goal=state.goal,
             reward=reward,

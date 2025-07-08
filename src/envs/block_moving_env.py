@@ -80,7 +80,8 @@ ACTIONS = {
 @dataclass
 class BoxPushingConfig:
     grid_size: int = 5
-    number_of_boxes: int = 5
+    number_of_boxes_min: int = 3
+    number_of_boxes_max: int = 4
     episode_length: int = 100
     truncate_when_success: bool = False
 
@@ -108,31 +109,46 @@ class BoxPushingEnv:
         grid = jnp.zeros((self.grid_size, self.grid_size), dtype=jnp.int8)
 
         number_of_boxes = jax.random.randint(number_of_boxes_key, (), self.number_of_boxes_min, self.number_of_boxes_max+1)
-        
+
         # Place exactly number_of_boxes boxes
-        box_positions = random.choice(box_pos_key, self.grid_size * self.grid_size, shape=(number_of_boxes,), replace=False)
+        box_positions = jax.random.choice(
+            box_pos_key,
+            self.grid_size * self.grid_size,
+            shape=(self.number_of_boxes_max,),
+            replace=False
+        )
         box_rows = box_positions // self.grid_size
         box_cols = box_positions % self.grid_size
-        
-        # Place boxes at valid positions
-        grid = grid.at[box_rows, box_cols].set(GridStatesEnum.BOX)
-        
-        # Generate target cells in right quarter
+
+        # Workaround for dynamic indexing: use mask to set only the first number_of_boxes
+        mask = jnp.arange(self.number_of_boxes_max) < number_of_boxes
+        # Set boxes only where mask is True
+        grid = jax.lax.fori_loop(
+            0, self.number_of_boxes_max,
+            lambda i, g: jax.lax.cond(
+                mask[i],
+                lambda _: g.at[box_rows[i], box_cols[i]].set(GridStatesEnum.BOX),
+                lambda _: g,
+                operand=None
+            ),
+            grid
+        )
+
         target_cells = self._generate_target_cells(targets_key, number_of_boxes)
-        
-        # Check if there's already a box at target positions and use BOX_ON_TARGET if so
-        target_rows = target_cells[:, 0]
-        target_cols = target_cells[:, 1]
+        # Only use target cells with non-negative indices (filter out any padding rows with -1)
+        valid_mask = jnp.all(target_cells >= 0, axis=1)
+        valid_target_cells = target_cells[valid_mask]
+        target_rows = valid_target_cells[:, 0]
+        target_cols = valid_target_cells[:, 1]
         target_cell_values = grid[target_rows, target_cols]
-        
+
         # Create mask for boxes at target positions
         box_at_target_mask = target_cell_values == GridStatesEnum.BOX
-        
+
         # Update grid using vectorized operations
         grid = grid.at[target_rows, target_cols].set(
             jnp.where(box_at_target_mask, GridStatesEnum.BOX_ON_TARGET, GridStatesEnum.TARGET)
         )
-        
         # Place agent randomly
         agent_pos = random.randint(agent_key, (2,), 0, self.grid_size)
 
@@ -169,22 +185,31 @@ class BoxPushingEnv:
         return state, info
     
     def _generate_target_cells(self, key: jax.Array, number_of_boxes: int) -> jax.Array:
-        """Generate target cells in right quarter, padded with zeros to number_of_boxes_max."""
+        """Generate target cells in right quarter, padded with -1 to number_of_boxes_max.
+
+        This version avoids using dynamic_slice with traced (non-static) shapes, which is not allowed under JAX's vmap/jit.
+        Instead, it uses boolean masking and concatenation to select the first number_of_boxes rows.
+        """
         # Create candidate cells
         rows = jnp.arange(0, self.grid_size)
         cols = jnp.arange(0, self.grid_size)
         row_grid, col_grid = jnp.meshgrid(rows, cols, indexing='ij')
-        candidates = jnp.stack([row_grid.flatten(), col_grid.flatten()], axis=1)
+        candidates = jnp.stack([row_grid.flatten(), col_grid.flatten()], axis=1)  # (N, 2)
 
-        # Shuffle and select
+        # Shuffle candidates
         shuffled_indices = random.permutation(key, len(candidates))
         candidates = candidates[shuffled_indices]
 
-        selected = candidates[:number_of_boxes]
-        # Pad with zeros to number_of_boxes_max
-        pad_len = self.number_of_boxes_max - selected.shape[0]
-        selected_padded = jnp.pad(selected, ((0, pad_len), (0, 0)), mode='constant',  constant_values=jnp.array([-1, -1]))
-        print(selected_padded)
+        # Select the first number_of_boxes rows using masking and concatenation
+        # Create a mask for the first number_of_boxes elements
+        mask = jnp.arange(self.number_of_boxes_max) < number_of_boxes
+        # Pad candidates to at least number_of_boxes_max rows
+        pad_len = self.number_of_boxes_max - candidates.shape[0]
+        candidates_padded = jnp.pad(candidates, ((0, max(0, pad_len)), (0, 0)), mode='constant', constant_values=-1)
+        # Take the first number_of_boxes_max rows
+        candidates_max = candidates_padded[:self.number_of_boxes_max]
+        # For rows >= number_of_boxes, set to -1
+        selected_padded = jnp.where(mask[:, None], candidates_max, -jnp.ones_like(candidates_max))
         return selected_padded
     
     def step(self, state: BoxPushingState, action: int) -> Tuple[BoxPushingState, float, bool, Dict[str, Any]]:
@@ -444,8 +469,10 @@ class BoxPushingEnv:
     def create_solved_state(self, state: BoxPushingState) -> BoxPushingState:
         """Create a solved state."""
         # Change all target cells to box on target
-        target_rows = state.target_cells[:, 0]
-        target_cols = state.target_cells[:, 1]
+        valid_mask = jnp.all(state.target_cells >= 0, axis=1)
+        valid_target_cells = state.target_cells[valid_mask]
+        target_rows = valid_target_cells[:, 0]
+        target_cols = valid_target_cells[:, 1]
         state = state.replace(
             grid=state.grid.at[target_rows, target_cols].set(GridStatesEnum.BOX_ON_TARGET)
         )
@@ -482,6 +509,7 @@ class BoxPushingEnv:
             key=key,
             grid=jnp.zeros((self.grid_size, self.grid_size), dtype=jnp.int8),
             target_cells=jnp.zeros((self.number_of_boxes_max, 2), dtype=jnp.int8),
+            number_of_boxes=jnp.zeros((1,), dtype=jnp.int8),
             agent_pos=jnp.zeros((2,), dtype=jnp.int8),
             agent_has_box=jnp.zeros((1,), dtype=jnp.int8),
             steps=jnp.zeros((1,), dtype=jnp.int8),
@@ -536,7 +564,7 @@ class Wrapper(BoxPushingEnv):
     def __init__(self, env: BoxPushingEnv):
         self._env = env
         # Copy attributes from wrapped environment
-        for attr in ['grid_size', 'episode_length', 'number_of_boxes']:
+        for attr in ['grid_size', 'episode_length', 'number_of_boxes_min', 'number_of_boxes_max']:
             if hasattr(env, attr):
                 setattr(self, attr, getattr(env, attr))
     
