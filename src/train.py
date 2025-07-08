@@ -28,8 +28,8 @@ def collect_data(agent, key, env, num_envs, episode_length, use_targets=False):
         # Use jax.lax.cond instead of if statement to handle traced arrays
         state_agent = jax.lax.cond(
             use_targets,
-            lambda _: state.replace(),
-            lambda _: state.replace(
+            lambda: state.replace(),
+            lambda: state.replace(
                 grid=GridStatesEnum.remove_targets(state.grid),
                 goal=GridStatesEnum.remove_targets(state.goal)
             )
