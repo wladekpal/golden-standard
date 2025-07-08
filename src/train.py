@@ -28,8 +28,8 @@ def collect_data(agent, key, env, num_envs, episode_length, use_targets=False):
         # Use jax.lax.cond instead of if statement to handle traced arrays
         state_agent = jax.lax.cond(
             use_targets,
-            lambda _: state.replace(),
-            lambda _: state.replace(
+            lambda: state.replace(),
+            lambda: state.replace(
                 grid=GridStatesEnum.remove_targets(state.grid),
                 goal=GridStatesEnum.remove_targets(state.goal)
             )
@@ -115,7 +115,7 @@ def evaluate_agent(agent, env, key, jitted_flatten_batch, epoch, num_envs=1024, 
     """Evaluate agent by running rollouts using collect_data and computing losses."""
     key, data_key, double_batch_key = jax.random.split(key, 3)
     # Use collect_data for evaluation rollouts
-    _, _, timesteps = collect_data(agent, data_key, env, num_envs, episode_length, use_targets=use_targets)
+    _, info, timesteps = collect_data(agent, data_key, env, num_envs, episode_length, use_targets=use_targets)
     timesteps = jax.tree_util.tree_map(lambda x: x.swapaxes(1, 0), timesteps)
 
     batch_keys = jax.random.split(data_key, num_envs)
@@ -146,6 +146,7 @@ def evaluate_agent(agent, env, key, jitted_flatten_batch, epoch, num_envs=1024, 
         'eval/min_reward': timesteps.reward[done_mask].min(),
         'eval/max_reward': timesteps.reward[done_mask].max(),
         'eval/total_loss': loss,
+        'eval/mean_boxes_on_target': info['boxes_on_target'].mean()
     }
     eval_info.update(loss_info)
     wandb.log(eval_info)
@@ -154,40 +155,7 @@ def evaluate_agent(agent, env, key, jitted_flatten_batch, epoch, num_envs=1024, 
     grid_size = state.grid.shape[-2:]
     fig, ax = plt.subplots(figsize=grid_size)
     
-    def animate(frame):
-        ax.clear()
-        grid_state = timesteps.grid[0, frame]
-        action = timesteps.action[0, frame]
-        reward = timesteps.reward[0, frame]
-        
-        # Create color mapping for grid states
-        imgs = {
-            0: 'assets/floor.png',                                  # EMPTY
-            1: 'assets/box.png',                                    # BOX
-            2: 'assets/box_target.png',                             # TARGET
-            3: 'assets/agent.png',                                  # AGENT
-            4: 'assets/agent_carrying_box.png',                     # AGENT_CARRYING_BOX
-            5: 'assets/agent_on_box.png',                           # AGENT_ON_BOX
-            6: 'assets/agent_on_target.png',                        # AGENT_ON_TARGET
-            7: 'assets/agent_on_target_carrying_box.png',           # AGENT_ON_TARGET_CARRYING_BOX
-            8: 'assets/agent_on_target_with_box.png',               # AGENT_ON_TARGET_WITH_BOX
-            9: 'assets/agent_on_target_with_box_carrying_box.png',  # AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX
-            10: 'assets/box_on_target.png',                         # BOX_ON_TARGET
-            11: 'assets/agent_on_box_carrying_box.png'              # AGENT_ON_BOX_CARRYING_BOX
-        }
-        
-        # Plot grid
-        for i in range(grid_state.shape[0]):
-            for j in range(grid_state.shape[1]):
-                img = matplotlib.image.imread(os.path.join(ROOT_DIR, imgs[int(grid_state[i, j])]))
-                ax.imshow(img, extent = [i+1, i, j+1, j])
-            
-        
-        ax.set_xlim(0, grid_state.shape[1])
-        ax.set_ylim(0, grid_state.shape[0])
-        ax.set_title(f'Step {frame} | Action: {action} | Reward: {reward:.2f}')
-        ax.set_aspect('equal')
-        ax.invert_yaxis()
+    animate = functools.partial(env.animate, ax, timesteps, img_prefix=os.path.join(ROOT_DIR, 'assets'))
     
     # Create animation
     anim = animation.FuncAnimation(fig, animate, frames=100, interval=80, repeat=False)
