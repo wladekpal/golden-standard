@@ -115,7 +115,7 @@ def evaluate_agent(agent, env, key, jitted_flatten_batch, epoch, num_envs=1024, 
     """Evaluate agent by running rollouts using collect_data and computing losses."""
     key, data_key, double_batch_key = jax.random.split(key, 3)
     # Use collect_data for evaluation rollouts
-    _, _, timesteps = collect_data(agent, data_key, env, num_envs, episode_length)
+    _, _, timesteps = collect_data(agent, data_key, env, num_envs, episode_length, use_targets=use_targets)
     timesteps = jax.tree_util.tree_map(lambda x: x.swapaxes(1, 0), timesteps)
 
     batch_keys = jax.random.split(data_key, num_envs)
