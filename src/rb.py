@@ -202,7 +202,7 @@ def segment_ids_per_row(x: jnp.ndarray) -> jnp.ndarray:
 
 
 # TODO: will need to adjust it later for minigrid envs (if we would like to use them)
-def flatten_batch(gamma, transition, sample_key):
+def flatten_batch(gamma, transition, sample_key, get_next_obs=False):
     # Because it's vmaped transition.obs.shape is of shape (episode_len, obs_dim)
     seq_len = transition.grid.shape[0]
     arrangement = jnp.arange(seq_len)
@@ -232,7 +232,12 @@ def flatten_batch(gamma, transition, sample_key):
     # 1) are greater than i
     # 2) have the same traj_id as the ith time index
 
-    goal_index = jax.random.categorical(sample_key, jnp.log(probs))
+    if get_next_obs:
+        new_probs = probs * jnp.diag(jnp.ones(probs.shape[0] - 1), k=1)
+        goal_index = jax.random.categorical(sample_key, jnp.log(new_probs))
+    else:
+        goal_index = jax.random.categorical(sample_key, jnp.log(probs))
+
     future_state = jax.tree_util.tree_map(lambda x: jnp.take(x, goal_index[:-1], axis=0), transition)  # the last goal_index cannot be considered as there is no future.
     states = jax.tree_util.tree_map(lambda x: x[:-1], transition) # all states but the last one are considered
 
