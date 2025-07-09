@@ -15,7 +15,7 @@ import matplotlib.animation as animation
 import matplotlib
 
 from impls.agents import create_agent
-from envs.block_moving_env import AutoResetWrapper, TimeStep, GridStatesEnum
+from envs.block_moving_env import AutoResetWrapper, TimeStep, GridStatesEnum, BoxPushingConfig
 from config import ROOT_DIR
 
 
@@ -114,6 +114,55 @@ def get_single_pair_from_every_env(state, future_state, goal_index, key, use_dou
 
 def evaluate_agent(agent, env, key, jitted_flatten_batch, epoch, num_envs=1024, episode_length=100, use_double_batch_trick=False, gamma=0.99, use_targets=False):
     """Evaluate agent by running rollouts using collect_data and computing losses."""
+    eval_info = {}
+    for number_of_boxes in range(1, 14, 2):
+        env_eval = create_env(BoxPushingConfig(grid_size=5, number_of_boxes_min=number_of_boxes, number_of_boxes_max=number_of_boxes, number_of_moving_boxes_max=number_of_boxes))
+        env_eval = AutoResetWrapper(env_eval)
+        env_eval.step = jax.jit(jax.vmap(env_eval.step))
+        env_eval.reset = jax.jit(jax.vmap(env_eval.reset))
+
+        data_key, double_batch_key = jax.random.split(key, 2)
+        # Use collect_data for evaluation rollouts
+        _, info, timesteps = collect_data(agent, data_key, env_eval, num_envs, episode_length, use_targets=use_targets)
+        timesteps = jax.tree_util.tree_map(lambda x: x.swapaxes(1, 0), timesteps)
+
+        batch_keys = jax.random.split(data_key, num_envs)
+        state, future_state, goal_index = jitted_flatten_batch(gamma, timesteps, batch_keys)
+        
+        # Sample and concatenate batch using the new function
+        state, actions, future_state, goal_index = get_single_pair_from_every_env(state, future_state, goal_index, double_batch_key, use_double_batch_trick=use_double_batch_trick) # state.grid is of shape (batch_size * 2, grid_size, grid_size)
+        if not use_targets:
+            state = state.replace(grid=GridStatesEnum.remove_targets(state.grid))
+            future_state = future_state.replace(grid=GridStatesEnum.remove_targets(future_state.grid))
+
+        # Create valid batch
+        valid_batch = {
+            'observations': state.grid.reshape(state.grid.shape[0], -1),
+            'next_observations': future_state.grid.reshape(future_state.grid.shape[0], -1),
+            'actions': actions.squeeze(),
+            'rewards': state.reward.reshape(state.reward.shape[0], -1),
+            'masks': 1.0 - state.reward.reshape(state.reward.shape[0], -1), # TODO: add success and reward separately
+            'value_goals': future_state.grid.reshape(future_state.grid.shape[0], -1),
+            'actor_goals': future_state.grid.reshape(future_state.grid.shape[0], -1),
+        }
+
+        # Compute losses on example batch
+        loss, _ = agent.total_loss(valid_batch, None)
+        
+        # Compile evaluation info
+        # Only consider episodes that are done
+        done_mask = timesteps.done
+        eval_info_tmp = {
+            f'eval_{number_of_boxes}/mean_reward': timesteps.reward[done_mask].mean(),
+            f'eval_{number_of_boxes}/min_reward': timesteps.reward[done_mask].min(),
+            f'eval_{number_of_boxes}/max_reward': timesteps.reward[done_mask].max(),
+            f'eval_{number_of_boxes}/mean_success': timesteps.success[done_mask].mean(),
+            f'eval_{number_of_boxes}/total_loss': loss,
+            f'eval_{number_of_boxes}/mean_boxes_on_target': info['boxes_on_target'].mean()
+        }
+        eval_info.update(eval_info_tmp)
+
+
     key, data_key, double_batch_key = jax.random.split(key, 3)
     # Use collect_data for evaluation rollouts
     _, info, timesteps = collect_data(agent, data_key, env, num_envs, episode_length, use_targets=use_targets)
@@ -145,7 +194,7 @@ def evaluate_agent(agent, env, key, jitted_flatten_batch, epoch, num_envs=1024, 
     # Compile evaluation info
     # Only consider episodes that are done
     done_mask = timesteps.done
-    eval_info = {
+    eval_info_tmp = {
         'eval/mean_reward': timesteps.reward[done_mask].mean(),
         'eval/min_reward': timesteps.reward[done_mask].min(),
         'eval/max_reward': timesteps.reward[done_mask].max(),
@@ -153,6 +202,7 @@ def evaluate_agent(agent, env, key, jitted_flatten_batch, epoch, num_envs=1024, 
         'eval/total_loss': loss,
         'eval/mean_boxes_on_target': info['boxes_on_target'].mean()
     }
+    eval_info.update(eval_info_tmp)
     eval_info.update(loss_info)
     wandb.log(eval_info)
 
