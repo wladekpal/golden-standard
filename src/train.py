@@ -41,7 +41,6 @@ def collect_data(agent, key, env, num_envs, episode_length, use_targets=False):
         timestep = TimeStep(
             key=state.key,
             grid=state.grid,
-            target_cells=state.target_cells,
             agent_pos=state.agent_pos,
             agent_has_box=state.agent_has_box,
             steps=state.steps,

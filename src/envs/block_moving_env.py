@@ -16,7 +16,6 @@ class BoxPushingState(struct.PyTreeNode):
     agent_pos: jax.Array  # [row, col] position of agent
     agent_has_box: jax.Array  # Whether agent is carrying a box
     steps: jax.Array  # Current step count
-    target_cells: jax.Array  # Target cell coordinates for boxes, it's a number_of_boxes_max
     number_of_boxes: jax.Array  # Number of boxes
     goal: jax.Array  # Goal cell coordinates for boxes
     reward: jax.Array  # Reward for the current step
@@ -105,68 +104,57 @@ class BoxPushingEnv:
 
     def reset(self, key: jax.Array) -> Tuple[BoxPushingState, Dict[str, Any]]:
         """Reset environment to initial state."""
-        box_pos_key, number_of_boxes_key, agent_key, targets_key, state_key = random.split(key, 5)
+        box_pos_key, number_of_boxes_key, agent_key, state_key = random.split(key, 4)
         
         # Initialize empty grid
         grid = jnp.zeros((self.grid_size, self.grid_size), dtype=jnp.int8)
 
         number_of_boxes = jax.random.randint(number_of_boxes_key, (), self.number_of_boxes_min, self.number_of_boxes_max+1)
-        number_of_fixed_boxes = jnp.maximum(0, number_of_boxes - self.number_of_moving_boxes_max)
+        number_of_boxes_on_target = jnp.maximum(0, number_of_boxes - self.number_of_moving_boxes_max)
+        number_of_targets_without_boxes = number_of_boxes - number_of_boxes_on_target
 
-        # BOXES: Place exactly number_of_boxes boxes
         box_positions = jax.random.choice(
             box_pos_key,
             self.grid_size * self.grid_size,
-            shape=(self.number_of_boxes_max,),
+            shape=(self.number_of_boxes_max+self.number_of_moving_boxes_max,),
             replace=False
         )
         box_rows = box_positions // self.grid_size
         box_cols = box_positions % self.grid_size
-        box_positions = jnp.stack([box_rows, box_cols], axis=1)
-        print(number_of_fixed_boxes)
-        print(number_of_boxes)
-        print(box_positions)
-
-        # Set first number_of_fixed_boxes cells to BOX_ON_TARGET, the rest (up to number_of_boxes) to BOX
-        def set_box_type(i, g):
-            is_fixed = i < number_of_fixed_boxes
-            is_box = (i >= number_of_fixed_boxes) & (i < number_of_boxes)
-            return jax.lax.cond(
+        
+        def set_cell_type(i, g):
+            is_fixed = i < number_of_boxes_on_target
+            is_box = (i >= number_of_boxes_on_target) & (i < number_of_boxes)
+            is_target = (i >= number_of_boxes) & (i < number_of_boxes + number_of_targets_without_boxes)
+            def set_fixed(g_):
+                return g_.at[box_rows[i], box_cols[i]].set(GridStatesEnum.BOX_ON_TARGET)
+            def set_box(g_):
+                return g_.at[box_rows[i], box_cols[i]].set(GridStatesEnum.BOX)
+            def set_target(g_):
+                return g_.at[box_rows[i], box_cols[i]].set(GridStatesEnum.TARGET)
+            def do_nothing(g_):
+                return g_
+            g = jax.lax.cond(
                 is_fixed,
-                lambda _: g.at[box_rows[i], box_cols[i]].set(GridStatesEnum.BOX_ON_TARGET),
-                lambda _: jax.lax.cond(
+                set_fixed,
+                lambda g_: jax.lax.cond(
                     is_box,
-                    lambda _: g.at[box_rows[i], box_cols[i]].set(GridStatesEnum.BOX),
-                    lambda _: g,
-                    operand=None
+                    set_box,
+                    lambda g__: jax.lax.cond(
+                        is_target,
+                        set_target,
+                        do_nothing,
+                        g__
+                    ),
+                    g_
                 ),
-                operand=None
+                g
             )
+            return g
 
         grid = jax.lax.fori_loop(
-            0, self.number_of_boxes_max,
-            set_box_type,
-            grid
-        )
-
-        # TARGETS: Generate target cells and set them to target or box on target
-        target_cells = self._generate_target_cells(targets_key, number_of_boxes)
-
-        # Only use target cells with non-negative indices (filter out any padding rows with -1)
-        valid_mask = jnp.all(target_cells >= 0, axis=1)
-        grid = jax.lax.fori_loop(
-            0, self.number_of_boxes_max,
-            lambda i, g: jax.lax.cond(
-                valid_mask[i],
-                lambda _: jax.lax.cond(
-                    grid[target_cells[i, 0], target_cells[i, 1]] == GridStatesEnum.BOX,
-                    lambda _: g.at[target_cells[i, 0], target_cells[i, 1]].set(GridStatesEnum.BOX_ON_TARGET),
-                    lambda _: g.at[target_cells[i, 0], target_cells[i, 1]].set(GridStatesEnum.TARGET),
-                    operand=None
-                ),
-                lambda _: g,
-                operand=None
-            ),
+            0, number_of_boxes + number_of_targets_without_boxes,
+            set_cell_type,
             grid
         )
 
@@ -175,15 +163,24 @@ class BoxPushingEnv:
 
         # Check what's at agent position and set appropriate state
         current_cell = grid[agent_pos[0], agent_pos[1]]
-        agent_state = jax.lax.switch(
-            current_cell,
-            branches=[
-                lambda _: GridStatesEnum.AGENT,  # Empty cell
-                lambda _: GridStatesEnum.AGENT_ON_BOX,  # Box cell
-                lambda _: GridStatesEnum.AGENT_ON_TARGET,  # Target cell
-            ],
-            operand=None
+        agent_state = jax.lax.cond(
+            current_cell == GridStatesEnum.EMPTY,
+            lambda: GridStatesEnum.AGENT,
+            lambda: jax.lax.cond(
+                current_cell == GridStatesEnum.BOX,
+                lambda: GridStatesEnum.AGENT_ON_BOX,
+                lambda: jax.lax.cond(
+                    current_cell == GridStatesEnum.TARGET,
+                    lambda: GridStatesEnum.AGENT_ON_TARGET,
+                    lambda: jax.lax.cond(
+                        current_cell == GridStatesEnum.BOX_ON_TARGET,
+                        lambda: GridStatesEnum.AGENT_ON_TARGET_WITH_BOX,
+                        lambda: GridStatesEnum.AGENT_ON_TARGET_WITH_BOX, # This should never happen
+                    )
+                )
+            )
         )
+
         grid = grid.at[agent_pos[0], agent_pos[1]].set(agent_state)
         state = BoxPushingState(
             key=state_key,
@@ -191,7 +188,6 @@ class BoxPushingEnv:
             agent_pos=agent_pos,
             agent_has_box=False,
             steps=0,
-            target_cells=target_cells,
             number_of_boxes=number_of_boxes,
             goal=jnp.zeros_like(grid),
             reward=0
@@ -204,34 +200,6 @@ class BoxPushingEnv:
         }
         
         return state, info
-    
-    def _generate_target_cells(self, key: jax.Array, number_of_boxes: int) -> jax.Array:
-        """Generate target cells in right quarter, padded with -1 to number_of_boxes_max.
-
-        This version avoids using dynamic_slice with traced (non-static) shapes, which is not allowed under JAX's vmap/jit.
-        Instead, it uses boolean masking and concatenation to select the first number_of_boxes rows.
-        """
-        # Create candidate cells
-        rows = jnp.arange(0, self.grid_size)
-        cols = jnp.arange(0, self.grid_size)
-        row_grid, col_grid = jnp.meshgrid(rows, cols, indexing='ij')
-        candidates = jnp.stack([row_grid.flatten(), col_grid.flatten()], axis=1)  # (N, 2)
-
-        # Shuffle candidates
-        shuffled_indices = random.permutation(key, len(candidates))
-        candidates = candidates[shuffled_indices]
-
-        # Select the first number_of_boxes rows using masking and concatenation
-        # Create a mask for the first number_of_boxes elements
-        mask = jnp.arange(self.number_of_boxes_max) < number_of_boxes
-        # Pad candidates to at least number_of_boxes_max rows
-        pad_len = self.number_of_boxes_max - candidates.shape[0]
-        candidates_padded = jnp.pad(candidates, ((0, max(0, pad_len)), (0, 0)), mode='constant', constant_values=-1)
-        # Take the first number_of_boxes_max rows
-        candidates_max = candidates_padded[:self.number_of_boxes_max]
-        # For rows >= number_of_boxes, set to -1
-        selected_padded = jnp.where(mask[:, None], candidates_max, -jnp.ones_like(candidates_max))
-        return selected_padded
     
     def step(self, state: BoxPushingState, action: int) -> Tuple[BoxPushingState, float, bool, Dict[str, Any]]:
         """Take a step in the environment."""
@@ -273,7 +241,6 @@ class BoxPushingEnv:
             agent_pos=new_pos,
             agent_has_box=new_agent_has_box,
             steps=new_steps,
-            target_cells=state.target_cells,
             number_of_boxes=state.number_of_boxes,
             goal=state.goal,
             reward=reward
@@ -525,7 +492,6 @@ class BoxPushingEnv:
         dummy_timestep = TimeStep(
             key=key,
             grid=jnp.zeros((self.grid_size, self.grid_size), dtype=jnp.int8),
-            target_cells=jnp.zeros((self.number_of_boxes_max, 2), dtype=jnp.int8),
             number_of_boxes=jnp.zeros((1,), dtype=jnp.int8),
             agent_pos=jnp.zeros((2,), dtype=jnp.int8),
             agent_has_box=jnp.zeros((1,), dtype=jnp.int8),
