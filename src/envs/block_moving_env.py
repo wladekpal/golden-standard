@@ -19,6 +19,7 @@ class BoxPushingState(struct.PyTreeNode):
     target_cells: jax.Array  # Target cell coordinates for boxes
     goal: jax.Array  # Goal cell coordinates for boxes
     reward: jax.Array  # Reward for the current step
+    success: jax.Array # Whether all boxes are on targets
 
 
 class TimeStep(BoxPushingState):
@@ -82,6 +83,7 @@ class BoxPushingConfig:
     number_of_boxes: int = 5
     episode_length: int = 100
     truncate_when_success: bool = False
+    dense_rewards: bool = False
 
 
 
@@ -90,13 +92,14 @@ class BoxPushingEnv:
 
     # TODO: I should define here a maximum and minimum number of boxes, so that every env during reset gets different number of them
     #  also, I need to add an argument that defines the number of boxes that need to be on target from start
-    def __init__(self, grid_size: int = 20, episode_length: int = 2000, number_of_boxes: int = 3, truncate_when_success: bool = False, **kwargs):
+    def __init__(self, grid_size: int = 20, episode_length: int = 2000, number_of_boxes: int = 3, truncate_when_success: bool = False, dense_rewards: bool = False, **kwargs):
         # logger.info(f"Initializing BoxPushingEnv with grid_size={grid_size}, episode_length={episode_length}, number_of_boxes={number_of_boxes}")
         self.grid_size = grid_size
         self.episode_length = episode_length
         self.action_space = 6  # UP, DOWN, LEFT, RIGHT, PICK_UP, PUT_DOWN
         self.number_of_boxes = number_of_boxes
         self.truncate_when_success = truncate_when_success
+        self.dense_rewards = dense_rewards
 
     def reset(self, key: jax.Array) -> Tuple[BoxPushingState, Dict[str, Any]]:
         """Reset environment to initial state."""
@@ -155,7 +158,8 @@ class BoxPushingEnv:
             steps=0,
             target_cells=target_cells,
             goal=jnp.zeros_like(grid),
-            reward=0
+            reward=0,
+            success=0,
         )
         goal = self.create_solved_state(state)
         state = state.replace(goal=goal.grid)
@@ -212,7 +216,8 @@ class BoxPushingEnv:
         else:
             done = new_steps >= self.episode_length
 
-        reward = self._is_goal_reached(new_grid).astype(jnp.int32)
+        reward = self._get_reward(new_grid)
+        success = self._is_goal_reached(new_grid).astype(jnp.int32)
         
         new_state = BoxPushingState(
             key=state.key,
@@ -222,7 +227,8 @@ class BoxPushingEnv:
             steps=new_steps,
             target_cells=state.target_cells,
             goal=state.goal,
-            reward=reward
+            reward=reward,
+            success=success,
         )
         
         info = {
@@ -341,7 +347,11 @@ class BoxPushingEnv:
     
     def _get_reward(self, grid: jax.Array) -> float:
         """Get reward for the current state."""
-        return jnp.sum(grid == GridStatesEnum.BOX_ON_TARGET) + jnp.sum(grid == GridStatesEnum.AGENT_ON_TARGET_WITH_BOX) 
+        boxes_on_targets = jnp.sum(grid == GridStatesEnum.BOX_ON_TARGET) + jnp.sum(grid == GridStatesEnum.AGENT_ON_TARGET_WITH_BOX)
+        if self.dense_rewards:
+            return boxes_on_targets
+        else:
+            return (boxes_on_targets == self.number_of_boxes).astype(jnp.int32)
 
     def _handle_pickup(self, state: BoxPushingState) -> Tuple[jax.Array, bool]:
         """Handle pickup action."""
@@ -474,6 +484,7 @@ class BoxPushingEnv:
             action=jnp.zeros((1,), dtype=jnp.int8),
             goal=jnp.zeros((self.grid_size, self.grid_size), dtype=jnp.int8),
             reward=jnp.zeros((1,), dtype=jnp.int8),
+            success=jnp.zeros((1,), dtype=jnp.int8),
             done=jnp.zeros((1,), dtype=jnp.int8),
         )
 

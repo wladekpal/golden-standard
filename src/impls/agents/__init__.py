@@ -5,7 +5,7 @@ from impls.agents.gcivl import GCIVLAgent
 from impls.agents.hiql import HIQLAgent
 from impls.agents.qrl import QRLAgent
 from impls.agents.sac import SACAgent
-from ml_collections import FrozenConfigDict
+import ml_collections
 
 agents = dict(
     crl=CRLAgent,
@@ -17,19 +17,51 @@ agents = dict(
     sac=SACAgent,
 )
 
+
+default_config = ml_collections.FrozenConfigDict(
+        dict(
+            # Agent hyperparameters.
+            agent_name='crl',  # Agent name.
+            lr=3e-4,  # Learning rate.
+            batch_size=256,  # Batch size.
+            actor_hidden_dims=(256, 256),  # Actor network hidden dimensions.
+            value_hidden_dims=(256, 256),  # Value network hidden dimensions.
+            latent_dim=64, 
+            layer_norm=True,  # Whether to use layer normalization.
+            discount=0.99,  # Discount factor.
+            actor_loss='awr',  # Actor loss type ('awr' or 'ddpgbc').
+            alpha=0.1,  # Temperature in AWR or BC coefficient in DDPG+BC.
+            tau=0.005,  # Target network update rate.
+            expectile=0.9, # IQL expectile.
+            actor_log_q=True,  # Whether to maximize log Q (True) or Q itself (False) in the actor loss.
+            const_std=True,  # Whether to use constant standard deviation for the actor.
+            discrete=True,  # Whether the action space is discrete.
+            encoder=ml_collections.config_dict.placeholder(str),  # Visual encoder name (None, 'impala_small', etc.).
+            # Dataset hyperparameters.
+
+
+            use_next_obs=False # If true, repaly buffer will return next state observation instead of future state
+        )
+    )
+
  
-def create_agent(config: FrozenConfigDict, example_batch: dict, seed: int):
+def create_agent(config: ml_collections.FrozenConfigDict, example_batch: dict, seed: int):
     if config.agent_name == "crl":
-        agent_class = CRLAgent
+        agent = CRLAgent.create(
+            seed,
+            example_batch['observations'],
+            example_batch['actions'],
+            config,
+            example_batch['value_goals'],
+        )
+    if config.agent_name == "gciql":
+        agent = GCIQLAgent.create(
+            seed,
+            example_batch['observations'],
+            example_batch['actions'],
+            config,
+        )
     else:
         raise ValueError(f"Unknown agent class {config.agent_name}")
-
-    agent = agent_class.create(
-        seed,
-        example_batch['observations'],
-        example_batch['actions'],
-        config,
-        example_batch['value_goals'],
-    )
 
     return agent
