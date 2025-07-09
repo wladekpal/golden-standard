@@ -19,6 +19,7 @@ class BoxPushingState(struct.PyTreeNode):
     number_of_boxes: jax.Array  # Number of boxes
     goal: jax.Array  # Goal cell coordinates for boxes
     reward: jax.Array  # Reward for the current step
+    success: jax.Array # Whether all boxes are on targets
 
 
 class TimeStep(BoxPushingState):
@@ -84,6 +85,7 @@ class BoxPushingConfig:
     number_of_moving_boxes_max: int = 2
     episode_length: int = 100
     truncate_when_success: bool = False
+    dense_rewards: bool = False
 
 
 
@@ -92,7 +94,7 @@ class BoxPushingEnv:
 
     # TODO: I should define here a maximum and minimum number of boxes, so that every env during reset gets different number of them
     #  also, I need to add an argument that defines the number of boxes that need to be on target from start
-    def __init__(self, grid_size: int = 20, episode_length: int = 2000, number_of_boxes_min: int = 3, number_of_boxes_max:int=4, number_of_moving_boxes_max:int=2, truncate_when_success: bool = False, **kwargs):
+    def __init__(self, grid_size: int = 20, episode_length: int = 2000, number_of_boxes_min: int = 3, number_of_boxes_max:int=4, number_of_moving_boxes_max:int=2, truncate_when_success: bool = False, dense_rewards: bool = False, **kwargs):
         logging.info(f"Initializing BoxPushingEnv with grid_size={grid_size}, episode_length={episode_length}, number_of_boxes={number_of_boxes_min}, number_of_boxes_max={number_of_boxes_max}, number_of_moving_boxes_max={number_of_moving_boxes_max}")
         self.grid_size = grid_size
         self.episode_length = episode_length
@@ -101,6 +103,7 @@ class BoxPushingEnv:
         self.number_of_boxes_max = number_of_boxes_max
         self.number_of_moving_boxes_max = number_of_moving_boxes_max
         self.truncate_when_success = truncate_when_success
+        self.dense_rewards = dense_rewards
 
     def reset(self, key: jax.Array) -> Tuple[BoxPushingState, Dict[str, Any]]:
         """Reset environment to initial state."""
@@ -190,7 +193,8 @@ class BoxPushingEnv:
             steps=0,
             number_of_boxes=number_of_boxes,
             goal=jnp.zeros_like(grid),
-            reward=0
+            reward=0,
+            success=0,
         )
         goal = self.create_solved_state(state)
         state = state.replace(goal=goal.grid)
@@ -233,7 +237,8 @@ class BoxPushingEnv:
         else:
             done = new_steps >= self.episode_length
 
-        reward = self._is_goal_reached(new_grid, state.number_of_boxes).astype(jnp.int32)
+        reward = self._get_reward(new_grid)
+        success = self._is_goal_reached(new_grid, state.number_of_boxes).astype(jnp.int32)
         
         new_state = BoxPushingState(
             key=state.key,
@@ -243,7 +248,8 @@ class BoxPushingEnv:
             steps=new_steps,
             number_of_boxes=state.number_of_boxes,
             goal=state.goal,
-            reward=reward
+            reward=reward,
+            success=success,
         )
         
         info = {
@@ -362,7 +368,11 @@ class BoxPushingEnv:
     
     def _get_reward(self, grid: jax.Array) -> float:
         """Get reward for the current state."""
-        return jnp.sum(grid == GridStatesEnum.BOX_ON_TARGET) + jnp.sum(grid == GridStatesEnum.AGENT_ON_TARGET_WITH_BOX) + jnp.sum(grid == GridStatesEnum.AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX)
+        boxes_on_targets = jnp.sum(grid == GridStatesEnum.BOX_ON_TARGET) + jnp.sum(grid == GridStatesEnum.AGENT_ON_TARGET_WITH_BOX) + jnp.sum(grid == GridStatesEnum.AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX)
+        if self.dense_rewards:
+            return boxes_on_targets
+        else:
+            return (boxes_on_targets == self.number_of_boxes).astype(jnp.int32)
 
     def _handle_pickup(self, state: BoxPushingState) -> Tuple[jax.Array, bool]:
         """Handle pickup action."""
@@ -499,6 +509,7 @@ class BoxPushingEnv:
             action=jnp.zeros((1,), dtype=jnp.int8),
             goal=jnp.zeros((self.grid_size, self.grid_size), dtype=jnp.int8),
             reward=jnp.zeros((1,), dtype=jnp.int8),
+            success=jnp.zeros((1,), dtype=jnp.int8),
             done=jnp.zeros((1,), dtype=jnp.int8),
         )
 

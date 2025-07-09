@@ -1,7 +1,7 @@
 import os
 from dataclasses import dataclass
 from envs import legal_envs
-from impls.agents.crl import get_config
+from impls.agents import default_config
 from ml_collections import FrozenConfigDict
 
 SRC_ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -29,6 +29,6 @@ class ExpConfig:
 class Config:
     exp: ExpConfig
     env: legal_envs
-    agent: FrozenConfigDict = get_config()
+    agent: FrozenConfigDict = default_config
 
     

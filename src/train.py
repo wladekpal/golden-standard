@@ -48,6 +48,7 @@ def collect_data(agent, key, env, num_envs, episode_length, use_targets=False):
             action=actions,
             goal=state.goal,
             reward=reward,
+            success=state.success,
             done=done,
         )
         return (new_state, info, key), timestep
@@ -130,7 +131,10 @@ def evaluate_agent(agent, env, key, jitted_flatten_batch, epoch, num_envs=1024, 
     # Create valid batch
     valid_batch = {
         'observations': state.grid.reshape(state.grid.shape[0], -1),
+        'next_observations': future_state.grid.reshape(future_state.grid.shape[0], -1),
         'actions': actions.squeeze(),
+        'rewards': state.reward.reshape(state.reward.shape[0], -1),
+        'masks': 1.0 - state.reward.reshape(state.reward.shape[0], -1), # TODO: add success and reward separately
         'value_goals': future_state.grid.reshape(future_state.grid.shape[0], -1),
         'actor_goals': future_state.grid.reshape(future_state.grid.shape[0], -1),
     }
@@ -145,6 +149,7 @@ def evaluate_agent(agent, env, key, jitted_flatten_batch, epoch, num_envs=1024, 
         'eval/mean_reward': timesteps.reward[done_mask].mean(),
         'eval/min_reward': timesteps.reward[done_mask].min(),
         'eval/max_reward': timesteps.reward[done_mask].max(),
+        'eval/mean_success': timesteps.success[done_mask].mean(),
         'eval/total_loss': loss,
         'eval/mean_boxes_on_target': info['boxes_on_target'].mean()
     }
@@ -158,7 +163,7 @@ def evaluate_agent(agent, env, key, jitted_flatten_batch, epoch, num_envs=1024, 
     animate = functools.partial(env.animate, ax, timesteps, img_prefix=os.path.join(ROOT_DIR, 'assets'))
     
     # Create animation
-    anim = animation.FuncAnimation(fig, animate, frames=100, interval=80, repeat=False)
+    anim = animation.FuncAnimation(fig, animate, frames=episode_length, interval=80, repeat=False)
     
     # Save as GIF
     gif_path = f"/tmp/block_moving_epoch_{epoch}.gif"
@@ -182,7 +187,8 @@ def train(config: Config):
     key = random.PRNGKey(config.exp.seed)
     env.step = jax.jit(jax.vmap(env.step))
     env.reset = jax.jit(jax.vmap(env.reset))
-    jitted_flatten_batch = jax.jit(jax.vmap(flatten_batch, in_axes=(None, 0, 0)), static_argnums=(0,))
+    partial_flatten = functools.partial(flatten_batch, get_next_obs=config.agent.use_next_obs)
+    jitted_flatten_batch = jax.jit(jax.vmap(partial_flatten, in_axes=(None, 0, 0)), static_argnums=(0,))
 
     dummy_timestep = env.get_dummy_timestep(key)
 
@@ -199,7 +205,10 @@ def train(config: Config):
 
     example_batch = {
         'observations':dummy_timestep.grid.reshape(1, -1),  # Add batch dimension 
+        'next_observations': dummy_timestep.grid.reshape(1, -1),
         'actions': jnp.ones((1,), dtype=jnp.int8) * (env._env.action_space-1), # TODO: make sure it should be the maximal value of action space  # Single action for batch size 1
+        'rewards': dummy_timestep.reward.reshape(1, -1),
+        'masks': 1.0 - dummy_timestep.reward.reshape(1, -1), # TODO: add success and reward separately
         'value_goals': dummy_timestep.grid.reshape(1, -1),
         'actor_goals': dummy_timestep.grid.reshape(1, -1),
     }
@@ -221,7 +230,10 @@ def train(config: Config):
         # Create valid batch
         batch = {
             'observations': state.grid.reshape(state.grid.shape[0], -1),
+            'next_observations': future_state.grid.reshape(future_state.grid.shape[0], -1),
             'actions': actions.squeeze(),
+            'rewards': state.reward.reshape(state.reward.shape[0], -1),
+            'masks': 1.0 - state.reward.reshape(state.reward.shape[0], -1), # TODO: add success and reward separately
             'value_goals': future_state.grid.reshape(future_state.grid.shape[0], -1),
             'actor_goals': future_state.grid.reshape(future_state.grid.shape[0], -1),
         }
