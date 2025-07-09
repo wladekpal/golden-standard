@@ -111,6 +111,7 @@ class BoxPushingEnv:
         grid = jnp.zeros((self.grid_size, self.grid_size), dtype=jnp.int8)
 
         number_of_boxes = jax.random.randint(number_of_boxes_key, (), self.number_of_boxes_min, self.number_of_boxes_max+1)
+        number_of_fixed_boxes = jnp.maximum(0, number_of_boxes - self.number_of_moving_boxes_max)
 
         # BOXES: Place exactly number_of_boxes boxes
         box_positions = jax.random.choice(
@@ -121,18 +122,30 @@ class BoxPushingEnv:
         )
         box_rows = box_positions // self.grid_size
         box_cols = box_positions % self.grid_size
+        box_positions = jnp.stack([box_rows, box_cols], axis=1)
+        print(number_of_fixed_boxes)
+        print(number_of_boxes)
+        print(box_positions)
 
-        # Workaround for dynamic indexing: use mask to set only the first number_of_boxes
-        mask = jnp.arange(self.number_of_boxes_max) < number_of_boxes
-        # Set boxes only where mask is True
+        # Set first number_of_fixed_boxes cells to BOX_ON_TARGET, the rest (up to number_of_boxes) to BOX
+        def set_box_type(i, g):
+            is_fixed = i < number_of_fixed_boxes
+            is_box = (i >= number_of_fixed_boxes) & (i < number_of_boxes)
+            return jax.lax.cond(
+                is_fixed,
+                lambda _: g.at[box_rows[i], box_cols[i]].set(GridStatesEnum.BOX_ON_TARGET),
+                lambda _: jax.lax.cond(
+                    is_box,
+                    lambda _: g.at[box_rows[i], box_cols[i]].set(GridStatesEnum.BOX),
+                    lambda _: g,
+                    operand=None
+                ),
+                operand=None
+            )
+
         grid = jax.lax.fori_loop(
             0, self.number_of_boxes_max,
-            lambda i, g: jax.lax.cond(
-                mask[i],
-                lambda _: g.at[box_rows[i], box_cols[i]].set(GridStatesEnum.BOX),
-                lambda _: g,
-                operand=None
-            ),
+            set_box_type,
             grid
         )
 
@@ -568,7 +581,7 @@ class Wrapper(BoxPushingEnv):
     def __init__(self, env: BoxPushingEnv):
         self._env = env
         # Copy attributes from wrapped environment
-        for attr in ['grid_size', 'episode_length', 'number_of_boxes_min', 'number_of_boxes_max']:
+        for attr in ['grid_size', 'episode_length', 'number_of_boxes_min', 'number_of_boxes_max', 'number_of_moving_boxes_max']:
             if hasattr(env, attr):
                 setattr(self, attr, getattr(env, attr))
     
