@@ -54,7 +54,7 @@ def create_agent(config: ml_collections.FrozenConfigDict, example_batch: dict, s
             config,
             example_batch['value_goals'],
         )
-    if config.agent_name == "gciql":
+    elif config.agent_name == "gciql":
         agent = GCIQLAgent.create(
             seed,
             example_batch['observations'],

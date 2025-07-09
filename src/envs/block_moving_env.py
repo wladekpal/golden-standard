@@ -237,7 +237,7 @@ class BoxPushingEnv:
         else:
             done = new_steps >= self.episode_length
 
-        reward = self._get_reward(new_grid)
+        reward = self._get_reward(new_grid, state.number_of_boxes)
         success = self._is_goal_reached(new_grid, state.number_of_boxes).astype(jnp.int32)
         
         new_state = BoxPushingState(
@@ -366,13 +366,13 @@ class BoxPushingEnv:
         """Check if all boxes are in target cells."""
         return jnp.sum(grid == GridStatesEnum.BOX_ON_TARGET) + jnp.sum(grid == GridStatesEnum.AGENT_ON_TARGET_WITH_BOX) == number_of_boxes
     
-    def _get_reward(self, grid: jax.Array) -> float:
+    def _get_reward(self, grid: jax.Array, number_of_boxes: int) -> float:
         """Get reward for the current state."""
         boxes_on_targets = jnp.sum(grid == GridStatesEnum.BOX_ON_TARGET) + jnp.sum(grid == GridStatesEnum.AGENT_ON_TARGET_WITH_BOX) + jnp.sum(grid == GridStatesEnum.AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX)
         if self.dense_rewards:
             return boxes_on_targets
         else:
-            return (boxes_on_targets == self.number_of_boxes).astype(jnp.int32)
+            return (boxes_on_targets == number_of_boxes).astype(jnp.int32)
 
     def _handle_pickup(self, state: BoxPushingState) -> Tuple[jax.Array, bool]:
         """Handle pickup action."""
@@ -590,6 +590,6 @@ class AutoResetWrapper(Wrapper):
 
 
 if __name__ == "__main__":
-    env = BoxPushingEnv(grid_size=5, number_of_boxes_max=5, number_of_boxes_min=3)
+    env = BoxPushingEnv(grid_size=5, number_of_boxes_max=3, number_of_boxes_min=3, number_of_moving_boxes_max=2)
     key = jax.random.PRNGKey(0)
     env.play_game(key)
