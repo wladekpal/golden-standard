@@ -12,7 +12,6 @@ import jax.numpy as jnp
 from jax import random
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
-import matplotlib
 
 from impls.agents import create_agent
 from envs.block_moving_env import AutoResetWrapper, TimeStep, GridStatesEnum, BoxPushingConfig
@@ -111,61 +110,22 @@ def get_single_pair_from_every_env(state, future_state, goal_index, key, use_dou
         key
     )
 
-
-def evaluate_agent(agent, env, key, jitted_flatten_batch, epoch, num_envs=1024, episode_length=100, use_double_batch_trick=False, gamma=0.99, use_targets=False):
-    """Evaluate agent by running rollouts using collect_data and computing losses."""
-    eval_info = {}
-    for number_of_boxes in range(1, 12, 2):
-        env_eval = create_env(BoxPushingConfig(grid_size=env.grid_size, number_of_boxes_min=number_of_boxes, number_of_boxes_max=number_of_boxes, number_of_moving_boxes_max=number_of_boxes))
+def evaluate_agent_in_specific_env(agent, original_env, key, jitted_flatten_batch, number_of_boxes, num_envs=1024, episode_length=100, use_double_batch_trick=False, gamma=0.99, use_targets=False, use_original_env=False, create_gif=False):
+    if use_original_env:
+        env_eval = original_env
+        prefix = "eval"
+        prefix_gif = "gif"
+    else:
+        env_eval = create_env(BoxPushingConfig(grid_size=original_env.grid_size, number_of_boxes_min=number_of_boxes, number_of_boxes_max=number_of_boxes, number_of_moving_boxes_max=number_of_boxes))
         env_eval = AutoResetWrapper(env_eval)
         env_eval.step = jax.jit(jax.vmap(env_eval.step))
         env_eval.reset = jax.jit(jax.vmap(env_eval.reset))
+        prefix = f"eval_{number_of_boxes}"
+        prefix_gif = f"gif_{number_of_boxes}"
 
-        data_key, double_batch_key = jax.random.split(key, 2)
-        # Use collect_data for evaluation rollouts
-        _, info, timesteps = collect_data(agent, data_key, env_eval, num_envs, episode_length, use_targets=use_targets)
-        timesteps = jax.tree_util.tree_map(lambda x: x.swapaxes(1, 0), timesteps)
-
-        batch_keys = jax.random.split(data_key, num_envs)
-        state, future_state, goal_index = jitted_flatten_batch(gamma, timesteps, batch_keys)
-        
-        # Sample and concatenate batch using the new function
-        state, actions, future_state, goal_index = get_single_pair_from_every_env(state, future_state, goal_index, double_batch_key, use_double_batch_trick=use_double_batch_trick) # state.grid is of shape (batch_size * 2, grid_size, grid_size)
-        if not use_targets:
-            state = state.replace(grid=GridStatesEnum.remove_targets(state.grid))
-            future_state = future_state.replace(grid=GridStatesEnum.remove_targets(future_state.grid))
-
-        # Create valid batch
-        valid_batch = {
-            'observations': state.grid.reshape(state.grid.shape[0], -1),
-            'next_observations': future_state.grid.reshape(future_state.grid.shape[0], -1),
-            'actions': actions.squeeze(),
-            'rewards': state.reward.reshape(state.reward.shape[0], -1),
-            'masks': 1.0 - state.reward.reshape(state.reward.shape[0], -1), # TODO: add success and reward separately
-            'value_goals': future_state.grid.reshape(future_state.grid.shape[0], -1),
-            'actor_goals': future_state.grid.reshape(future_state.grid.shape[0], -1),
-        }
-
-        # Compute losses on example batch
-        loss, _ = agent.total_loss(valid_batch, None)
-        
-        # Compile evaluation info
-        # Only consider episodes that are done
-        done_mask = timesteps.done
-        eval_info_tmp = {
-            f'eval_{number_of_boxes}/mean_reward': timesteps.reward[done_mask].mean(),
-            f'eval_{number_of_boxes}/min_reward': timesteps.reward[done_mask].min(),
-            f'eval_{number_of_boxes}/max_reward': timesteps.reward[done_mask].max(),
-            f'eval_{number_of_boxes}/mean_success': timesteps.success[done_mask].mean(),
-            f'eval_{number_of_boxes}/total_loss': loss,
-            f'eval_{number_of_boxes}/mean_boxes_on_target': info['boxes_on_target'].mean()
-        }
-        eval_info.update(eval_info_tmp)
-
-
-    key, data_key, double_batch_key = jax.random.split(key, 3)
+    data_key, double_batch_key = jax.random.split(key, 2)
     # Use collect_data for evaluation rollouts
-    _, info, timesteps = collect_data(agent, data_key, env, num_envs, episode_length, use_targets=use_targets)
+    _, info, timesteps = collect_data(agent, data_key, env_eval, num_envs, episode_length, use_targets=use_targets)
     timesteps = jax.tree_util.tree_map(lambda x: x.swapaxes(1, 0), timesteps)
 
     batch_keys = jax.random.split(data_key, num_envs)
@@ -183,7 +143,7 @@ def evaluate_agent(agent, env, key, jitted_flatten_batch, epoch, num_envs=1024, 
         'next_observations': future_state.grid.reshape(future_state.grid.shape[0], -1),
         'actions': actions.squeeze(),
         'rewards': state.reward.reshape(state.reward.shape[0], -1),
-        'masks': 1.0 - state.reward.reshape(state.reward.shape[0], -1), # TODO: add success and reward separately
+        'masks': 1.0 - state.done.reshape(state.done.shape[0], -1), 
         'value_goals': future_state.grid.reshape(future_state.grid.shape[0], -1),
         'actor_goals': future_state.grid.reshape(future_state.grid.shape[0], -1),
     }
@@ -195,33 +155,51 @@ def evaluate_agent(agent, env, key, jitted_flatten_batch, epoch, num_envs=1024, 
     # Only consider episodes that are done
     done_mask = timesteps.done
     eval_info_tmp = {
-        'eval/mean_reward': timesteps.reward[done_mask].mean(),
-        'eval/min_reward': timesteps.reward[done_mask].min(),
-        'eval/max_reward': timesteps.reward[done_mask].max(),
-        'eval/mean_success': timesteps.success[done_mask].mean(),
-        'eval/total_loss': loss,
-        'eval/mean_boxes_on_target': info['boxes_on_target'].mean(),
-        'epoch': epoch
+        f'{prefix}/mean_reward': timesteps.reward[done_mask].mean(),
+        f'{prefix}/min_reward': timesteps.reward[done_mask].min(),
+        f'{prefix}/max_reward': timesteps.reward[done_mask].max(),
+        f'{prefix}/mean_success': timesteps.success[done_mask].mean(),
+        f'{prefix}/mean_boxes_on_target': info['boxes_on_target'].mean(),
+        f'{prefix}/total_loss': loss,
+        f'{prefix}/contrastive_loss': loss_info['critic/contrastive_loss'],
+        f'{prefix}/actor_loss': loss_info['actor/actor_loss'],
+        f'{prefix}/cat_acc': loss_info['critic/categorical_accuracy'],
     }
+
+    if create_gif:
+        grid_size = state.grid.shape[-2:]
+        fig, ax = plt.subplots(figsize=grid_size)
+        
+        animate = functools.partial(original_env.animate, ax, timesteps, img_prefix=os.path.join(ROOT_DIR, 'assets'))
+        
+        # Create animation
+        anim = animation.FuncAnimation(fig, animate, frames=episode_length, interval=80, repeat=False)
+        
+        # Save as GIF
+        gif_path = f"/tmp/block_moving_epoch.gif"
+        anim.save(gif_path, writer='pillow')
+        plt.close()
+
+        wandb.log({f"{prefix_gif}": wandb.Video(gif_path, format="gif")})
+
+
+    return eval_info_tmp, loss_info
+
+
+def evaluate_agent(agent, env, key, jitted_flatten_batch, epoch, num_envs=1024, episode_length=100, use_double_batch_trick=False, gamma=0.99, use_targets=False):
+    """Evaluate agent by running rollouts using collect_data and computing losses."""
+    eval_info = {}
+    create_gif = epoch % 5 == 0
+    for number_of_boxes in range(1, 12, 2):
+        key, new_key = jax.random.split(key, 2)
+        eval_info_tmp, loss_info = evaluate_agent_in_specific_env(agent, env, new_key, jitted_flatten_batch, number_of_boxes, num_envs, episode_length, use_double_batch_trick, gamma, use_targets, create_gif=create_gif)
+        eval_info.update(eval_info_tmp)
+
+    eval_info_tmp, loss_info = evaluate_agent_in_specific_env(agent, env, key, jitted_flatten_batch, number_of_boxes, num_envs, episode_length, use_double_batch_trick, gamma, use_targets, use_original_env=True, create_gif=create_gif)
     eval_info.update(eval_info_tmp)
     eval_info.update(loss_info)
+    eval_info.update({"epoch": epoch})
     wandb.log(eval_info)
-
-    # Create figure for GIF
-    grid_size = state.grid.shape[-2:]
-    fig, ax = plt.subplots(figsize=grid_size)
-    
-    animate = functools.partial(env.animate, ax, timesteps, img_prefix=os.path.join(ROOT_DIR, 'assets'))
-    
-    # Create animation
-    anim = animation.FuncAnimation(fig, animate, frames=episode_length, interval=80, repeat=False)
-    
-    # Save as GIF
-    gif_path = f"/tmp/block_moving_epoch_{epoch}.gif"
-    anim.save(gif_path, writer='pillow')
-    plt.close()
-
-    wandb.log({"gif": wandb.Video(gif_path, format="gif")})
 
 
 def train(config: Config):
@@ -259,7 +237,7 @@ def train(config: Config):
         'next_observations': dummy_timestep.grid.reshape(1, -1),
         'actions': jnp.ones((1,), dtype=jnp.int8) * (env._env.action_space-1), # TODO: make sure it should be the maximal value of action space  # Single action for batch size 1
         'rewards': dummy_timestep.reward.reshape(1, -1),
-        'masks': 1.0 - dummy_timestep.reward.reshape(1, -1), # TODO: add success and reward separately
+        'masks': 1.0 - dummy_timestep.reward.reshape(1, -1), 
         'value_goals': dummy_timestep.grid.reshape(1, -1),
         'actor_goals': dummy_timestep.grid.reshape(1, -1),
     }

@@ -325,3 +325,6 @@ wandb/
 
 !assets/*
 .idea/
+
+
+experiments/
