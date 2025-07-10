@@ -7,7 +7,7 @@ import chex
 from flax import struct
 import matplotlib
 import os
-
+import logging
 
 class BoxPushingState(struct.PyTreeNode):
     """State representation for the box pushing environment."""
@@ -16,7 +16,7 @@ class BoxPushingState(struct.PyTreeNode):
     agent_pos: jax.Array  # [row, col] position of agent
     agent_has_box: jax.Array  # Whether agent is carrying a box
     steps: jax.Array  # Current step count
-    target_cells: jax.Array  # Target cell coordinates for boxes
+    number_of_boxes: jax.Array  # Number of boxes
     goal: jax.Array  # Goal cell coordinates for boxes
     reward: jax.Array  # Reward for the current step
     success: jax.Array # Whether all boxes are on targets
@@ -53,8 +53,8 @@ class GridStatesEnum:
             0,   # EMPTY -> EMPTY
             1,   # BOX -> BOX
             0,   # TARGET -> EMPTY
-            3,   # AGENT -> AGENT
             4,   # AGENT_CARRYING_BOX -> AGENT_CARRYING_BOX
+            3,   # AGENT -> AGENT
             5,   # AGENT_ON_BOX -> AGENT_ON_BOX
             3,   # AGENT_ON_TARGET -> AGENT
             4,   # AGENT_ON_TARGET_CARRYING_BOX -> AGENT_CARRYING_BOX
@@ -80,7 +80,9 @@ ACTIONS = {
 @dataclass
 class BoxPushingConfig:
     grid_size: int = 5
-    number_of_boxes: int = 5
+    number_of_boxes_min: int = 3
+    number_of_boxes_max: int = 4
+    number_of_moving_boxes_max: int = 2
     episode_length: int = 100
     truncate_when_success: bool = False
     dense_rewards: bool = False
@@ -92,71 +94,104 @@ class BoxPushingEnv:
 
     # TODO: I should define here a maximum and minimum number of boxes, so that every env during reset gets different number of them
     #  also, I need to add an argument that defines the number of boxes that need to be on target from start
-    def __init__(self, grid_size: int = 20, episode_length: int = 2000, number_of_boxes: int = 3, truncate_when_success: bool = False, dense_rewards: bool = False, **kwargs):
-        # logger.info(f"Initializing BoxPushingEnv with grid_size={grid_size}, episode_length={episode_length}, number_of_boxes={number_of_boxes}")
+    def __init__(self, grid_size: int = 20, episode_length: int = 2000, number_of_boxes_min: int = 3, number_of_boxes_max:int=4, number_of_moving_boxes_max:int=2, truncate_when_success: bool = False, dense_rewards: bool = False, **kwargs):
+        logging.info(f"Initializing BoxPushingEnv with grid_size={grid_size}, episode_length={episode_length}, number_of_boxes={number_of_boxes_min}, number_of_boxes_max={number_of_boxes_max}, number_of_moving_boxes_max={number_of_moving_boxes_max}")
         self.grid_size = grid_size
         self.episode_length = episode_length
         self.action_space = 6  # UP, DOWN, LEFT, RIGHT, PICK_UP, PUT_DOWN
-        self.number_of_boxes = number_of_boxes
+        self.number_of_boxes_min = number_of_boxes_min
+        self.number_of_boxes_max = number_of_boxes_max
+        self.number_of_moving_boxes_max = number_of_moving_boxes_max
         self.truncate_when_success = truncate_when_success
         self.dense_rewards = dense_rewards
 
     def reset(self, key: jax.Array) -> Tuple[BoxPushingState, Dict[str, Any]]:
         """Reset environment to initial state."""
-        key1, key2, key3, key4 = random.split(key, 4)
+        box_pos_key, number_of_boxes_key, agent_key, state_key = random.split(key, 4)
         
         # Initialize empty grid
         grid = jnp.zeros((self.grid_size, self.grid_size), dtype=jnp.int8)
-        
-        # Place exactly number_of_boxes boxes
-        box_positions = random.choice(key1, self.grid_size * self.grid_size, shape=(self.number_of_boxes,), replace=False)
+
+        number_of_boxes = jax.random.randint(number_of_boxes_key, (), self.number_of_boxes_min, self.number_of_boxes_max+1)
+        number_of_boxes_on_target = jnp.maximum(0, number_of_boxes - self.number_of_moving_boxes_max)
+        number_of_targets_without_boxes = number_of_boxes - number_of_boxes_on_target
+
+        box_positions = jax.random.choice(
+            box_pos_key,
+            self.grid_size * self.grid_size,
+            shape=(self.number_of_boxes_max+self.number_of_moving_boxes_max,),
+            replace=False
+        )
         box_rows = box_positions // self.grid_size
         box_cols = box_positions % self.grid_size
         
-        # Place boxes at valid positions
-        grid = grid.at[box_rows, box_cols].set(GridStatesEnum.BOX)
-        
-        # Generate target cells in right quarter
-        target_cells = self._generate_target_cells(key3)
-        
-        # Check if there's already a box at target positions and use BOX_ON_TARGET if so
-        # Use vectorized operations instead of for loop
-        target_rows = target_cells[:, 0]
-        target_cols = target_cells[:, 1]
-        target_cell_values = grid[target_rows, target_cols]
-        
-        # Create mask for boxes at target positions
-        box_at_target_mask = target_cell_values == GridStatesEnum.BOX
-        
-        # Update grid using vectorized operations
-        grid = grid.at[target_rows, target_cols].set(
-            jnp.where(box_at_target_mask, GridStatesEnum.BOX_ON_TARGET, GridStatesEnum.TARGET)
+        def set_cell_type(i, g):
+            is_fixed = i < number_of_boxes_on_target
+            is_box = (i >= number_of_boxes_on_target) & (i < number_of_boxes)
+            is_target = (i >= number_of_boxes) & (i < number_of_boxes + number_of_targets_without_boxes)
+            def set_fixed(g_):
+                return g_.at[box_rows[i], box_cols[i]].set(GridStatesEnum.BOX_ON_TARGET)
+            def set_box(g_):
+                return g_.at[box_rows[i], box_cols[i]].set(GridStatesEnum.BOX)
+            def set_target(g_):
+                return g_.at[box_rows[i], box_cols[i]].set(GridStatesEnum.TARGET)
+            def do_nothing(g_):
+                return g_
+            g = jax.lax.cond(
+                is_fixed,
+                set_fixed,
+                lambda g_: jax.lax.cond(
+                    is_box,
+                    set_box,
+                    lambda g__: jax.lax.cond(
+                        is_target,
+                        set_target,
+                        do_nothing,
+                        g__
+                    ),
+                    g_
+                ),
+                g
+            )
+            return g
+
+        grid = jax.lax.fori_loop(
+            0, number_of_boxes + number_of_targets_without_boxes,
+            set_cell_type,
+            grid
         )
-        
-        # Place agent randomly
-        row = random.randint(key2, (), 0, self.grid_size)
-        col = random.randint(key2, (), 0, self.grid_size)
-        agent_pos = jnp.array([row, col])
+
+        # AGENT: Place agent randomly
+        agent_pos = random.randint(agent_key, (2,), 0, self.grid_size)
 
         # Check what's at agent position and set appropriate state
         current_cell = grid[agent_pos[0], agent_pos[1]]
-        agent_state = jax.lax.switch(
-            current_cell,
-            branches=[
-                lambda _: GridStatesEnum.AGENT,  # Empty cell
-                lambda _: GridStatesEnum.AGENT_ON_BOX,  # Box cell
-                lambda _: GridStatesEnum.AGENT_ON_TARGET,  # Target cell
-            ],
-            operand=None
+        agent_state = jax.lax.cond(
+            current_cell == GridStatesEnum.EMPTY,
+            lambda: GridStatesEnum.AGENT,
+            lambda: jax.lax.cond(
+                current_cell == GridStatesEnum.BOX,
+                lambda: GridStatesEnum.AGENT_ON_BOX,
+                lambda: jax.lax.cond(
+                    current_cell == GridStatesEnum.TARGET,
+                    lambda: GridStatesEnum.AGENT_ON_TARGET,
+                    lambda: jax.lax.cond(
+                        current_cell == GridStatesEnum.BOX_ON_TARGET,
+                        lambda: GridStatesEnum.AGENT_ON_TARGET_WITH_BOX,
+                        lambda: GridStatesEnum.AGENT_ON_TARGET_WITH_BOX, # This should never happen
+                    )
+                )
+            )
         )
+
         grid = grid.at[agent_pos[0], agent_pos[1]].set(agent_state)
         state = BoxPushingState(
-            key=key4,
+            key=state_key,
             grid=grid,
             agent_pos=agent_pos,
             agent_has_box=False,
             steps=0,
-            target_cells=target_cells,
+            number_of_boxes=number_of_boxes,
             goal=jnp.zeros_like(grid),
             reward=0,
             success=0,
@@ -165,24 +200,10 @@ class BoxPushingEnv:
         state = state.replace(goal=goal.grid)
         
         info = {
-            'boxes_on_target': jnp.sum(grid == GridStatesEnum.BOX_ON_TARGET) + jnp.sum(grid == GridStatesEnum.AGENT_ON_TARGET_WITH_BOX)
+            'boxes_on_target': jnp.sum(grid == GridStatesEnum.BOX_ON_TARGET) + jnp.sum(grid == GridStatesEnum.AGENT_ON_TARGET_WITH_BOX) + jnp.sum(grid == GridStatesEnum.AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX)
         }
         
         return state, info
-    
-    def _generate_target_cells(self, key: jax.Array) -> jax.Array:
-        """Generate target cells in right quarter."""
-        # Create candidate cells
-        rows = jnp.arange(0, self.grid_size)
-        cols = jnp.arange(0, self.grid_size)
-        row_grid, col_grid = jnp.meshgrid(rows, cols, indexing='ij')
-        candidates = jnp.stack([row_grid.flatten(), col_grid.flatten()], axis=1)
-
-        # Shuffle and select
-        shuffled_indices = random.permutation(key, len(candidates))
-        candidates = candidates[shuffled_indices]
-
-        return candidates[:self.number_of_boxes]
     
     def step(self, state: BoxPushingState, action: int) -> Tuple[BoxPushingState, float, bool, Dict[str, Any]]:
         """Take a step in the environment."""
@@ -212,12 +233,12 @@ class BoxPushingEnv:
         
         # Check if done
         if self.truncate_when_success:
-            done = (new_steps >= self.episode_length) | self._is_goal_reached(new_grid)
+            done = (new_steps >= self.episode_length) | self._is_goal_reached(new_grid, state.number_of_boxes)
         else:
             done = new_steps >= self.episode_length
 
-        reward = self._get_reward(new_grid)
-        success = self._is_goal_reached(new_grid).astype(jnp.int32)
+        reward = self._get_reward(new_grid, state.number_of_boxes)
+        success = self._is_goal_reached(new_grid, state.number_of_boxes).astype(jnp.int32)
         
         new_state = BoxPushingState(
             key=state.key,
@@ -225,14 +246,14 @@ class BoxPushingEnv:
             agent_pos=new_pos,
             agent_has_box=new_agent_has_box,
             steps=new_steps,
-            target_cells=state.target_cells,
+            number_of_boxes=state.number_of_boxes,
             goal=state.goal,
             reward=reward,
             success=success,
         )
         
         info = {
-            'boxes_on_target': jnp.sum(new_grid == GridStatesEnum.BOX_ON_TARGET) + jnp.sum(new_grid == GridStatesEnum.AGENT_ON_TARGET_WITH_BOX)
+            'boxes_on_target': jnp.sum(new_grid == GridStatesEnum.BOX_ON_TARGET) + jnp.sum(new_grid == GridStatesEnum.AGENT_ON_TARGET_WITH_BOX) + jnp.sum(new_grid == GridStatesEnum.AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX)
         }
         
         return new_state, reward, done, info
@@ -341,17 +362,17 @@ class BoxPushingEnv:
         )
         return new_grid, new_agent_has_box
 
-    def _is_goal_reached(self, grid: jax.Array) -> bool:
+    def _is_goal_reached(self, grid: jax.Array, number_of_boxes: int) -> bool:
         """Check if all boxes are in target cells."""
-        return jnp.sum(grid == GridStatesEnum.BOX_ON_TARGET) + jnp.sum(grid == GridStatesEnum.AGENT_ON_TARGET_WITH_BOX) == self.number_of_boxes
+        return jnp.sum(grid == GridStatesEnum.BOX_ON_TARGET) + jnp.sum(grid == GridStatesEnum.AGENT_ON_TARGET_WITH_BOX) == number_of_boxes
     
-    def _get_reward(self, grid: jax.Array) -> float:
+    def _get_reward(self, grid: jax.Array, number_of_boxes: int) -> float:
         """Get reward for the current state."""
-        boxes_on_targets = jnp.sum(grid == GridStatesEnum.BOX_ON_TARGET) + jnp.sum(grid == GridStatesEnum.AGENT_ON_TARGET_WITH_BOX)
+        boxes_on_targets = jnp.sum(grid == GridStatesEnum.BOX_ON_TARGET) + jnp.sum(grid == GridStatesEnum.AGENT_ON_TARGET_WITH_BOX) + jnp.sum(grid == GridStatesEnum.AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX)
         if self.dense_rewards:
             return boxes_on_targets
         else:
-            return (boxes_on_targets == self.number_of_boxes).astype(jnp.int32)
+            return (boxes_on_targets == number_of_boxes).astype(jnp.int32)
 
     def _handle_pickup(self, state: BoxPushingState) -> Tuple[jax.Array, bool]:
         """Handle pickup action."""
@@ -395,7 +416,7 @@ class BoxPushingEnv:
             action = None
             while action is None:
                 try:
-                    user_input = input("Enter action (w/s/a/d/e/r/q): ").lower().strip()
+                    user_input = input("Enter action (w/s/a/d/e/r/q/g): ").lower().strip()
                     if user_input == 'w':
                         action = 0  # Up
                     elif user_input == 's':
@@ -411,15 +432,21 @@ class BoxPushingEnv:
                     elif user_input == 'q':
                         print("Game ended by user.")
                         return
+                    elif user_input == 'g':
+                        print("Game restarted by user.")
+                        action= "restart"
                     else:
-                        print("Invalid input. Use w/s/a/d/e/r/q")
+                        print("Invalid input. Use w/s/a/d/e/r/q/g")
                 except (EOFError, KeyboardInterrupt):
                     print("\nGame ended by user.")
                     return
             
             # Take action
-            state, reward, done, info = self.step(state, action)
-            total_reward += reward
+            if action=="restart":
+                state, info = self.reset(state.key)
+            else:
+                state, reward, done, info = self.step(state, action)
+                total_reward += reward
         
         # Final display
         self._display_state(state)
@@ -440,12 +467,10 @@ class BoxPushingEnv:
     def create_solved_state(self, state: BoxPushingState) -> BoxPushingState:
         """Create a solved state."""
         # Change all target cells to box on target
-        target_rows = state.target_cells[:, 0]
-        target_cols = state.target_cells[:, 1]
+        target_mask = (state.grid == GridStatesEnum.TARGET) | (state.grid == GridStatesEnum.BOX_ON_TARGET)
         state = state.replace(
-            grid=state.grid.at[target_rows, target_cols].set(GridStatesEnum.BOX_ON_TARGET)
+            grid=jnp.where(target_mask, GridStatesEnum.BOX_ON_TARGET, state.grid)
         )
-
         # Change all boxes to empty - use where to avoid boolean indexing issue
         box_mask = state.grid == GridStatesEnum.BOX
         state = state.replace(
@@ -477,7 +502,7 @@ class BoxPushingEnv:
         dummy_timestep = TimeStep(
             key=key,
             grid=jnp.zeros((self.grid_size, self.grid_size), dtype=jnp.int8),
-            target_cells=jnp.zeros((self.number_of_boxes, 2), dtype=jnp.int8),
+            number_of_boxes=jnp.zeros((1,), dtype=jnp.int8),
             agent_pos=jnp.zeros((2,), dtype=jnp.int8),
             agent_has_box=jnp.zeros((1,), dtype=jnp.int8),
             steps=jnp.zeros((1,), dtype=jnp.int8),
@@ -489,14 +514,14 @@ class BoxPushingEnv:
         )
 
         return dummy_timestep
-    
+
     @staticmethod
     def animate(ax, timesteps, frame, img_prefix='assets'):
         ax.clear()
         grid_state = timesteps.grid[0, frame]
         action = timesteps.action[0, frame]
         reward = timesteps.reward[0, frame]
-        
+
         # Create color mapping for grid states
         imgs = {
             0: 'floor.png',                                  # EMPTY
@@ -512,7 +537,7 @@ class BoxPushingEnv:
             10: 'box_on_target.png',                         # BOX_ON_TARGET
             11: 'agent_on_box_carrying_box.png'              # AGENT_ON_BOX_CARRYING_BOX
         }
-        
+
         # Plot grid
         for i in range(grid_state.shape[0]):
             for j in range(grid_state.shape[1]):
@@ -520,8 +545,8 @@ class BoxPushingEnv:
                 img_path = os.path.join(img_prefix, img_name)
                 img = matplotlib.image.imread(img_path)
                 ax.imshow(img, extent = [i+1, i, j+1, j])
-            
-        
+
+
         ax.set_xlim(0, grid_state.shape[1])
         ax.set_ylim(0, grid_state.shape[0])
         ax.set_title(f'Step {frame} | Action: {action} | Reward: {reward:.2f}')
@@ -533,7 +558,7 @@ class Wrapper(BoxPushingEnv):
     def __init__(self, env: BoxPushingEnv):
         self._env = env
         # Copy attributes from wrapped environment
-        for attr in ['grid_size', 'episode_length', 'number_of_boxes']:
+        for attr in ['grid_size', 'episode_length', 'number_of_boxes_min', 'number_of_boxes_max', 'number_of_moving_boxes_max']:
             if hasattr(env, attr):
                 setattr(self, attr, getattr(env, attr))
     
@@ -562,3 +587,9 @@ class AutoResetWrapper(Wrapper):
             lambda: state
         )
         return state, reward, done, info
+
+
+if __name__ == "__main__":
+    env = BoxPushingEnv(grid_size=5, number_of_boxes_max=3, number_of_boxes_min=3, number_of_moving_boxes_max=2)
+    key = jax.random.PRNGKey(0)
+    env.play_game(key)
