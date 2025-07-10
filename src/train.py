@@ -115,8 +115,8 @@ def get_single_pair_from_every_env(state, future_state, goal_index, key, use_dou
 def evaluate_agent(agent, env, key, jitted_flatten_batch, epoch, num_envs=1024, episode_length=100, use_double_batch_trick=False, gamma=0.99, use_targets=False):
     """Evaluate agent by running rollouts using collect_data and computing losses."""
     eval_info = {}
-    for number_of_boxes in range(1, 14, 2):
-        env_eval = create_env(BoxPushingConfig(grid_size=5, number_of_boxes_min=number_of_boxes, number_of_boxes_max=number_of_boxes, number_of_moving_boxes_max=number_of_boxes))
+    for number_of_boxes in range(1, 12, 2):
+        env_eval = create_env(BoxPushingConfig(grid_size=env.grid_size, number_of_boxes_min=number_of_boxes, number_of_boxes_max=number_of_boxes, number_of_moving_boxes_max=number_of_boxes))
         env_eval = AutoResetWrapper(env_eval)
         env_eval.step = jax.jit(jax.vmap(env_eval.step))
         env_eval.reset = jax.jit(jax.vmap(env_eval.reset))
@@ -200,7 +200,8 @@ def evaluate_agent(agent, env, key, jitted_flatten_batch, epoch, num_envs=1024, 
         'eval/max_reward': timesteps.reward[done_mask].max(),
         'eval/mean_success': timesteps.success[done_mask].mean(),
         'eval/total_loss': loss,
-        'eval/mean_boxes_on_target': info['boxes_on_target'].mean()
+        'eval/mean_boxes_on_target': info['boxes_on_target'].mean(),
+        'epoch': epoch
     }
     eval_info.update(eval_info_tmp)
     eval_info.update(loss_info)
