@@ -278,7 +278,7 @@ class BoxPushingEnv:
 
         if level_generator == 'default':
             self.level_generator = DefaultLevelGenerator(grid_size, number_of_boxes_min, number_of_boxes_max, number_of_moving_boxes_max)
-        if level_generator == 'quarter':
+        elif level_generator == 'quarter':
             self.level_generator = QuarterGenerator(grid_size, number_of_boxes_min, number_of_boxes_max, number_of_moving_boxes_max)
         else:
             raise ValueError("Unknown level generator selected")
@@ -646,6 +646,6 @@ class AutoResetWrapper(Wrapper):
 
 
 if __name__ == "__main__":
-    env = BoxPushingEnv(grid_size=6, number_of_boxes_max=3, number_of_boxes_min=3, number_of_moving_boxes_max=2, level_generator='quarter')
+    env = BoxPushingEnv(grid_size=6, number_of_boxes_max=3, number_of_boxes_min=3, number_of_moving_boxes_max=2, level_generator='default')
     key = jax.random.PRNGKey(0)
     env.play_game(key)
