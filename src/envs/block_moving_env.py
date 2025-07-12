@@ -175,6 +175,7 @@ class DefaultLevelGenerator:
         grid = jax.random.permutation(permutation_key, grid)
         grid = grid.reshape((self.grid_size, self.grid_size))
 
+        # Agent is placed at any field randomly
         agent_pos, grid = self.place_agent(grid, agent_key)
 
         state = BoxPushingState(
@@ -215,12 +216,14 @@ class QuarterGenerator(DefaultLevelGenerator):
 
         quarter_size = self.grid_size // 2
 
+        # We set quarter with boxes
         boxes_on_floor = jnp.full(number_of_targets_without_boxes, GridStatesEnum.BOX)
         box_quarter_floors = jnp.full(quarter_size * quarter_size - number_of_targets_without_boxes, GridStatesEnum.EMPTY)
         box_quarter = jnp.concatenate([boxes_on_floor, box_quarter_floors])
         box_quarter = jax.random.permutation(permutation_1_key, box_quarter)
         box_quarter = box_quarter.reshape((quarter_size, quarter_size))
 
+        # We set quarter with targets
         targets_without_boxes = jnp.full(number_of_targets_without_boxes, GridStatesEnum.TARGET)
         boxes_on_targets = jnp.full(number_of_boxes_on_target, GridStatesEnum.BOX_ON_TARGET)
         target_quarter_floors = jnp.full(quarter_size * quarter_size - number_of_boxes, GridStatesEnum.EMPTY)
@@ -228,13 +231,14 @@ class QuarterGenerator(DefaultLevelGenerator):
         target_quarter = jax.random.permutation(permutation_2_key, target_quarter)
         target_quarter = target_quarter.reshape((quarter_size, quarter_size))
 
+        # 2 empty quarters
         empty_quarter_1 = jnp.full_like(box_quarter, GridStatesEnum.EMPTY)
         empty_quarter_2 = jnp.full_like(box_quarter, GridStatesEnum.EMPTY)
 
+        # We shuffle all quarters and concatenate them into the full grid
         block_grid = jnp.stack([box_quarter, target_quarter, empty_quarter_1, empty_quarter_2])
         permutation = jax.random.permutation(permutation_3_key, 4)
         permuted_grid = block_grid[permutation]
-
         top = jnp.concatenate([permuted_grid[0], permuted_grid[1]], axis=1)
         bottom = jnp.concatenate([permuted_grid[2], permuted_grid[3]], axis=1)
         grid = jnp.concatenate([top, bottom], axis=0)
