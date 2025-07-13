@@ -86,6 +86,7 @@ class BoxPushingConfig:
     episode_length: int = 100
     truncate_when_success: bool = False
     dense_rewards: bool = False
+    level_generator: str = 'default'
 
 def create_solved_state(state: BoxPushingState) -> BoxPushingState:
     """Create a solved state."""
@@ -159,19 +160,22 @@ class DefaultLevelGenerator:
     def generate(self, key) -> BoxPushingState:
         permutation_key, number_of_boxes_key, agent_key, state_key = random.split(key, 4)
 
+        idxs = jnp.arange(self.grid_size * self.grid_size)
+
         number_of_boxes = jax.random.randint(number_of_boxes_key, (), self.number_of_boxes_min, self.number_of_boxes_max+1)
         number_of_boxes_on_target = jnp.maximum(0, number_of_boxes - self.number_of_moving_boxes_max)
         number_of_targets_without_boxes = number_of_boxes - number_of_boxes_on_target
-        number_of_floors = self.grid_size * self.grid_size - number_of_boxes_on_target - 2 * number_of_targets_without_boxes
 
-        # This way of generating is easier than branching lax.conds
-        # We place everything sequentially on the grid, and then shuffle the grid
-        boxes_on_targets = jnp.full(number_of_boxes_on_target, GridStatesEnum.BOX_ON_TARGET)
-        boxes_on_floor = jnp.full(number_of_targets_without_boxes, GridStatesEnum.BOX)
-        targets_without_boxes = jnp.full(number_of_targets_without_boxes, GridStatesEnum.TARGET)
-        floors = jnp.full(number_of_floors, GridStatesEnum.EMPTY)
+        is_fixed = idxs < number_of_boxes_on_target
+        is_box = (idxs >= number_of_boxes_on_target) & (idxs < number_of_boxes)
+        is_target = (idxs >= number_of_boxes) & (idxs < number_of_boxes + number_of_targets_without_boxes)
 
-        grid = jnp.concatenate([boxes_on_targets, boxes_on_floor, targets_without_boxes, floors])
+        grid = jnp.piecewise(
+            idxs,
+            [is_fixed, is_box, is_target],
+            [GridStatesEnum.BOX_ON_TARGET, GridStatesEnum.BOX, GridStatesEnum.TARGET, GridStatesEnum.EMPTY]
+        ).astype(jnp.int8)
+
         grid = jax.random.permutation(permutation_key, grid)
         grid = grid.reshape((self.grid_size, self.grid_size))
 
@@ -195,7 +199,7 @@ class DefaultLevelGenerator:
         state = state.replace(goal=goal.grid)
 
         return state
-        
+
 
 # This generator puts targets in one quarter of the board, and boxes in another quarter
 class QuarterGenerator(DefaultLevelGenerator):
@@ -207,29 +211,57 @@ class QuarterGenerator(DefaultLevelGenerator):
         super().__init__(grid_size, number_of_boxes_min, number_of_boxes_max, number_of_moving_boxes_max)
 
 
+    def generate_box_quarter(self, number_of_boxes, key):
+        quarter_size = self.grid_size // 2
+        quarter = jnp.full(quarter_size * quarter_size, GridStatesEnum.EMPTY)
+        idxs = jnp.arange(quarter_size * quarter_size)
+
+        is_box = idxs < number_of_boxes
+    
+        quarter = jnp.piecewise(
+            idxs,
+            [is_box],
+            [GridStatesEnum.BOX, GridStatesEnum.EMPTY]
+        ).astype(jnp.int8)
+
+        quarter = jax.random.permutation(key, quarter)
+        quarter = quarter.reshape((quarter_size, quarter_size))
+
+        return quarter
+    
+
+    def generate_target_quarter(self, number_of_boxes_on_target, number_of_targets_without_boxes, key):
+        quarter_size = self.grid_size // 2
+        quarter = jnp.full(quarter_size * quarter_size, GridStatesEnum.EMPTY)
+        number_of_targets = number_of_boxes_on_target + number_of_targets_without_boxes
+        idxs = jnp.arange(quarter_size * quarter_size)
+
+        is_box_on_target = idxs < number_of_boxes_on_target
+        is_target_without_box = (idxs >= number_of_boxes_on_target) & (idxs < number_of_targets)
+
+        quarter = jnp.piecewise(
+            idxs,
+            [is_box_on_target, is_target_without_box],
+            [GridStatesEnum.BOX_ON_TARGET, GridStatesEnum.TARGET, GridStatesEnum.EMPTY],
+        ).astype(jnp.int8)
+
+        quarter = jax.random.permutation(key, quarter)
+        quarter = quarter.reshape((quarter_size, quarter_size))
+
+        return quarter
+
     def generate(self, key):
-        permutation_1_key, permutation_2_key, permutation_3_key, number_of_boxes_key, agent_key, state_key = random.split(key, 6)
+        box_quarter_key, target_quarter_key , permutation_3_key, number_of_boxes_key, agent_key, state_key = random.split(key, 6)
 
         number_of_boxes = jax.random.randint(number_of_boxes_key, (), self.number_of_boxes_min, self.number_of_boxes_max+1)
         number_of_boxes_on_target = jnp.maximum(0, number_of_boxes - self.number_of_moving_boxes_max)
         number_of_targets_without_boxes = number_of_boxes - number_of_boxes_on_target
 
-        quarter_size = self.grid_size // 2
-
         # We set quarter with boxes
-        boxes_on_floor = jnp.full(number_of_targets_without_boxes, GridStatesEnum.BOX)
-        box_quarter_floors = jnp.full(quarter_size * quarter_size - number_of_targets_without_boxes, GridStatesEnum.EMPTY)
-        box_quarter = jnp.concatenate([boxes_on_floor, box_quarter_floors])
-        box_quarter = jax.random.permutation(permutation_1_key, box_quarter)
-        box_quarter = box_quarter.reshape((quarter_size, quarter_size))
+        box_quarter = self.generate_box_quarter(number_of_targets_without_boxes, box_quarter_key)
 
-        # We set quarter with targets
-        targets_without_boxes = jnp.full(number_of_targets_without_boxes, GridStatesEnum.TARGET)
-        boxes_on_targets = jnp.full(number_of_boxes_on_target, GridStatesEnum.BOX_ON_TARGET)
-        target_quarter_floors = jnp.full(quarter_size * quarter_size - number_of_boxes, GridStatesEnum.EMPTY)
-        target_quarter = jnp.concatenate([targets_without_boxes, boxes_on_targets, target_quarter_floors])
-        target_quarter = jax.random.permutation(permutation_2_key, target_quarter)
-        target_quarter = target_quarter.reshape((quarter_size, quarter_size))
+        # We set quarter with targets     
+        target_quarter = self.generate_target_quarter(number_of_boxes_on_target, number_of_targets_without_boxes, target_quarter_key)
 
         # 2 empty quarters
         empty_quarter_1 = jnp.full_like(box_quarter, GridStatesEnum.EMPTY)
