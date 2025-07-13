@@ -170,6 +170,8 @@ class DefaultLevelGenerator:
         is_box = (idxs >= number_of_boxes_on_target) & (idxs < number_of_boxes)
         is_target = (idxs >= number_of_boxes) & (idxs < number_of_boxes + number_of_targets_without_boxes)
 
+        # TODO: this could be made more efficient by only looping over indicies up to 2 * number_of_boxes_max, and then concatenating with empty rest of the board
+        # this shouldn't matter with board sizes we work now, but worth remembering in the future
         grid = jnp.piecewise(
             idxs,
             [is_fixed, is_box, is_target],
