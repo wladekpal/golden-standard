@@ -325,3 +325,5 @@ wandb/
 
 !assets/*
 .idea/
+
+runs/

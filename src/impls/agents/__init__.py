@@ -1,4 +1,4 @@
-from impls.agents.crl import CRLAgent, get_config
+from impls.agents.crl import CRLAgent
 from impls.agents.gcbc import GCBCAgent
 from impls.agents.gciql import GCIQLAgent
 from impls.agents.gcivl import GCIVLAgent
