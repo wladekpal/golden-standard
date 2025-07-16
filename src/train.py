@@ -16,6 +16,7 @@ import matplotlib.animation as animation
 from impls.agents import create_agent
 from envs.block_moving_env import AutoResetWrapper, TimeStep, GridStatesEnum, BoxPushingConfig
 from config import ROOT_DIR
+from impls.utils.checkpoints import restore_agent, save_agent
 
 
 @functools.partial(jax.jit, static_argnums=(2, 3, 4, 5))
@@ -298,13 +299,18 @@ def train(config: Config):
         return buffer_state, agent, key
 
     # Evaluate before training
+    run_directory = os.path.join(ROOT_DIR, "runs", config.exp.name)
+    os.makedirs(run_directory, exist_ok=True)
+
     evaluate_agent(agent, env, key, jitted_flatten_batch, 0, config.exp.num_envs, config.env.episode_length, config.exp.use_double_batch_trick, config.exp.gamma, config.exp.use_targets)
+    save_agent(agent, config, save_dir=run_directory, epoch=0)
     
     for epoch in range(config.exp.epochs):
         for _ in range(10):
             buffer_state, agent, key = train_n_epochs(buffer_state, agent, key)
 
         evaluate_agent(agent, env, key, jitted_flatten_batch, epoch+1, config.exp.num_envs, config.env.episode_length,  config.exp.use_double_batch_trick, config.exp.gamma, config.exp.use_targets)
+        save_agent(agent, config, save_dir=run_directory, epoch=epoch+1)
 
 
 if __name__ == "__main__":
