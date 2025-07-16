@@ -30,7 +30,7 @@ class TimeStep(BoxPushingState):
 @dataclass
 class GridStatesEnum:
     """Grid states representation for the box pushing environment."""
-    EMPTY = jnp.int8(0)
+    EMPTY = jnp.int8(-1)
     BOX = jnp.int8(1)
     TARGET = jnp.int8(2)
     AGENT = jnp.int8(3)
@@ -50,18 +50,18 @@ class GridStatesEnum:
         # Create a mapping array for vectorized lookup
         # Map each state to its corresponding no-target state
         mapping_array = jnp.array([
-            0,   # EMPTY -> EMPTY
-            1,   # BOX -> BOX
-            0,   # TARGET -> EMPTY
-            4,   # AGENT_CARRYING_BOX -> AGENT_CARRYING_BOX
-            3,   # AGENT -> AGENT
-            5,   # AGENT_ON_BOX -> AGENT_ON_BOX
-            3,   # AGENT_ON_TARGET -> AGENT
-            4,   # AGENT_ON_TARGET_CARRYING_BOX -> AGENT_CARRYING_BOX
-            5,   # AGENT_ON_TARGET_WITH_BOX -> AGENT_ON_BOX
-            11,  # AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX -> AGENT_ON_BOX_CARRYING_BOX
-            1,   # BOX_ON_TARGET -> BOX
-            11,  # AGENT_ON_BOX_CARRYING_BOX -> AGENT_ON_BOX_CARRYING_BOX
+            GridStatesEnum.EMPTY,   # EMPTY -> EMPTY
+            GridStatesEnum.BOX,   # BOX -> BOX
+            GridStatesEnum.EMPTY,   # TARGET -> EMPTY
+            GridStatesEnum.AGENT_CARRYING_BOX,   # AGENT_CARRYING_BOX -> AGENT_CARRYING_BOX
+            GridStatesEnum.AGENT,   # AGENT -> AGENT
+            GridStatesEnum.AGENT_ON_BOX,   # AGENT_ON_BOX -> AGENT_ON_BOX
+            GridStatesEnum.AGENT,   # AGENT_ON_TARGET -> AGENT
+            GridStatesEnum.AGENT_CARRYING_BOX,   # AGENT_ON_TARGET_CARRYING_BOX -> AGENT_CARRYING_BOX
+            GridStatesEnum.AGENT_ON_BOX,   # AGENT_ON_TARGET_WITH_BOX -> AGENT_ON_BOX
+            GridStatesEnum.AGENT_ON_BOX_CARRYING_BOX,  # AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX -> AGENT_ON_BOX_CARRYING_BOX
+            GridStatesEnum.BOX,   # BOX_ON_TARGET -> BOX
+            GridStatesEnum.AGENT_ON_BOX_CARRYING_BOX,  # AGENT_ON_BOX_CARRYING_BOX -> AGENT_ON_BOX_CARRYING_BOX
         ], dtype=jnp.int8)
         
         # Apply the mapping
