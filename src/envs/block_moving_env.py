@@ -30,7 +30,7 @@ class TimeStep(BoxPushingState):
 @dataclass
 class GridStatesEnum:
     """Grid states representation for the box pushing environment."""
-    EMPTY = jnp.int8(-1)
+    EMPTY = jnp.int8(0)
     BOX = jnp.int8(1)
     TARGET = jnp.int8(2)
     AGENT = jnp.int8(3)
