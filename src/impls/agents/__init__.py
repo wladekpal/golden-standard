@@ -5,10 +5,12 @@ from impls.agents.gcivl import GCIVLAgent
 from impls.agents.hiql import HIQLAgent
 from impls.agents.qrl import QRLAgent
 from impls.agents.sac import SACAgent
+from impls.agents.crl_search import CRLSearchAgent
 import ml_collections
 
 agents = dict(
     crl=CRLAgent,
+    crl_search=CRLSearchAgent,
     gcbc=GCBCAgent,
     gciql=GCIQLAgent,
     gcivl=GCIVLAgent,
@@ -48,6 +50,14 @@ default_config = ml_collections.FrozenConfigDict(
 def create_agent(config: ml_collections.FrozenConfigDict, example_batch: dict, seed: int):
     if config.agent_name == "crl":
         agent = CRLAgent.create(
+            seed,
+            example_batch['observations'],
+            example_batch['actions'],
+            config,
+            example_batch['value_goals'],
+        )
+    elif config.agent_name == "crl_search":
+        agent = CRLSearchAgent.create(
             seed,
             example_batch['observations'],
             example_batch['actions'],
