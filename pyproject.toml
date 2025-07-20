@@ -12,6 +12,7 @@ dependencies = [
     "ml-collections>=1.1.0",
     "moviepy>=2.2.1",
     "ogbench>=1.1.2",
+    "pandas>=2.3.1",
     "ruff>=0.11.11",
     "tqdm>=4.67.1",
     "tyro>=0.9.26",
