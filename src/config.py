@@ -22,6 +22,9 @@ class ExpConfig:
     use_targets: bool = False
     use_double_batch_trick: bool = False
     gamma: float = 0.99
+    eval_different_box_numbers: bool = False
+    eval_mirrored: bool = False
+    num_gifs: int = 1
 
 
 

@@ -87,6 +87,7 @@ class BoxPushingConfig:
     truncate_when_success: bool = False
     dense_rewards: bool = False
     level_generator: str = 'default'
+    generator_mirroring: bool = False
 
 def create_solved_state(state: BoxPushingState) -> BoxPushingState:
     """Create a solved state."""
@@ -205,10 +206,11 @@ class DefaultLevelGenerator:
 
 # This generator puts targets in one quarter of the board, and boxes in another quarter
 class QuarterGenerator(DefaultLevelGenerator):
-    def __init__(self, grid_size, number_of_boxes_min, number_of_boxes_max, number_of_moving_boxes_max):
+    def __init__(self, grid_size, number_of_boxes_min, number_of_boxes_max, number_of_moving_boxes_max, mirror=False):
         # This is mostly for convenience, without it there would have to be a lot of if statements
         assert grid_size % 2 == 0
         assert number_of_boxes_max <= grid_size * grid_size / 4
+        self.mirror = mirror
 
         super().__init__(grid_size, number_of_boxes_min, number_of_boxes_max, number_of_moving_boxes_max)
 
@@ -270,9 +272,13 @@ class QuarterGenerator(DefaultLevelGenerator):
         empty_quarter_2 = jnp.full_like(box_quarter, GridStatesEnum.EMPTY)
 
         # We shuffle all quarters and concatenate them into the full grid
-        block_grid = jnp.stack([box_quarter, target_quarter, empty_quarter_1, empty_quarter_2])
-        permutation = jax.random.permutation(permutation_3_key, 4)
-        permuted_grid = block_grid[permutation]
+        if self.mirror:
+            block_grid = jnp.stack([empty_quarter_1, box_quarter, target_quarter, empty_quarter_2])
+        else:
+            block_grid = jnp.stack([box_quarter, empty_quarter_1, empty_quarter_2, target_quarter])
+        
+        permuted_grid = block_grid
+        
         top = jnp.concatenate([permuted_grid[0], permuted_grid[1]], axis=1)
         bottom = jnp.concatenate([permuted_grid[2], permuted_grid[3]], axis=1)
         grid = jnp.concatenate([top, bottom], axis=0)
@@ -317,7 +323,7 @@ class BoxPushingEnv:
         if level_generator == 'default':
             self.level_generator = DefaultLevelGenerator(grid_size, number_of_boxes_min, number_of_boxes_max, number_of_moving_boxes_max)
         elif level_generator == 'quarter':
-            self.level_generator = QuarterGenerator(grid_size, number_of_boxes_min, number_of_boxes_max, number_of_moving_boxes_max)
+            self.level_generator = QuarterGenerator(grid_size, number_of_boxes_min, number_of_boxes_max, number_of_moving_boxes_max, mirror=kwargs['generator_mirroring'])
         else:
             raise ValueError("Unknown level generator selected")
 
@@ -610,42 +616,44 @@ class BoxPushingEnv:
         return dummy_timestep
 
     @staticmethod
-    def animate(ax, timesteps, frame, img_prefix='assets'):
-        ax.clear()
-        grid_state = timesteps.grid[0, frame]
-        action = timesteps.action[0, frame]
-        reward = timesteps.reward[0, frame]
+    def animate(axs, timesteps, frame, img_prefix='assets'):
 
-        # Create color mapping for grid states
-        imgs = {
-            0: 'floor.png',                                  # EMPTY
-            1: 'box.png',                                    # BOX
-            2: 'box_target.png',                             # TARGET
-            3: 'agent.png',                                  # AGENT
-            4: 'agent_carrying_box.png',                     # AGENT_CARRYING_BOX
-            5: 'agent_on_box.png',                           # AGENT_ON_BOX
-            6: 'agent_on_target.png',                        # AGENT_ON_TARGET
-            7: 'agent_on_target_carrying_box.png',           # AGENT_ON_TARGET_CARRYING_BOX
-            8: 'agent_on_target_with_box.png',               # AGENT_ON_TARGET_WITH_BOX
-            9: 'agent_on_target_with_box_carrying_box.png',  # AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX
-            10: 'box_on_target.png',                         # BOX_ON_TARGET
-            11: 'agent_on_box_carrying_box.png'              # AGENT_ON_BOX_CARRYING_BOX
-        }
+        for env_idx, ax in enumerate(axs):
+            ax.clear()
+            grid_state = timesteps.grid[env_idx, frame]
+            action = timesteps.action[env_idx, frame]
+            reward = timesteps.reward[env_idx, frame]
 
-        # Plot grid
-        for i in range(grid_state.shape[0]):
-            for j in range(grid_state.shape[1]):
-                img_name = imgs[int(grid_state[i, j])]
-                img_path = os.path.join(img_prefix, img_name)
-                img = matplotlib.image.imread(img_path)
-                ax.imshow(img, extent = [i+1, i, j+1, j])
+            # Create color mapping for grid states
+            imgs = {
+                0: 'floor.png',                                  # EMPTY
+                1: 'box.png',                                    # BOX
+                2: 'box_target.png',                             # TARGET
+                3: 'agent.png',                                  # AGENT
+                4: 'agent_carrying_box.png',                     # AGENT_CARRYING_BOX
+                5: 'agent_on_box.png',                           # AGENT_ON_BOX
+                6: 'agent_on_target.png',                        # AGENT_ON_TARGET
+                7: 'agent_on_target_carrying_box.png',           # AGENT_ON_TARGET_CARRYING_BOX
+                8: 'agent_on_target_with_box.png',               # AGENT_ON_TARGET_WITH_BOX
+                9: 'agent_on_target_with_box_carrying_box.png',  # AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX
+                10: 'box_on_target.png',                         # BOX_ON_TARGET
+                11: 'agent_on_box_carrying_box.png'              # AGENT_ON_BOX_CARRYING_BOX
+            }
+
+            # Plot grid
+            for i in range(grid_state.shape[0]):
+                for j in range(grid_state.shape[1]):
+                    img_name = imgs[int(grid_state[i, j])]
+                    img_path = os.path.join(img_prefix, img_name)
+                    img = matplotlib.image.imread(img_path)
+                    ax.imshow(img, extent = [i+1, i, j+1, j])
 
 
-        ax.set_xlim(0, grid_state.shape[1])
-        ax.set_ylim(0, grid_state.shape[0])
-        ax.set_title(f'Step {frame} | Action: {action} | Reward: {reward:.2f}')
-        ax.set_aspect('equal')
-        ax.invert_yaxis()
+            ax.set_xlim(0, grid_state.shape[1])
+            ax.set_ylim(0, grid_state.shape[0])
+            ax.set_title(f'Step {frame} | Action: {action} | Reward: {reward:.2f}')
+            ax.set_aspect('equal')
+            ax.invert_yaxis()
 
 
 class Wrapper(BoxPushingEnv):
@@ -684,6 +692,6 @@ class AutoResetWrapper(Wrapper):
 
 
 if __name__ == "__main__":
-    env = BoxPushingEnv(grid_size=6, number_of_boxes_max=3, number_of_boxes_min=3, number_of_moving_boxes_max=2, level_generator='default')
+    env = BoxPushingEnv(grid_size=6, number_of_boxes_max=3, number_of_boxes_min=3, number_of_moving_boxes_max=2, level_generator='quarter', generator_mirroring=False)
     key = jax.random.PRNGKey(0)
     env.play_game(key)

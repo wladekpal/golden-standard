@@ -4,6 +4,8 @@ from envs import create_env
 import functools
 import os
 import wandb
+import dataclasses
+import copy
 
 from rb import TrajectoryUniformSamplingQueue, jit_wrap, flatten_batch
 
@@ -111,30 +113,26 @@ def get_single_pair_from_every_env(state, future_state, goal_index, key, use_dou
         key
     )
 
-def evaluate_agent_in_specific_env(agent, original_env, key, jitted_flatten_batch, number_of_boxes, num_envs=1024, episode_length=100, use_double_batch_trick=False, gamma=0.99, use_targets=False, use_original_env=False, create_gif=False):
-    if use_original_env:
-        env_eval = original_env
-        prefix = "eval"
-        prefix_gif = "gif"
-    else:
-        env_eval = create_env(BoxPushingConfig(grid_size=original_env.grid_size, number_of_boxes_min=number_of_boxes, number_of_boxes_max=number_of_boxes, number_of_moving_boxes_max=number_of_boxes))
-        env_eval = AutoResetWrapper(env_eval)
-        env_eval.step = jax.jit(jax.vmap(env_eval.step))
-        env_eval.reset = jax.jit(jax.vmap(env_eval.reset))
-        prefix = f"eval_{number_of_boxes}"
-        prefix_gif = f"gif_{number_of_boxes}"
+def evaluate_agent_in_specific_env(agent, key, jitted_flatten_batch, config, name, create_gif=False):
+    
+    env_eval = create_env(config.env)
+    env_eval = AutoResetWrapper(env_eval)
+    env_eval.step = jax.jit(jax.vmap(env_eval.step))
+    env_eval.reset = jax.jit(jax.vmap(env_eval.reset))
+    prefix = f"eval{name}"
+    prefix_gif = f"gif{name}"
 
     data_key, double_batch_key = jax.random.split(key, 2)
     # Use collect_data for evaluation rollouts
-    _, info, timesteps = collect_data(agent, data_key, env_eval, num_envs, episode_length, use_targets=use_targets)
+    _, info, timesteps = collect_data(agent, data_key, env_eval, config.exp.num_envs, config.env.episode_length, use_targets=config.exp.use_targets)
     timesteps = jax.tree_util.tree_map(lambda x: x.swapaxes(1, 0), timesteps)
 
-    batch_keys = jax.random.split(data_key, num_envs)
-    state, future_state, goal_index = jitted_flatten_batch(gamma, timesteps, batch_keys)
+    batch_keys = jax.random.split(data_key, config.exp.num_envs)
+    state, future_state, goal_index = jitted_flatten_batch(config.exp.gamma, timesteps, batch_keys)
     
     # Sample and concatenate batch using the new function
-    state, actions, future_state, goal_index = get_single_pair_from_every_env(state, future_state, goal_index, double_batch_key, use_double_batch_trick=use_double_batch_trick) # state.grid is of shape (batch_size * 2, grid_size, grid_size)
-    if not use_targets:
+    state, actions, future_state, goal_index = get_single_pair_from_every_env(state, future_state, goal_index, double_batch_key, use_double_batch_trick=config.exp.use_double_batch_trick) # state.grid is of shape (batch_size * 2, grid_size, grid_size)
+    if not config.exp.use_targets:
         state = state.replace(grid=GridStatesEnum.remove_targets(state.grid))
         future_state = future_state.replace(grid=GridStatesEnum.remove_targets(future_state.grid))
 
@@ -168,13 +166,13 @@ def evaluate_agent_in_specific_env(agent, original_env, key, jitted_flatten_batc
     }
 
     if create_gif:
-        grid_size = state.grid.shape[-2:]
-        fig, ax = plt.subplots(figsize=grid_size)
+        grid_size = (state.grid.shape[-2] * config.exp.num_gifs, state.grid.shape[-1])
+        fig, axs = plt.subplots(ncols=config.exp.num_gifs, figsize=grid_size)
         
-        animate = functools.partial(original_env.animate, ax, timesteps, img_prefix=os.path.join(ROOT_DIR, 'assets'))
+        animate = functools.partial(env_eval.animate, axs, timesteps, img_prefix=os.path.join(ROOT_DIR, 'assets'))
         
         # Create animation
-        anim = animation.FuncAnimation(fig, animate, frames=episode_length, interval=80, repeat=False)
+        anim = animation.FuncAnimation(fig, animate, frames=config.env.episode_length, interval=80, repeat=False)
         
         # Save as GIF
         gif_path = f"/tmp/block_moving_epoch.gif"
@@ -187,19 +185,37 @@ def evaluate_agent_in_specific_env(agent, original_env, key, jitted_flatten_batc
     return eval_info_tmp, loss_info
 
 
-def evaluate_agent(agent, env, key, jitted_flatten_batch, epoch, num_envs=1024, episode_length=100, use_double_batch_trick=False, gamma=0.99, use_targets=False):
+def evaluate_agent(agent, key, jitted_flatten_batch, epoch, config):
     """Evaluate agent by running rollouts using collect_data and computing losses."""
-    eval_info = {}
-    create_gif = epoch % 5 == 0
-    for number_of_boxes in range(1, 12, 2):
-        key, new_key = jax.random.split(key, 2)
-        eval_info_tmp, loss_info = evaluate_agent_in_specific_env(agent, env, new_key, jitted_flatten_batch, number_of_boxes, num_envs, episode_length, use_double_batch_trick, gamma, use_targets, create_gif=create_gif)
+
+    eval_configs = [config]
+    eval_names_suff = [""]
+
+    eval_info = {"epoch": epoch}
+    create_gif = epoch % 5 == 0 and config.exp.num_gifs > 0
+
+    if config.exp.eval_mirrored:
+        mirroring_config = copy.deepcopy(config)
+        mirroring_config.env.generator_mirroring = True
+        eval_configs.append(mirroring_config)
+        eval_names_suff.append("_mirrored")
+
+
+    if config.exp.eval_different_box_numbers:
+        for number_of_boxes in range(1, 12, 2):
+            new_config = copy.deepcopy(config)
+            new_config.env = dataclasses.replace(new_config.env, number_of_boxes_min=number_of_boxes, number_of_boxes_max=number_of_boxes, number_of_moving_boxes_max=number_of_boxes)
+            eval_configs.append(new_config)
+            eval_names_suff.append("_" + str(number_of_boxes))
+
+
+    for eval_config, eval_name_suff in zip(eval_configs, eval_names_suff):
+        eval_info_tmp, loss_info = evaluate_agent_in_specific_env(agent, key, jitted_flatten_batch, eval_config, eval_name_suff ,create_gif=create_gif)
         eval_info.update(eval_info_tmp)
 
-    eval_info_tmp, loss_info = evaluate_agent_in_specific_env(agent, env, key, jitted_flatten_batch, number_of_boxes, num_envs, episode_length, use_double_batch_trick, gamma, use_targets, use_original_env=True, create_gif=create_gif)
-    eval_info.update(eval_info_tmp)
-    eval_info.update(loss_info)
-    eval_info.update({"epoch": epoch})
+        if eval_name_suff == "":
+            eval_info.update(loss_info)
+
     wandb.log(eval_info)
 
 
@@ -302,14 +318,14 @@ def train(config: Config):
     run_directory = os.path.join(ROOT_DIR, "runs", config.exp.name)
     os.makedirs(run_directory, exist_ok=True)
 
-    evaluate_agent(agent, env, key, jitted_flatten_batch, 0, config.exp.num_envs, config.env.episode_length, config.exp.use_double_batch_trick, config.exp.gamma, config.exp.use_targets)
+    evaluate_agent(agent, key, jitted_flatten_batch, 0, config)
     save_agent(agent, config, save_dir=run_directory, epoch=0)
     
     for epoch in range(config.exp.epochs):
         for _ in range(10):
             buffer_state, agent, key = train_n_epochs(buffer_state, agent, key)
 
-        evaluate_agent(agent, env, key, jitted_flatten_batch, epoch+1, config.exp.num_envs, config.env.episode_length,  config.exp.use_double_batch_trick, config.exp.gamma, config.exp.use_targets)
+        evaluate_agent(agent, key, jitted_flatten_batch, epoch+1, config)
         save_agent(agent, config, save_dir=run_directory, epoch=epoch+1)
 
 
