@@ -277,8 +277,6 @@ class QuarterGenerator(DefaultLevelGenerator):
         else:
             block_grid = jnp.stack([box_quarter, empty_quarter_1, empty_quarter_2, target_quarter])
         
-        # permutation = jax.random.permutation(permutation_3_key, 4)
-        # permuted_grid = block_grid[permutation]
         permuted_grid = block_grid
         
         top = jnp.concatenate([permuted_grid[0], permuted_grid[1]], axis=1)
