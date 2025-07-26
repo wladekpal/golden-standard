@@ -14,6 +14,7 @@ dependencies = [
     "ogbench>=1.1.2",
     "pandas>=2.3.1",
     "ruff>=0.11.11",
+    "scikit-learn>=1.7.1",
     "tqdm>=4.67.1",
     "tyro>=0.9.26",
     "wandb>=0.19.11",
