@@ -5,6 +5,7 @@ import jax
 import jax.numpy as jnp
 import ml_collections
 import optax
+import distrax
 import flax.linen as nn
 from impls.utils.encoders import GCEncoder, encoder_modules
 from impls.utils.flax_utils import ModuleDict, TrainState, nonpytree_field
@@ -140,10 +141,11 @@ class CRLSearchAgent(flax.struct.PyTreeNode):
         all_actions = jnp.tile(jnp.arange(6), (observations.shape[0], 1))  # B x 6
         qs = jax.vmap(self.network.select('critic'), in_axes=(None, None, 1))(observations, goals, all_actions) # 6 x 2 x B
         qs = qs.min(axis=1) # 6 x B
-        # qs_argmax_actions = jnp.argmax(qs, axis=0) # B
         qs = value_transform(qs)
-        sampled_actions = jax.random.categorical(seed, qs, axis=0) # B
-        return sampled_actions
+        qs = qs.transpose(1, 0) # B x 6
+        dist = distrax.Categorical(logits=qs / jnp.maximum(1e-6, 1))
+        actions = dist.sample(seed=seed)
+        return actions
 
     @classmethod
     def create(
