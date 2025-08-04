@@ -13,7 +13,7 @@ class ExpConfig:
     name: str
     project: str = "crl_subgoal"
     mode: str = "online"
-    entity: str = None
+    entity: str = "cl-probing"
     num_envs: int = 1024
     batch_size: int = 1024
     seed: int = 0

@@ -40,9 +40,9 @@ default_config = ml_collections.FrozenConfigDict(
             discrete=True,  # Whether the action space is discrete.
             encoder=ml_collections.config_dict.placeholder(str),  # Visual encoder name (None, 'impala_small', etc.).
             # Dataset hyperparameters.
-
-
-            use_next_obs=False # If true, repaly buffer will return next state observation instead of future state
+            use_next_obs=False, # If true, repaly buffer will return next state observation instead of future state
+            target_entropy_multiplier=0.5,  # Multiplier for the target entropy (used in SAC-like agents).
+            target_entropy=-1.79  # Default target entropy for SAC-like agents (-ln(6))
         )
     )
 

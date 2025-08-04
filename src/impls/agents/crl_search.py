@@ -9,7 +9,7 @@ import distrax
 import flax.linen as nn
 from impls.utils.encoders import GCEncoder, encoder_modules
 from impls.utils.flax_utils import ModuleDict, TrainState, nonpytree_field
-from impls.utils.networks import GCActor, GCBilinearValue, GCDiscreteActor, GCDiscreteBilinearCritic
+from impls.utils.networks import GCActor, GCBilinearValue, GCDiscreteActor, GCDiscreteBilinearCritic, LogParam
 
 
 
@@ -75,17 +75,40 @@ class CRLSearchAgent(flax.struct.PyTreeNode):
         """Compute the actor loss (AWR or DDPG+BC)."""
         # Maximize log Q if actor_log_q is True (which is default).
 
-        if self.config['actor_loss'] == 'awr':
-            # AWR loss.
-            actor_loss = 0
+        def value_transform(x):
+            return jnp.log(jnp.maximum(x, 1e-6))
+        all_actions = jnp.tile(jnp.arange(6), (batch['observations'].shape[0], 1))  # B x 6
+        qs = jax.lax.stop_gradient(jax.vmap(self.network.select('critic'), in_axes=(None, None, 1))(batch['observations'], batch['actor_goals'], all_actions)) # 6 x 2 x B
+        qs = qs.min(axis=1) # 6 x B
+        qs = value_transform(qs)
+        qs = qs.transpose(1, 0) # B x 6
 
-            actor_info = {
-                'actor_loss': 0,
-                'adv': 0,
-                'bc_log_prob': 0,
-            }
+        alpha = self.network.select('alpha')(params=grad_params)
+        dist = distrax.Categorical(logits=qs / jnp.maximum(1e-6, alpha))
+        probs = dist.probs  # shape (B, 6)
 
-            return actor_loss, actor_info
+        log_probs = jnp.log(probs + 1e-8)
+        entropy = -(probs * log_probs).sum(axis=-1).mean()
+
+        log_probs_rb = dist.log_prob(batch['actions'])
+        entropy_rb = -log_probs_rb.mean()
+
+        alpha_loss = ((entropy + self.config['target_entropy']) ** 2).mean()  # Target entropy is a negative constant like -log(6)
+        actor_loss = 0
+        total_loss = actor_loss + alpha_loss
+
+        actor_info = {
+            'total_loss': total_loss,
+            'actor_loss': actor_loss,
+            'adv': 0,
+            'bc_log_prob': log_probs.mean(),
+            'alpha_loss': alpha_loss,
+            'alpha': alpha,
+            'entropy': entropy,
+            'entropy_rb_actions': entropy_rb,
+        }
+
+        return total_loss, actor_info
 
     @jax.jit
     def total_loss(self, batch, grad_params, rng=None):
@@ -104,11 +127,8 @@ class CRLSearchAgent(flax.struct.PyTreeNode):
         else:
             value_loss = 0.0
 
-        actor_loss, actor_info = 0, {
-                'actor_loss': 0,
-                'adv': 0,
-                'bc_log_prob': 0,
-            }
+        rng, actor_rng = jax.random.split(rng)
+        actor_loss, actor_info = self.actor_loss(batch, grad_params, actor_rng)
         for k, v in actor_info.items():
             info[f'actor/{k}'] = v
 
@@ -139,11 +159,13 @@ class CRLSearchAgent(flax.struct.PyTreeNode):
         def value_transform(x):
             return jnp.log(jnp.maximum(x, 1e-6))
         all_actions = jnp.tile(jnp.arange(6), (observations.shape[0], 1))  # B x 6
-        qs = jax.vmap(self.network.select('critic'), in_axes=(None, None, 1))(observations, goals, all_actions) # 6 x 2 x B
+        qs = jax.lax.stop_gradient(jax.vmap(self.network.select('critic'), in_axes=(None, None, 1))(observations, goals, all_actions)) # 6 x 2 x B
         qs = qs.min(axis=1) # 6 x B
         qs = value_transform(qs)
         qs = qs.transpose(1, 0) # B x 6
-        dist = distrax.Categorical(logits=qs / jnp.maximum(1e-6, 1))
+        qs = (qs-qs.mean(axis=1, keepdims=True)) / jnp.maximum(1e-6, qs.std(axis=1, keepdims=True))  # Normalize logits.
+        alpha = jax.lax.stop_gradient(self.network.select('alpha')(params=None))
+        dist = distrax.Categorical(logits=qs / jnp.maximum(1e-6, alpha))
         actions = dist.sample(seed=seed)
         return actions
 
@@ -237,9 +259,14 @@ class CRLSearchAgent(flax.struct.PyTreeNode):
                 gc_encoder=encoders.get('actor'),
             )
 
+        if config['target_entropy'] is None:
+            config['target_entropy'] = -config['target_entropy_multiplier'] * action_dim
+        alpha_def = LogParam()
+
         network_info = dict(
             critic=(critic_def, (ex_observations, ex_goals, ex_actions)),
             actor=(actor_def, (ex_observations, ex_goals)),
+            alpha=(alpha_def, ()),
         )
         if config['actor_loss'] == 'awr':
             network_info.update(
@@ -287,6 +314,8 @@ def get_config():
             gc_negative=False,  # Unused (defined for compatibility with GCDataset).
             p_aug=0.0,  # Probability of applying image augmentation.
             frame_stack=ml_collections.config_dict.placeholder(int),  # Number of frames to stack.
+            target_entropy_multiplier=0.5,  # Multiplier for the target entropy (used in SAC-like agents).
+            target_entropy=-jnp.log(6),  # Target entropy (None for automatic tuning).
         )
     )
     return config
