@@ -50,12 +50,12 @@ moving_boxes_max=5
 
 for seed in 1 2 3
 do
-    for max_rb in 100 500 1000 2000
+    for alpha in 0.1 
     do
         CUDA_VISIBLE_DEVICES=$GPU_ID uv run --active src/train.py \
         env:box-pushing \
         --agent.agent_name crl \
-        --exp.name rb_${max_rb}_moving_boxes_${moving_boxes_max}_grid_${grid_size}_range_${number_of_boxes_min}_${number_of_boxes_max}_alpha_${alpha} \
+        --exp.name softmax_q_data_collection_moving_boxes_${moving_boxes_max}_grid_${grid_size}_range_${number_of_boxes_min}_${number_of_boxes_max}_alpha_${alpha} \
         --env.number_of_boxes_max ${number_of_boxes_max} \
         --env.number_of_boxes_min ${number_of_boxes_min} \
         --env.number_of_moving_boxes_max ${moving_boxes_max} \
@@ -63,9 +63,10 @@ do
         --exp.gamma 0.99 \
         --env.episode_length 100 \
         --exp.seed $seed \
-        --exp.project "alpha_0_hardcode" \
+        --exp.project "crl_actor_vs_critic" \
         --exp.epochs 50 \
-        --agent.alpha 0 \
-        --exp.max_replay_size ${max_rb} 
+        --exp.gif_every 5 \
+        --agent.alpha ${alpha} \
+        --exp.max_replay_size 10000
     done
 done

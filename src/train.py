@@ -69,7 +69,6 @@ def extract_at_indices(data, indices):
     return jax.tree_util.tree_map(lambda x: x[jnp.arange(x.shape[0]), indices], data)
 
 
-
 @functools.partial(jax.jit, static_argnums=(4,))
 def get_single_pair_from_every_env(state, future_state, goal_index, key, use_double_batch_trick=False):
     """Sample two random indices and concatenate the results."""

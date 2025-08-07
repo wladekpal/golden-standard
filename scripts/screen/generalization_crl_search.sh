@@ -6,7 +6,7 @@ grid_size=$2
 number_of_boxes_min=3
 number_of_boxes_max=7
 
-exclude_dirs=( ".github" ".ruff_cache" "wandb" ".vscode" ".idea" "__pycache__" ".venv" "experiments")
+exclude_dirs=( ".github" ".ruff_cache" "wandb" ".vscode" ".idea" "__pycache__" ".venv" "experiments" ".git" "notebooks")
 
 # Experiment name
 exp_name="test_generalization_sc"
@@ -50,12 +50,12 @@ moving_boxes_max=5
 
 for seed in 1 2 3
 do
-    for alpha in 0.0
+    for target_entropy in -1.1 -0.69 -1.38 # ln(1/3) and ln(1/2) and ln(1/4)
     do
         CUDA_VISIBLE_DEVICES=$GPU_ID uv run --active src/train.py \
         env:box-pushing \
         --agent.agent_name crl_search \
-        --exp.name fixed_temp_1_${moving_boxes_max}_grid_${grid_size}_range_${number_of_boxes_min}_${number_of_boxes_max}_alpha_${alpha} \
+        --exp.name q_not_norm_mse_temp_tuning_${moving_boxes_max}_grid_${grid_size}_range_${number_of_boxes_min}_${number_of_boxes_max}_target_entropy_${target_entropy} \
         --env.number_of_boxes_max ${number_of_boxes_max} \
         --env.number_of_boxes_min ${number_of_boxes_min} \
         --env.number_of_moving_boxes_max ${moving_boxes_max} \
@@ -63,9 +63,9 @@ do
         --exp.gamma 0.99 \
         --env.episode_length 100 \
         --exp.seed $seed \
-        --exp.project "test_crl_search" \
+        --exp.project "alpha_tuning" \
         --exp.epochs 50 \
-        --agent.alpha $alpha 
-        # --env.truncate_when_success 
+        --agent.alpha 0.1 \
+        --agent.target_entropy ${target_entropy} 
     done
 done
