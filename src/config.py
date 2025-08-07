@@ -19,6 +19,7 @@ class ExpConfig:
     seed: int = 0
     max_replay_size: int = 10000
     epochs: int = 10
+    gif_every: int = 5
     use_targets: bool = False
     use_double_batch_trick: bool = False
     gamma: float = 0.99

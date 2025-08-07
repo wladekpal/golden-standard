@@ -17,10 +17,11 @@ from impls.agents import create_agent
 from envs.block_moving_env import AutoResetWrapper, TimeStep, GridStatesEnum, BoxPushingConfig
 from config import ROOT_DIR
 from impls.utils.checkpoints import restore_agent, save_agent
+from utils import log_gif, sample_actions_critic
 
 
-@functools.partial(jax.jit, static_argnums=(2, 3, 4, 5))
-def collect_data(agent, key, env, num_envs, episode_length, use_targets=False):
+@functools.partial(jax.jit, static_argnums=(2, 3, 4, 5, 6))
+def collect_data(agent, key, env, num_envs, episode_length, use_targets=False, critic_temp=None):
     def step_fn(carry, step_num):
         state, info, key = carry
         key, sample_key = jax.random.split(key)
@@ -34,9 +35,13 @@ def collect_data(agent, key, env, num_envs, episode_length, use_targets=False):
                 goal=GridStatesEnum.remove_targets(state.goal)
             )
         )
-
-        actions = agent.sample_actions(state_agent.grid.reshape(num_envs, -1), state_agent.goal.reshape(num_envs, -1),
+        if critic_temp is None:
+            actions = agent.sample_actions(state_agent.grid.reshape(num_envs, -1), state_agent.goal.reshape(num_envs, -1),
                                        seed=sample_key)
+        else:
+            actions = sample_actions_critic(agent, state_agent.grid.reshape(num_envs, -1), state_agent.goal.reshape(num_envs, -1),
+                                       seed=sample_key, temperature=critic_temp)
+
         new_state, reward, done, info = env.step(state, actions)
         timestep = TimeStep(
             key=state.key,
@@ -111,7 +116,13 @@ def get_single_pair_from_every_env(state, future_state, goal_index, key, use_dou
         key
     )
 
-def evaluate_agent_in_specific_env(agent, original_env, key, jitted_flatten_batch, number_of_boxes, num_envs=1024, episode_length=100, use_double_batch_trick=False, gamma=0.99, use_targets=False, use_original_env=False, create_gif=False):
+def evaluate_agent_in_specific_env(agent, original_env, key, jitted_flatten_batch, number_of_boxes, config, use_original_env=False, create_gif=False, critic_temp=None):
+    episode_length = config.env.episode_length
+    num_envs = config.exp.num_envs
+    use_double_batch_trick = config.exp.use_double_batch_trick
+    use_targets = config.exp.use_targets
+    gamma = config.exp.gamma
+
     if use_original_env:
         env_eval = original_env
         prefix = "eval"
@@ -121,12 +132,12 @@ def evaluate_agent_in_specific_env(agent, original_env, key, jitted_flatten_batc
         env_eval = AutoResetWrapper(env_eval)
         env_eval.step = jax.jit(jax.vmap(env_eval.step))
         env_eval.reset = jax.jit(jax.vmap(env_eval.reset))
-        prefix = f"eval_{number_of_boxes}"
-        prefix_gif = f"gif_{number_of_boxes}"
+        prefix = f"eval_{number_of_boxes}" if critic_temp is None else f"eval_{number_of_boxes}_temp_{critic_temp}"
+        prefix_gif = f"gif_{number_of_boxes}" if critic_temp is None else f"gif_{number_of_boxes}_temp_{critic_temp}"
 
     data_key, double_batch_key = jax.random.split(key, 2)
     # Use collect_data for evaluation rollouts
-    _, info, timesteps = collect_data(agent, data_key, env_eval, num_envs, episode_length, use_targets=use_targets)
+    _, info, timesteps = collect_data(agent, data_key, env_eval, num_envs, episode_length, use_targets=use_targets, critic_temp=critic_temp)
     timesteps = jax.tree_util.tree_map(lambda x: x.swapaxes(1, 0), timesteps)
 
     batch_keys = jax.random.split(data_key, num_envs)
@@ -168,35 +179,27 @@ def evaluate_agent_in_specific_env(agent, original_env, key, jitted_flatten_batc
     }
 
     if create_gif:
-        grid_size = state.grid.shape[-2:]
-        fig, ax = plt.subplots(figsize=grid_size)
-        
-        animate = functools.partial(original_env.animate, ax, timesteps, img_prefix=os.path.join(ROOT_DIR, 'assets'))
-        
-        # Create animation
-        anim = animation.FuncAnimation(fig, animate, frames=episode_length, interval=80, repeat=False)
-        
-        # Save as GIF
-        gif_path = f"/tmp/block_moving_epoch.gif"
-        anim.save(gif_path, writer='pillow')
-        plt.close()
-
-        wandb.log({f"{prefix_gif}": wandb.Video(gif_path, format="gif")})
-
+        log_gif(original_env, episode_length, prefix_gif, timesteps, state)
 
     return eval_info_tmp, loss_info
 
 
-def evaluate_agent(agent, env, key, jitted_flatten_batch, epoch, num_envs=1024, episode_length=100, use_double_batch_trick=False, gamma=0.99, use_targets=False):
+
+def evaluate_agent(agent, env, key, jitted_flatten_batch, epoch, config, critic_temps=None):
     """Evaluate agent by running rollouts using collect_data and computing losses."""
     eval_info = {}
-    create_gif = epoch % 5 == 0
+    create_gif = epoch % config.exp.gif_every == 0 and epoch > 0
+
     for number_of_boxes in range(1, 12, 2):
         key, new_key = jax.random.split(key, 2)
-        eval_info_tmp, loss_info = evaluate_agent_in_specific_env(agent, env, new_key, jitted_flatten_batch, number_of_boxes, num_envs, episode_length, use_double_batch_trick, gamma, use_targets, create_gif=create_gif)
+        eval_info_tmp, loss_info = evaluate_agent_in_specific_env(agent, env, new_key, jitted_flatten_batch, number_of_boxes, config, use_original_env=False, create_gif=create_gif)
         eval_info.update(eval_info_tmp)
+        if critic_temps is not None:
+            for critic_temp in critic_temps:
+                eval_info_tmp, loss_info = evaluate_agent_in_specific_env(agent, env, new_key, jitted_flatten_batch, number_of_boxes, config, use_original_env=False, create_gif=create_gif, critic_temp=critic_temp)
+                eval_info.update(eval_info_tmp)
 
-    eval_info_tmp, loss_info = evaluate_agent_in_specific_env(agent, env, key, jitted_flatten_batch, number_of_boxes, num_envs, episode_length, use_double_batch_trick, gamma, use_targets, use_original_env=True, create_gif=create_gif)
+    eval_info_tmp, loss_info = evaluate_agent_in_specific_env(agent, env, key, jitted_flatten_batch, number_of_boxes, config, use_original_env=True, create_gif=create_gif)
     eval_info.update(eval_info_tmp)
     eval_info.update(loss_info)
     eval_info.update({"epoch": epoch})
@@ -302,14 +305,16 @@ def train(config: Config):
     run_directory = os.path.join(ROOT_DIR, "runs", config.exp.name)
     os.makedirs(run_directory, exist_ok=True)
 
-    evaluate_agent(agent, env, key, jitted_flatten_batch, 0, config.exp.num_envs, config.env.episode_length, config.exp.use_double_batch_trick, config.exp.gamma, config.exp.use_targets)
+    critic_temps = [0.01, 0.2, 0.5, 1.0, 2.0] 
+    evaluate_agent(agent, env, key, jitted_flatten_batch, 0, config, critic_temps=critic_temps)
     save_agent(agent, config, save_dir=run_directory, epoch=0)
     
     for epoch in range(config.exp.epochs):
         for _ in range(10):
             buffer_state, agent, key = train_n_epochs(buffer_state, agent, key)
 
-        evaluate_agent(agent, env, key, jitted_flatten_batch, epoch+1, config.exp.num_envs, config.env.episode_length,  config.exp.use_double_batch_trick, config.exp.gamma, config.exp.use_targets)
+
+        evaluate_agent(agent, env, key, jitted_flatten_batch, epoch+1, config, critic_temps=critic_temps)
         save_agent(agent, config, save_dir=run_directory, epoch=epoch+1)
 
 
