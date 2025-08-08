@@ -304,8 +304,7 @@ def train(config: Config):
     run_directory = os.path.join(ROOT_DIR, "runs", config.exp.name)
     os.makedirs(run_directory, exist_ok=True)
 
-    critic_temps = [0.01, 0.2, 0.5, 1.0, 2.0] 
-    evaluate_agent(agent, env, key, jitted_flatten_batch, 0, config, critic_temps=critic_temps)
+    evaluate_agent(agent, env, key, jitted_flatten_batch, 0, config, critic_temps=config.exp.critic_temps)
     save_agent(agent, config, save_dir=run_directory, epoch=0)
     
     for epoch in range(config.exp.epochs):
@@ -313,7 +312,7 @@ def train(config: Config):
             buffer_state, agent, key = train_n_epochs(buffer_state, agent, key)
 
 
-        evaluate_agent(agent, env, key, jitted_flatten_batch, epoch+1, config, critic_temps=critic_temps)
+        evaluate_agent(agent, env, key, jitted_flatten_batch, epoch+1, config, critic_temps=config.exp.critic_temps)
         save_agent(agent, config, save_dir=run_directory, epoch=epoch+1)
 
 

@@ -1,5 +1,8 @@
 import os
 from dataclasses import dataclass
+from typing import Optional
+
+from git import List
 from envs import legal_envs
 from impls.agents import default_config
 from ml_collections import FrozenConfigDict
@@ -23,7 +26,7 @@ class ExpConfig:
     use_targets: bool = False
     use_double_batch_trick: bool = False
     gamma: float = 0.99
-
+    critic_temps: Optional[List[float]] = None  # <- added this line
 
 
 @dataclass
