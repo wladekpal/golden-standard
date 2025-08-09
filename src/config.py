@@ -17,8 +17,9 @@ class ExpConfig:
     num_envs: int = 1024
     batch_size: int = 1024
     seed: int = 0
-    max_replay_size = 10000
+    max_replay_size: int = 10000
     epochs: int = 10
+    eval_interval: int = 10
     use_targets: bool = False
     use_double_batch_trick: bool = False
     gamma: float = 0.99
