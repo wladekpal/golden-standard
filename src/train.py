@@ -224,7 +224,7 @@ def train(config: Config):
         project=config.exp.project,
         name=config.exp.name,
         config=config,
-        entity=config.entity,
+        entity=config.exp.entity,
         mode=config.exp.mode,
     )
 
