@@ -131,7 +131,7 @@ class TrajectoryUniformSamplingQueue:
             )
         key, sample_key, shuffle_key = jax.random.split(buffer_state.key, 3)
         # Note: this is the number of envs to sample but it can be modified if there is OOM
-        shape = self.num_envs
+        shape = self._sample_batch_size
 
         # Sampling envs idxs
         envs_idxs = jax.random.choice(sample_key, jnp.arange(self.num_envs), shape=(shape,), replace=False)
