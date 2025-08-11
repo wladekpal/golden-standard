@@ -50,18 +50,18 @@ class GridStatesEnum:
         # Create a mapping array for vectorized lookup
         # Map each state to its corresponding no-target state
         mapping_array = jnp.array([
-            0,   # EMPTY -> EMPTY
-            1,   # BOX -> BOX
-            0,   # TARGET -> EMPTY
-            4,   # AGENT_CARRYING_BOX -> AGENT_CARRYING_BOX
-            3,   # AGENT -> AGENT
-            5,   # AGENT_ON_BOX -> AGENT_ON_BOX
-            3,   # AGENT_ON_TARGET -> AGENT
-            4,   # AGENT_ON_TARGET_CARRYING_BOX -> AGENT_CARRYING_BOX
-            5,   # AGENT_ON_TARGET_WITH_BOX -> AGENT_ON_BOX
-            11,  # AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX -> AGENT_ON_BOX_CARRYING_BOX
-            1,   # BOX_ON_TARGET -> BOX
-            11,  # AGENT_ON_BOX_CARRYING_BOX -> AGENT_ON_BOX_CARRYING_BOX
+            0,   # 0 EMPTY -> EMPTY 0
+            1,   # 1 BOX -> BOX 1
+            0,   # 2 TARGET -> EMPTY 0
+            3,   # 3 AGENT -> AGENT 3
+            4,   # 4 AGENT_CARRYING_BOX -> AGENT_CARRYING_BOX 4
+            5,   # 5 AGENT_ON_BOX -> AGENT_ON_BOX 5
+            3,   # 6 AGENT_ON_TARGET -> AGENT 3
+            4,   # 7 AGENT_ON_TARGET_CARRYING_BOX -> AGENT_CARRYING_BOX 4
+            5,   # 8 AGENT_ON_TARGET_WITH_BOX -> AGENT_ON_BOX 5
+            11,  # 9 AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX -> AGENT_ON_BOX_CARRYING_BOX
+            1,   # 10 BOX_ON_TARGET -> BOX
+            11,  # 11 AGENT_ON_BOX_CARRYING_BOX -> AGENT_ON_BOX_CARRYING_BOX
         ], dtype=jnp.int8)
         
         # Apply the mapping
