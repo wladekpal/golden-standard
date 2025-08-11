@@ -29,6 +29,7 @@ class ExpConfig:
     eval_mirrored: bool = False
     num_gifs: int = 1
     save_dir: str | None = None
+    gif_every: int = 10
 
 
 

@@ -19,6 +19,7 @@ from impls.agents import create_agent
 from envs.block_moving_env import AutoResetWrapper, TimeStep, GridStatesEnum, BoxPushingConfig
 from config import ROOT_DIR
 from impls.utils.checkpoints import restore_agent, save_agent
+from src.utils import log_gif
 
 
 @functools.partial(jax.jit, static_argnums=(2, 3, 4, 5))
@@ -166,21 +167,7 @@ def evaluate_agent_in_specific_env(agent, key, jitted_flatten_batch, config, nam
     }
 
     if create_gif:
-        grid_size = (state.grid.shape[-2] * config.exp.num_gifs, state.grid.shape[-1])
-        fig, axs = plt.subplots(ncols=config.exp.num_gifs, figsize=grid_size)
-        
-        animate = functools.partial(env_eval.animate, axs, timesteps, img_prefix=os.path.join(ROOT_DIR, 'assets'))
-        
-        # Create animation
-        anim = animation.FuncAnimation(fig, animate, frames=config.env.episode_length, interval=80, repeat=False)
-        
-        # Save as GIF
-        gif_path = f"/tmp/block_moving_epoch.gif"
-        anim.save(gif_path, writer='pillow')
-        plt.close()
-
-        wandb.log({f"{prefix_gif}": wandb.Video(gif_path, format="gif")})
-
+        log_gif(env_eval, config.env.episode_length, prefix_gif, timesteps, state)
 
     return eval_info_tmp, loss_info
 
@@ -192,7 +179,7 @@ def evaluate_agent(agent, key, jitted_flatten_batch, epoch, config):
     eval_names_suff = [""]
 
     eval_info = {"epoch": epoch}
-    create_gif = epoch % 5 == 0 and config.exp.num_gifs > 0
+    create_gif = epoch > 0 and epoch % config.exp.gif_every == 0
 
     if config.exp.eval_mirrored:
         mirroring_config = copy.deepcopy(config)
