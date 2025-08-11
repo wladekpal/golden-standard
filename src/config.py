@@ -24,7 +24,7 @@ class ExpConfig:
     gamma: float = 0.99
     eval_different_box_numbers: bool = False
     eval_mirrored: bool = False
-    num_gifs: int = 1
+    gif_every: int = 10
 
 
 
