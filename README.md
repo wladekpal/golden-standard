@@ -18,3 +18,8 @@ Install pre-commit globally (you can [follow this article](https://adamj.eu/tech
 ```bash
 uv tool install pre-commit --with pre-commit-uv
 ```
+
+You can also run:
+```bash
+uv run ruff check --fix
+```
