@@ -42,9 +42,7 @@ class GridStatesEnum:
     AGENT_ON_TARGET = jnp.int8(6)  # Agent is on target
     AGENT_ON_TARGET_CARRYING_BOX = jnp.int8(7)  # Agent is on target carrying the box
     AGENT_ON_TARGET_WITH_BOX = jnp.int8(8)  # Agent is on target on which there is a box
-    AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX = jnp.int8(
-        9
-    )  # Agent is on target on which there is a box and is carrying a box
+    AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX = jnp.int8(9)  # noqa: E501 Agent is on target on which there is a box and is carrying a box
     BOX_ON_TARGET = jnp.int8(10)  # Box is on target
     AGENT_ON_BOX_CARRYING_BOX = jnp.int8(11)  # Agent is on box carrying a box
 
@@ -528,24 +526,6 @@ class BoxPushingEnv:
 
         return new_pos, new_grid, new_agent_has_box
 
-    def _handle_putdown(self, state: BoxPushingState) -> Tuple[jax.Array, bool]:
-        """Handle putdown action."""
-
-        row, col = state.agent_pos[0], state.agent_pos[1]
-        current_cell = state.grid[row, col]
-
-        def putdown_valid():
-            new_grid = state.grid.at[row, col].set(GridStatesEnum.AGENT_ON_TARGET_WITH_BOX)
-            return new_grid, False
-
-        def putdown_invalid():
-            return state.grid, state.agent_has_box
-
-        new_grid, new_agent_has_box = jax.lax.cond(
-            current_cell == GridStatesEnum.AGENT_ON_TARGET_CARRYING_BOX, putdown_valid, putdown_invalid
-        )
-        return new_grid, new_agent_has_box
-
     def _is_goal_reached(self, grid: jax.Array, number_of_boxes: int) -> bool:
         """Check if all boxes are in target cells."""
         return (
@@ -580,6 +560,24 @@ class BoxPushingEnv:
 
         new_grid, new_agent_has_box = jax.lax.cond(
             current_cell == GridStatesEnum.AGENT_ON_BOX, pickup_valid, pickup_invalid
+        )
+        return new_grid, new_agent_has_box
+
+    def _handle_putdown(self, state: BoxPushingState) -> Tuple[jax.Array, bool]:
+        """Handle putdown action."""
+
+        row, col = state.agent_pos[0], state.agent_pos[1]
+        current_cell = state.grid[row, col]
+
+        def putdown_valid():
+            new_grid = state.grid.at[row, col].set(GridStatesEnum.AGENT_ON_TARGET_WITH_BOX)
+            return new_grid, False
+
+        def putdown_invalid():
+            return state.grid, state.agent_has_box
+
+        new_grid, new_agent_has_box = jax.lax.cond(
+            current_cell == GridStatesEnum.AGENT_ON_TARGET_CARRYING_BOX, putdown_valid, putdown_invalid
         )
         return new_grid, new_agent_has_box
 
