@@ -191,14 +191,15 @@ def segment_ids_per_row(x: jnp.ndarray) -> jnp.ndarray:
     # 1. Where does the sequence go “backwards”?
     #    diff < 0  →  a wrap-around happened between col k-1 and k
     resets = jnp.concatenate(
-        [jnp.zeros((*x.shape[:-1], 1), dtype=jnp.int32),     # first column never resets
-         (jnp.diff(x, axis=-1) < 0).astype(jnp.int32)],
-        axis=-1
+        [
+            jnp.zeros((*x.shape[:-1], 1), dtype=jnp.int32),  # first column never resets
+            (jnp.diff(x, axis=-1) < 0).astype(jnp.int32),
+        ],
+        axis=-1,
     )
 
     # 2. Turn those reset flags into running segment numbers.
     return jnp.cumsum(resets, axis=-1)
-
 
 
 # TODO: will need to adjust it later for minigrid envs (if we would like to use them)
@@ -221,8 +222,8 @@ def flatten_batch(gamma, transition, sample_key, get_next_obs=False):
     # the same result can be obtained using probs = is_future_mask * (gamma ** jnp.cumsum(is_future_mask, axis=-1))
     single_trajectories = segment_ids_per_row(transition.steps.squeeze())
     single_trajectories = jnp.concatenate(
-            [single_trajectories[:, jnp.newaxis].T] * seq_len,
-            axis=0,
+        [single_trajectories[:, jnp.newaxis].T] * seq_len,
+        axis=0,
     )
     # array of seq_len x seq_len where a row is an array of traj_ids that correspond to the episode index from which that time-step was collected
     # timesteps collected from the same episode will have the same traj_id. All rows of the single_trajectories are same.
@@ -238,26 +239,30 @@ def flatten_batch(gamma, transition, sample_key, get_next_obs=False):
     else:
         goal_index = jax.random.categorical(sample_key, jnp.log(probs))
 
-    future_state = jax.tree_util.tree_map(lambda x: jnp.take(x, goal_index[:-1], axis=0), transition)  # the last goal_index cannot be considered as there is no future.
-    states = jax.tree_util.tree_map(lambda x: x[:-1], transition) # all states but the last one are considered
-
+    future_state = jax.tree_util.tree_map(
+        lambda x: jnp.take(x, goal_index[:-1], axis=0), transition
+    )  # the last goal_index cannot be considered as there is no future.
+    states = jax.tree_util.tree_map(lambda x: x[:-1], transition)  # all states but the last one are considered
 
     return states, future_state, goal_index
 
 
-
 if __name__ == "__main__":
     # test segment_ids_per_row
-    row = jnp.array([13, 14, 15,  0, 1, 2, 3, 0, 2])
-    print(segment_ids_per_row(row))          # → [0 0 0 1 1 1 1]
+    row = jnp.array([13, 14, 15, 0, 1, 2, 3, 0, 2])
+    print(segment_ids_per_row(row))  # → [0 0 0 1 1 1 1]
 
-    mat = jnp.array([[37,38,39,40,41,42,43,44,45,46],
-                    [17,18,19,20,21,22,23,24,25,26],
-                    [16,17,18,19,20,21,22,23,24, 0],
-                    [14,15,16,17,18,19,20,21, 0, 1],
-                    [23,24,25,26,27,28,29,30,31,32]])
+    mat = jnp.array(
+        [
+            [37, 38, 39, 40, 41, 42, 43, 44, 45, 46],
+            [17, 18, 19, 20, 21, 22, 23, 24, 25, 26],
+            [16, 17, 18, 19, 20, 21, 22, 23, 24, 0],
+            [14, 15, 16, 17, 18, 19, 20, 21, 0, 1],
+            [23, 24, 25, 26, 27, 28, 29, 30, 31, 32],
+        ]
+    )
     single_trajectories = segment_ids_per_row(mat)
-    print(single_trajectories) 
+    print(single_trajectories)
 
     single_trajectories_row = segment_ids_per_row(row)
     single_trajectories = jnp.concatenate(

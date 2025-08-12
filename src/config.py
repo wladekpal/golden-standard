@@ -37,5 +37,3 @@ class Config:
     exp: ExpConfig
     env: legal_envs
     agent: FrozenConfigDict = default_config
-
-    
