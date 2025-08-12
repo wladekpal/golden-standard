@@ -178,10 +178,24 @@ def evaluate_agent_in_specific_env(agent, key, jitted_flatten_batch, config, nam
         f"{prefix}/mean_success": timesteps.success[done_mask].mean(),
         f"{prefix}/mean_boxes_on_target": info["boxes_on_target"].mean(),
         f"{prefix}/total_loss": loss,
-        f"{prefix}/contrastive_loss": loss_info["critic/contrastive_loss"],
         f"{prefix}/actor_loss": loss_info["actor/actor_loss"],
-        f"{prefix}/cat_acc": loss_info["critic/categorical_accuracy"],
     }
+    if config.agent.agent_name == "crl":
+        eval_info_tmp.update(
+            {
+                f"{prefix}/contrastive_loss": loss_info["critic/contrastive_loss"],
+                f"{prefix}/cat_acc": loss_info["critic/categorical_accuracy"],
+            }
+        )
+    elif config.agent.agent_name == "gciql":
+        eval_info_tmp.update(
+            {
+                f"{prefix}/critic_loss": loss_info["critic/critic_loss"],
+                f"{prefix}/q_mean": loss_info["critic/q_mean"],
+            }
+        )
+    else:
+        raise ValueError(f"Unknown agent name {config.agent.agent_name}")
 
     if create_gif:
         log_gif(env_eval, config.env.episode_length, prefix_gif, timesteps, state)
