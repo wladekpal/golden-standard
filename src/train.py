@@ -19,11 +19,11 @@ from impls.agents import create_agent
 from envs.block_moving_env import AutoResetWrapper, TimeStep, GridStatesEnum, BoxPushingConfig
 from config import ROOT_DIR
 from impls.utils.checkpoints import restore_agent, save_agent
-from src.utils import log_gif
+from utils import log_gif, sample_actions_critic
 
 
-@functools.partial(jax.jit, static_argnums=(2, 3, 4, 5))
-def collect_data(agent, key, env, num_envs, episode_length, use_targets=False):
+@functools.partial(jax.jit, static_argnums=(2, 3, 4, 5, 6))
+def collect_data(agent, key, env, num_envs, episode_length, use_targets=False, critic_temp=None):
     def step_fn(carry, step_num):
         state, info, key = carry
         key, sample_key = jax.random.split(key)
@@ -38,8 +38,13 @@ def collect_data(agent, key, env, num_envs, episode_length, use_targets=False):
             )
         )
 
-        actions = agent.sample_actions(state_agent.grid.reshape(num_envs, -1), state_agent.goal.reshape(num_envs, -1),
+        if critic_temp is None:
+            actions = agent.sample_actions(state_agent.grid.reshape(num_envs, -1), state_agent.goal.reshape(num_envs, -1),
                                        seed=sample_key)
+        else:
+            actions = sample_actions_critic(agent, state_agent.grid.reshape(num_envs, -1), state_agent.goal.reshape(num_envs, -1),
+                                       seed=sample_key, temperature=critic_temp)
+
         new_state, reward, done, info = env.step(state, actions)
         timestep = TimeStep(
             key=state.key,
@@ -114,7 +119,7 @@ def get_single_pair_from_every_env(state, future_state, goal_index, key, use_dou
         key
     )
 
-def evaluate_agent_in_specific_env(agent, key, jitted_flatten_batch, config, name, create_gif=False):
+def evaluate_agent_in_specific_env(agent, key, jitted_flatten_batch, config, name, create_gif=False, critic_temp=None):
     
     env_eval = create_env(config.env)
     env_eval = AutoResetWrapper(env_eval)
@@ -125,7 +130,7 @@ def evaluate_agent_in_specific_env(agent, key, jitted_flatten_batch, config, nam
 
     data_key, double_batch_key = jax.random.split(key, 2)
     # Use collect_data for evaluation rollouts
-    _, info, timesteps = collect_data(agent, data_key, env_eval, config.exp.num_envs, config.env.episode_length, use_targets=config.exp.use_targets)
+    _, info, timesteps = collect_data(agent, data_key, env_eval, config.exp.num_envs, config.env.episode_length, use_targets=config.exp.use_targets, critic_temp=critic_temp)
     timesteps = jax.tree_util.tree_map(lambda x: x.swapaxes(1, 0), timesteps)
 
     batch_keys = jax.random.split(data_key, config.exp.num_envs)

@@ -32,7 +32,6 @@ class ExpConfig:
     gif_every: int = 10
 
 
-
 @dataclass
 class Config:
     exp: ExpConfig

@@ -1,5 +1,5 @@
 from typing import Union, Annotated
-from envs.block_moving_env import BoxPushingConfig, BoxPushingEnv
+from .block_moving_env import BoxPushingConfig, BoxPushingEnv
 from flax.struct import dataclass
 import tyro
 from dataclasses import asdict
