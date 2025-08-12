@@ -393,7 +393,7 @@ class BoxPushingEnv:
         else:
             done = new_steps >= self.episode_length
 
-        reward = self._get_reward(new_grid, state.number_of_boxes)
+        reward = self._get_reward(state.grid, new_grid, state.number_of_boxes)
         success = self._is_goal_reached(new_grid, state.number_of_boxes).astype(jnp.int32)
 
         new_state = BoxPushingState(
@@ -533,17 +533,23 @@ class BoxPushingEnv:
             == number_of_boxes
         )
 
-    def _get_reward(self, grid: jax.Array, number_of_boxes: int) -> float:
+    def _get_reward(self, old_grid: jax.Array, new_grid: jax.Array, number_of_boxes: int) -> float:
         """Get reward for the current state."""
-        boxes_on_targets = (
-            jnp.sum(grid == GridStatesEnum.BOX_ON_TARGET)
-            + jnp.sum(grid == GridStatesEnum.AGENT_ON_TARGET_WITH_BOX)
-            + jnp.sum(grid == GridStatesEnum.AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX)
+        boxes_on_targets_new = (
+            jnp.sum(new_grid == GridStatesEnum.BOX_ON_TARGET)
+            + jnp.sum(new_grid == GridStatesEnum.AGENT_ON_TARGET_WITH_BOX)
+            + jnp.sum(new_grid == GridStatesEnum.AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX)
         )
         if self.dense_rewards:
-            return boxes_on_targets
+            boxes_on_targets_old = (
+                jnp.sum(old_grid == GridStatesEnum.BOX_ON_TARGET)
+                + jnp.sum(old_grid == GridStatesEnum.AGENT_ON_TARGET_WITH_BOX)
+                + jnp.sum(old_grid == GridStatesEnum.AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX)
+            )
+            diff = boxes_on_targets_new - boxes_on_targets_old
+            return diff
         else:
-            return (boxes_on_targets == number_of_boxes).astype(jnp.int32)
+            return (boxes_on_targets_new == number_of_boxes).astype(jnp.int32)
 
     def _handle_pickup(self, state: BoxPushingState) -> Tuple[jax.Array, bool]:
         """Handle pickup action."""
@@ -588,6 +594,7 @@ class BoxPushingEnv:
         state, _ = self.reset(key)
         done = False
         total_reward = 0
+        reward = 0
 
         print("=== Box Pushing Game ===")
         print("Controls: w(up), s(down), a(left), d(right), e(pickup), r(drop)")
@@ -597,7 +604,7 @@ class BoxPushingEnv:
         while not done:
             # Display current state
             self._display_state(state)
-            print(f"Steps: {state.steps}, Reward: {total_reward}")
+            print(f"Steps: {state.steps}, Return: {total_reward}, Reward: {reward}")
 
             # Get user input
             action = None
@@ -643,12 +650,7 @@ class BoxPushingEnv:
     def _display_state(self, state: BoxPushingState):
         """Display the current game state in ASCII."""
         print("\n" + "=" * (self.grid_size * 2 + 1))
-        for row in range(self.grid_size):
-            print("|", end="")
-            for col in range(self.grid_size):
-                cell_value = state.grid[row, col]
-                print(f"{cell_value} ", end="")
-            print("|")
+        print(state.grid)
         print("=" * (self.grid_size * 2 + 1))
 
     def get_dummy_timestep(self, key):
@@ -745,12 +747,13 @@ class AutoResetWrapper(Wrapper):
 
 if __name__ == "__main__":
     env = BoxPushingEnv(
-        grid_size=6,
+        grid_size=4,
         number_of_boxes_max=3,
         number_of_boxes_min=3,
         number_of_moving_boxes_max=2,
         level_generator="quarter",
         generator_mirroring=False,
+        dense_rewards=True,
     )
     key = jax.random.PRNGKey(0)
     env.play_game(key)
