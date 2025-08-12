@@ -19,7 +19,7 @@ Install pre-commit globally (you can [follow this article](https://adamj.eu/tech
 uv tool install pre-commit --with pre-commit-uv
 ```
 
-You can also run:
+You can also run following command to repair automatically most of the formatting/linting problems:
 ```bash
 uv run ruff check --fix
 ```
