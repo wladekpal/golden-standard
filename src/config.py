@@ -13,17 +13,22 @@ class ExpConfig:
     name: str
     project: str = "crl_subgoal"
     mode: str = "online"
-    entity: str = None
+    entity: str | None = None
     num_envs: int = 1024
     batch_size: int = 1024
     seed: int = 0
-    max_replay_size = 10000
+    max_replay_size: int = 10000
     epochs: int = 10
+    intervals_per_epoch: int = 100
+    updates_per_rollout: int = 1000
+    eval_interval: int = 10
     use_targets: bool = False
     use_double_batch_trick: bool = False
     gamma: float = 0.99
     eval_different_box_numbers: bool = False
     eval_mirrored: bool = False
+    num_gifs: int = 1
+    save_dir: str | None = None
     gif_every: int = 10
 
 
