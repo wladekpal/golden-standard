@@ -216,7 +216,7 @@ def train(config: Config):
         project=config.exp.project,
         name=config.exp.name,
         config=config,
-        entity=None,
+        entity=config.exp.entity,
         mode=config.exp.mode,
     )
 
@@ -287,35 +287,27 @@ def train(config: Config):
 
 
     @jax.jit
-    def train_epoch(carry, _):
-        buffer_state, agent, key = carry
+    def train_interval(buffer_state, agent, key):
         key, data_key, up_key = jax.random.split(key, 3)
         _, _, timesteps = collect_data(agent, data_key, env, config.exp.num_envs, config.env.episode_length, use_targets=config.exp.use_targets)
         buffer_state = replay_buffer.insert(buffer_state, timesteps)
-        (buffer_state, agent, _), _ = jax.lax.scan(update_step, (buffer_state, agent, up_key), None, length=1000)
-        return (buffer_state, agent, key), None
-
-
-    @functools.partial(jax.jit, static_argnums=(3,))
-    def train_n_epochs(buffer_state, agent, key, epochs=10):
-        (buffer_state, agent, key), _ = jax.lax.scan(
-            train_epoch,
-            (buffer_state, agent, key),
-            None,
-            length=epochs,
-        )
+        (buffer_state, agent, _), _ = jax.lax.scan(update_step, (buffer_state, agent, up_key), None, length=config.exp.updates_per_rollout)
         return buffer_state, agent, key
 
-    # Evaluate before training
-    run_directory = os.path.join(ROOT_DIR, "runs", config.exp.name)
+    if config.exp.save_dir is None:
+        run_directory = os.path.join(ROOT_DIR, "runs", config.exp.name)
+    else:
+        run_directory = os.path.join(config.exp.save_dir, config.exp.name)
+
     os.makedirs(run_directory, exist_ok=True)
 
+    # Evaluate before training
     evaluate_agent(agent, key, jitted_flatten_batch, 0, config)
     save_agent(agent, config, save_dir=run_directory, epoch=0)
     
     for epoch in range(config.exp.epochs):
-        for _ in range(10):
-            buffer_state, agent, key = train_n_epochs(buffer_state, agent, key)
+        for _ in range(config.exp.intervals_per_epoch):
+            buffer_state, agent, key = train_interval(buffer_state, agent, key)
 
         evaluate_agent(agent, key, jitted_flatten_batch, epoch+1, config)
         save_agent(agent, config, save_dir=run_directory, epoch=epoch+1)
@@ -323,4 +315,6 @@ def train(config: Config):
 
 if __name__ == "__main__":
     args = tyro.cli(Config, config=(tyro.conf.ConsolidateSubcommandArgs,))
+    if args.exp.batch_size > args.exp.num_envs:
+        raise ValueError("Batch size has to be less than or equal to number of environments")
     train(args)
