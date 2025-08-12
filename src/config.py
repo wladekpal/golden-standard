@@ -10,23 +10,33 @@ ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 @dataclass
 class ExpConfig:
+    # wandb logging
     name: str
     project: str = "crl_subgoal"
     mode: str = "online"
     entity: str | None = None
+
+    # Replay buffer and batch size and seed
     num_envs: int = 1024
     batch_size: int = 1024
     seed: int = 0
     max_replay_size: int = 10000
+
+    # Number of updates etc
     epochs: int = 10
     intervals_per_epoch: int = 100
     updates_per_rollout: int = 1000
-    eval_interval: int = 10
+
+    # Miscellaneous
     use_targets: bool = False
     use_double_batch_trick: bool = False
     gamma: float = 0.99
+
+    # Evaluation settings
     eval_different_box_numbers: bool = False
     eval_mirrored: bool = False
+
+    # Gifs and
     num_gifs: int = 1
     save_dir: str | None = None
     gif_every: int = 10
