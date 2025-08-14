@@ -235,6 +235,17 @@ def evaluate_agent(agent, key, jitted_flatten_batch, epoch, config):
             agent, key, jitted_flatten_batch, eval_config, eval_name_suff, create_gif=create_gif
         )
         eval_info.update(eval_info_tmp)
+        # With critic softmax(Q) actions:
+        eval_info_tmp, loss_info = evaluate_agent_in_specific_env(
+            agent,
+            key,
+            jitted_flatten_batch,
+            eval_config,
+            eval_name_suff + "soft_q",
+            create_gif=create_gif,
+            critic_temp=1.0,
+        )
+        eval_info.update(eval_info_tmp)
 
         if eval_name_suff == "":
             eval_info.update(loss_info)
