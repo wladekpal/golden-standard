@@ -46,6 +46,7 @@ class GridStatesEnum:
     BOX_ON_TARGET = jnp.int8(10)  # Box is on target
     AGENT_ON_BOX_CARRYING_BOX = jnp.int8(11)  # Agent is on box carrying a box
 
+    # TODO: make this error proof, so the mapping should be done with dict (no there is implicit assumption that there are consecutive ints from 0 on the left side)
     @staticmethod
     @jax.jit
     def remove_targets(grid_state: jax.Array) -> jax.Array:
@@ -54,18 +55,18 @@ class GridStatesEnum:
         # Map each state to its corresponding no-target state
         mapping_array = jnp.array(
             [
-                0,  # 0 EMPTY -> EMPTY 0
-                1,  # 1 BOX -> BOX 1
-                0,  # 2 TARGET -> EMPTY 0
-                3,  # 3 AGENT -> AGENT 3
-                4,  # 4 AGENT_CARRYING_BOX -> AGENT_CARRYING_BOX 4
-                5,  # 5 AGENT_ON_BOX -> AGENT_ON_BOX 5
-                3,  # 6 AGENT_ON_TARGET -> AGENT 3
-                4,  # 7 AGENT_ON_TARGET_CARRYING_BOX -> AGENT_CARRYING_BOX 4
-                5,  # 8 AGENT_ON_TARGET_WITH_BOX -> AGENT_ON_BOX 5
-                11,  # 9 AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX -> AGENT_ON_BOX_CARRYING_BOX
-                1,  # 10 BOX_ON_TARGET -> BOX
-                11,  # 11 AGENT_ON_BOX_CARRYING_BOX -> AGENT_ON_BOX_CARRYING_BOX
+                GridStatesEnum.EMPTY,  # 0 EMPTY -> EMPTY 0
+                GridStatesEnum.BOX,  # 1 BOX -> BOX 1
+                GridStatesEnum.EMPTY,  # 2 TARGET -> EMPTY 0
+                GridStatesEnum.AGENT,  # 3 AGENT -> AGENT 3
+                GridStatesEnum.AGENT_CARRYING_BOX,  # 4 AGENT_CARRYING_BOX -> AGENT_CARRYING_BOX 4
+                GridStatesEnum.AGENT_ON_BOX,  # 5 AGENT_ON_BOX -> AGENT_ON_BOX 5
+                GridStatesEnum.AGENT,  # 6 AGENT_ON_TARGET -> AGENT 3
+                GridStatesEnum.AGENT_CARRYING_BOX,  # 7 AGENT_ON_TARGET_CARRYING_BOX -> AGENT_CARRYING_BOX 4
+                GridStatesEnum.AGENT_ON_BOX,  # 8 AGENT_ON_TARGET_WITH_BOX -> AGENT_ON_BOX 5
+                GridStatesEnum.AGENT_ON_BOX_CARRYING_BOX,  # 9 AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX -> AGENT_ON_BOX_CARRYING_BOX
+                GridStatesEnum.BOX,  # 10 BOX_ON_TARGET -> BOX
+                GridStatesEnum.AGENT_ON_BOX_CARRYING_BOX,  # 11 AGENT_ON_BOX_CARRYING_BOX -> AGENT_ON_BOX_CARRYING_BOX
             ],
             dtype=jnp.int8,
         )
@@ -679,18 +680,18 @@ class BoxPushingEnv:
 
         # Create color mapping for grid states
         imgs = {
-            0: "floor.png",  # EMPTY
-            1: "box.png",  # BOX
-            2: "box_target.png",  # TARGET
-            3: "agent.png",  # AGENT
-            4: "agent_carrying_box.png",  # AGENT_CARRYING_BOX
-            5: "agent_on_box.png",  # AGENT_ON_BOX
-            6: "agent_on_target.png",  # AGENT_ON_TARGET
-            7: "agent_on_target_carrying_box.png",  # AGENT_ON_TARGET_CARRYING_BOX
-            8: "agent_on_target_with_box.png",  # AGENT_ON_TARGET_WITH_BOX
-            9: "agent_on_target_with_box_carrying_box.png",  # AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX
-            10: "box_on_target.png",  # BOX_ON_TARGET
-            11: "agent_on_box_carrying_box.png",  # AGENT_ON_BOX_CARRYING_BOX
+            int(GridStatesEnum.EMPTY): "floor.png",  # EMPTY
+            int(GridStatesEnum.BOX): "box.png",  # BOX
+            int(GridStatesEnum.TARGET): "box_target.png",  # TARGET
+            int(GridStatesEnum.AGENT): "agent.png",  # AGENT
+            int(GridStatesEnum.AGENT_CARRYING_BOX): "agent_carrying_box.png",  # AGENT_CARRYING_BOX
+            int(GridStatesEnum.AGENT_ON_BOX): "agent_on_box.png",  # AGENT_ON_BOX
+            int(GridStatesEnum.AGENT_ON_TARGET): "agent_on_target.png",  # AGENT_ON_TARGET
+            int(GridStatesEnum.AGENT_ON_TARGET_CARRYING_BOX): "agent_on_target_carrying_box.png",  # noqa: E501 AGENT_ON_TARGET_CARRYING_BOX
+            int(GridStatesEnum.AGENT_ON_TARGET_WITH_BOX): "agent_on_target_with_box.png",  # AGENT_ON_TARGET_WITH_BOX
+            int(GridStatesEnum.AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX): "agent_on_target_with_box_carrying_box.png",  # noqa: E501 AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX
+            int(GridStatesEnum.BOX_ON_TARGET): "box_on_target.png",  # BOX_ON_TARGET
+            int(GridStatesEnum.AGENT_ON_BOX_CARRYING_BOX): "agent_on_box_carrying_box.png",  # AGENT_ON_BOX_CARRYING_BOX
         }
 
         # Plot grid
