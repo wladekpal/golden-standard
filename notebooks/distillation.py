@@ -79,7 +79,7 @@ MODEL_PATH = "/home/mbortkie/repos/crl_subgoal/experiments/test_generalization_s
 EPOCHS = 1001
 EVAL_EVERY = 10
 CHECKPOINT = 100
-# FORWARD_KL = True
+RANDOM_GOALS = False
 FIGURES_PATH = f"/home/mbortkie/repos/crl_subgoal/notebooks/figures/{RUN_NAME}"
 os.makedirs(FIGURES_PATH, exist_ok=True)
 
@@ -234,7 +234,7 @@ for FORWARD_KL in [True, False]:
             'rewards': state.reward.reshape(state.reward.shape[0], -1),
             'masks': 1.0 - state.reward.reshape(state.reward.shape[0], -1), # TODO: add success and reward separately
             'value_goals': future_state.grid.reshape(future_state.grid.shape[0], -1),
-            'actor_goals': jnp.roll(future_state.grid.reshape(future_state.grid.shape[0], -1), shift=1, axis=0),
+            'actor_goals': jnp.roll(future_state.grid.reshape(future_state.grid.shape[0], -1), shift=1, axis=0) if RANDOM_GOALS else future_state.grid.reshape(future_state.grid.shape[0], -1),
         }
         return buffer_state, batch
 
@@ -308,7 +308,7 @@ for FORWARD_KL in [True, False]:
     plt.ylabel('Mean reward')
     plt.xlabel('Training steps')
     plt.title('Actor distillation training')
-    plt.savefig(os.path.join(FIGURES_PATH, f'actor_distillation_training_KL_{"forward" if FORWARD_KL else "backward"}.png'))
+    plt.savefig(os.path.join(FIGURES_PATH, f'actor_distillation_training_KL_{"forward" if FORWARD_KL else "backward"}_{"random" if RANDOM_GOALS else "future"}_goals.png'))
     # %% [markdown]
     # ### Generalization tests
 
@@ -336,6 +336,6 @@ for FORWARD_KL in [True, False]:
     ax.grid(axis='y', linestyle='--', alpha=0.7)
 
     plt.tight_layout()
-    plt.savefig(os.path.join(FIGURES_PATH, f'actor_distillation_generalization_KL_{"forward" if FORWARD_KL else "backward"}.png'))
+    plt.savefig(os.path.join(FIGURES_PATH, f'actor_distillation_generalization_KL_{"forward" if FORWARD_KL else "backward"}_{"random" if RANDOM_GOALS else "future"}_goals.png'))
     plt.show()
 
