@@ -42,12 +42,11 @@ class GridStatesEnum:
     AGENT_ON_TARGET = jnp.int8(6)  # Agent is on target
     AGENT_ON_TARGET_CARRYING_BOX = jnp.int8(7)  # Agent is on target carrying the box
     AGENT_ON_TARGET_WITH_BOX = jnp.int8(8)  # Agent is on target on which there is a box
-    AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX = jnp.int8(
-        9
-    )  # Agent is on target on which there is a box and is carrying a box
+    AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX = jnp.int8(9)  # noqa: E501 Agent is on target on which there is a box and is carrying a box
     BOX_ON_TARGET = jnp.int8(10)  # Box is on target
     AGENT_ON_BOX_CARRYING_BOX = jnp.int8(11)  # Agent is on box carrying a box
 
+    # TODO: make this error proof, so the mapping should be done with dict (no there is implicit assumption that there are consecutive ints from 0 on the left side)
     @staticmethod
     @jax.jit
     def remove_targets(grid_state: jax.Array) -> jax.Array:
@@ -56,18 +55,18 @@ class GridStatesEnum:
         # Map each state to its corresponding no-target state
         mapping_array = jnp.array(
             [
-                0,  # 0 EMPTY -> EMPTY 0
-                1,  # 1 BOX -> BOX 1
-                0,  # 2 TARGET -> EMPTY 0
-                3,  # 3 AGENT -> AGENT 3
-                4,  # 4 AGENT_CARRYING_BOX -> AGENT_CARRYING_BOX 4
-                5,  # 5 AGENT_ON_BOX -> AGENT_ON_BOX 5
-                3,  # 6 AGENT_ON_TARGET -> AGENT 3
-                4,  # 7 AGENT_ON_TARGET_CARRYING_BOX -> AGENT_CARRYING_BOX 4
-                5,  # 8 AGENT_ON_TARGET_WITH_BOX -> AGENT_ON_BOX 5
-                11,  # 9 AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX -> AGENT_ON_BOX_CARRYING_BOX
-                1,  # 10 BOX_ON_TARGET -> BOX
-                11,  # 11 AGENT_ON_BOX_CARRYING_BOX -> AGENT_ON_BOX_CARRYING_BOX
+                GridStatesEnum.EMPTY,  # 0 EMPTY -> EMPTY 0
+                GridStatesEnum.BOX,  # 1 BOX -> BOX 1
+                GridStatesEnum.EMPTY,  # 2 TARGET -> EMPTY 0
+                GridStatesEnum.AGENT,  # 3 AGENT -> AGENT 3
+                GridStatesEnum.AGENT_CARRYING_BOX,  # 4 AGENT_CARRYING_BOX -> AGENT_CARRYING_BOX 4
+                GridStatesEnum.AGENT_ON_BOX,  # 5 AGENT_ON_BOX -> AGENT_ON_BOX 5
+                GridStatesEnum.AGENT,  # 6 AGENT_ON_TARGET -> AGENT 3
+                GridStatesEnum.AGENT_CARRYING_BOX,  # 7 AGENT_ON_TARGET_CARRYING_BOX -> AGENT_CARRYING_BOX 4
+                GridStatesEnum.AGENT_ON_BOX,  # 8 AGENT_ON_TARGET_WITH_BOX -> AGENT_ON_BOX 5
+                GridStatesEnum.AGENT_ON_BOX_CARRYING_BOX,  # 9 AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX -> AGENT_ON_BOX_CARRYING_BOX
+                GridStatesEnum.BOX,  # 10 BOX_ON_TARGET -> BOX
+                GridStatesEnum.AGENT_ON_BOX_CARRYING_BOX,  # 11 AGENT_ON_BOX_CARRYING_BOX -> AGENT_ON_BOX_CARRYING_BOX
             ],
             dtype=jnp.int8,
         )
@@ -395,7 +394,7 @@ class BoxPushingEnv:
         else:
             done = new_steps >= self.episode_length
 
-        reward = self._get_reward(new_grid, state.number_of_boxes)
+        reward = self._get_reward(state.grid, new_grid, state.number_of_boxes)
         success = self._is_goal_reached(new_grid, state.number_of_boxes).astype(jnp.int32)
 
         new_state = BoxPushingState(
@@ -528,24 +527,6 @@ class BoxPushingEnv:
 
         return new_pos, new_grid, new_agent_has_box
 
-    def _handle_putdown(self, state: BoxPushingState) -> Tuple[jax.Array, bool]:
-        """Handle putdown action."""
-
-        row, col = state.agent_pos[0], state.agent_pos[1]
-        current_cell = state.grid[row, col]
-
-        def putdown_valid():
-            new_grid = state.grid.at[row, col].set(GridStatesEnum.AGENT_ON_TARGET_WITH_BOX)
-            return new_grid, False
-
-        def putdown_invalid():
-            return state.grid, state.agent_has_box
-
-        new_grid, new_agent_has_box = jax.lax.cond(
-            current_cell == GridStatesEnum.AGENT_ON_TARGET_CARRYING_BOX, putdown_valid, putdown_invalid
-        )
-        return new_grid, new_agent_has_box
-
     def _is_goal_reached(self, grid: jax.Array, number_of_boxes: int) -> bool:
         """Check if all boxes are in target cells."""
         return (
@@ -553,17 +534,23 @@ class BoxPushingEnv:
             == number_of_boxes
         )
 
-    def _get_reward(self, grid: jax.Array, number_of_boxes: int) -> float:
+    def _get_reward(self, old_grid: jax.Array, new_grid: jax.Array, number_of_boxes: int) -> float:
         """Get reward for the current state."""
-        boxes_on_targets = (
-            jnp.sum(grid == GridStatesEnum.BOX_ON_TARGET)
-            + jnp.sum(grid == GridStatesEnum.AGENT_ON_TARGET_WITH_BOX)
-            + jnp.sum(grid == GridStatesEnum.AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX)
+        boxes_on_targets_new = (
+            jnp.sum(new_grid == GridStatesEnum.BOX_ON_TARGET)
+            + jnp.sum(new_grid == GridStatesEnum.AGENT_ON_TARGET_WITH_BOX)
+            + jnp.sum(new_grid == GridStatesEnum.AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX)
         )
         if self.dense_rewards:
-            return boxes_on_targets
+            boxes_on_targets_old = (
+                jnp.sum(old_grid == GridStatesEnum.BOX_ON_TARGET)
+                + jnp.sum(old_grid == GridStatesEnum.AGENT_ON_TARGET_WITH_BOX)
+                + jnp.sum(old_grid == GridStatesEnum.AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX)
+            )
+            diff = boxes_on_targets_new - boxes_on_targets_old
+            return diff
         else:
-            return (boxes_on_targets == number_of_boxes).astype(jnp.int32)
+            return (boxes_on_targets_new == number_of_boxes).astype(jnp.int32)
 
     def _handle_pickup(self, state: BoxPushingState) -> Tuple[jax.Array, bool]:
         """Handle pickup action."""
@@ -583,6 +570,24 @@ class BoxPushingEnv:
         )
         return new_grid, new_agent_has_box
 
+    def _handle_putdown(self, state: BoxPushingState) -> Tuple[jax.Array, bool]:
+        """Handle putdown action."""
+
+        row, col = state.agent_pos[0], state.agent_pos[1]
+        current_cell = state.grid[row, col]
+
+        def putdown_valid():
+            new_grid = state.grid.at[row, col].set(GridStatesEnum.AGENT_ON_TARGET_WITH_BOX)
+            return new_grid, False
+
+        def putdown_invalid():
+            return state.grid, state.agent_has_box
+
+        new_grid, new_agent_has_box = jax.lax.cond(
+            current_cell == GridStatesEnum.AGENT_ON_TARGET_CARRYING_BOX, putdown_valid, putdown_invalid
+        )
+        return new_grid, new_agent_has_box
+
     def play_game(self, key: jax.Array):
         """Interactive game loop using input() for controls."""
 
@@ -590,6 +595,7 @@ class BoxPushingEnv:
         state, _ = self.reset(key)
         done = False
         total_reward = 0
+        reward = 0
 
         print("=== Box Pushing Game ===")
         print("Controls: w(up), s(down), a(left), d(right), e(pickup), r(drop)")
@@ -599,7 +605,7 @@ class BoxPushingEnv:
         while not done:
             # Display current state
             self._display_state(state)
-            print(f"Steps: {state.steps}, Reward: {total_reward}")
+            print(f"Steps: {state.steps}, Return: {total_reward}, Reward: {reward}")
 
             # Get user input
             action = None
@@ -645,12 +651,7 @@ class BoxPushingEnv:
     def _display_state(self, state: BoxPushingState):
         """Display the current game state in ASCII."""
         print("\n" + "=" * (self.grid_size * 2 + 1))
-        for row in range(self.grid_size):
-            print("|", end="")
-            for col in range(self.grid_size):
-                cell_value = state.grid[row, col]
-                print(f"{cell_value} ", end="")
-            print("|")
+        print(state.grid)
         print("=" * (self.grid_size * 2 + 1))
 
     def get_dummy_timestep(self, key):
@@ -679,18 +680,18 @@ class BoxPushingEnv:
 
         # Create color mapping for grid states
         imgs = {
-            0: "floor.png",  # EMPTY
-            1: "box.png",  # BOX
-            2: "box_target.png",  # TARGET
-            3: "agent.png",  # AGENT
-            4: "agent_carrying_box.png",  # AGENT_CARRYING_BOX
-            5: "agent_on_box.png",  # AGENT_ON_BOX
-            6: "agent_on_target.png",  # AGENT_ON_TARGET
-            7: "agent_on_target_carrying_box.png",  # AGENT_ON_TARGET_CARRYING_BOX
-            8: "agent_on_target_with_box.png",  # AGENT_ON_TARGET_WITH_BOX
-            9: "agent_on_target_with_box_carrying_box.png",  # AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX
-            10: "box_on_target.png",  # BOX_ON_TARGET
-            11: "agent_on_box_carrying_box.png",  # AGENT_ON_BOX_CARRYING_BOX
+            int(GridStatesEnum.EMPTY): "floor.png",  # EMPTY
+            int(GridStatesEnum.BOX): "box.png",  # BOX
+            int(GridStatesEnum.TARGET): "box_target.png",  # TARGET
+            int(GridStatesEnum.AGENT): "agent.png",  # AGENT
+            int(GridStatesEnum.AGENT_CARRYING_BOX): "agent_carrying_box.png",  # AGENT_CARRYING_BOX
+            int(GridStatesEnum.AGENT_ON_BOX): "agent_on_box.png",  # AGENT_ON_BOX
+            int(GridStatesEnum.AGENT_ON_TARGET): "agent_on_target.png",  # AGENT_ON_TARGET
+            int(GridStatesEnum.AGENT_ON_TARGET_CARRYING_BOX): "agent_on_target_carrying_box.png",  # noqa: E501 AGENT_ON_TARGET_CARRYING_BOX
+            int(GridStatesEnum.AGENT_ON_TARGET_WITH_BOX): "agent_on_target_with_box.png",  # AGENT_ON_TARGET_WITH_BOX
+            int(GridStatesEnum.AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX): "agent_on_target_with_box_carrying_box.png",  # noqa: E501 AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX
+            int(GridStatesEnum.BOX_ON_TARGET): "box_on_target.png",  # BOX_ON_TARGET
+            int(GridStatesEnum.AGENT_ON_BOX_CARRYING_BOX): "agent_on_box_carrying_box.png",  # AGENT_ON_BOX_CARRYING_BOX
         }
 
         # Plot grid
@@ -747,12 +748,13 @@ class AutoResetWrapper(Wrapper):
 
 if __name__ == "__main__":
     env = BoxPushingEnv(
-        grid_size=6,
+        grid_size=4,
         number_of_boxes_max=3,
         number_of_boxes_min=3,
         number_of_moving_boxes_max=2,
         level_generator="quarter",
         generator_mirroring=False,
+        dense_rewards=True,
     )
     key = jax.random.PRNGKey(0)
     env.play_game(key)
