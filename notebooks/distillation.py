@@ -371,21 +371,20 @@ for RANDOM_GOALS in [True, False]:
         plt.legend()
         plt.ylabel('Mean reward')
         plt.xlabel('Training steps')
-        plt.title('Actor distillation training')
+        plt.title(f'Mean reward: : {"forward" if FORWARD_KL else "backward"} KL, {"random" if RANDOM_GOALS else "future"} goals')
         plt.tight_layout()
-        plt.savefig(os.path.join(FIGURES_PATH, f'actor_distillation_training_KL_{"forward" if FORWARD_KL else "backward"}_{"random" if RANDOM_GOALS else "future"}_goals.png'))
+        plt.savefig(os.path.join(FIGURES_PATH, f'mean_reward_distillation_training_KL_{"forward" if FORWARD_KL else "backward"}_{"random" if RANDOM_GOALS else "future"}_goals.png'))
         plt.close()
         # %% actor loss plot
         actor_losses = [info['actor/actor_loss'] for info in eval_infos]
         x_axis = jnp.linspace(0, EPOCHS*10_000, len(actor_losses))
         plt.plot(x_axis, actor_losses, label='Actor distilled')
-        plt.hlines(eval_info_critic['actor/actor_loss'], xmin=x_axis.min(), xmax=x_axis.max(), colors='r', linestyles='dashed', label="Softmax(Q)")
         plt.legend()
         plt.ylabel('Actor loss')
         plt.xlabel('Training steps')
-        plt.title('Actor distillation training')
+        plt.title(f'Actor loss: {"forward" if FORWARD_KL else "backward"} KL, {"random" if RANDOM_GOALS else "future"} goals')
         plt.tight_layout()
-        plt.savefig(os.path.join(FIGURES_PATH, f'actor_distillation_training_KL_{"forward" if FORWARD_KL else "backward"}_{"random" if RANDOM_GOALS else "future"}_goals.png'))
+        plt.savefig(os.path.join(FIGURES_PATH, f'actor_loss_distillation_training_KL_{"forward" if FORWARD_KL else "backward"}_{"random" if RANDOM_GOALS else "future"}_goals.png'))
         plt.close()
 
         # %% [markdown]
@@ -409,7 +408,7 @@ for RANDOM_GOALS in [True, False]:
 
         ax.set_xlabel('Number of boxes')
         ax.set_ylabel('Mean Reward')
-        ax.set_title('Comparison of Mean Rewards in generalization setup')
+        ax.set_title(f'Generalization: : {"forward" if FORWARD_KL else "backward"} KL, {"random" if RANDOM_GOALS else "future"} goals')
         ax.set_xticks(x)
         ax.legend()
         ax.grid(axis='y', linestyle='--', alpha=0.7)
