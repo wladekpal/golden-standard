@@ -50,6 +50,125 @@ def reset_actor(agent, seed, ex_observations, ex_goals):
     new_network = new_agent.network.replace(params=new_params)
     return new_agent.replace(network=new_network)
 
+def actor_loss(agent, batch, grad_params, rng=None):
+    """Compute the actor loss (AWR or DDPG+BC)."""
+    if agent.config['actor_log_q']:
+        def value_transform(x):
+            return jnp.log(jnp.maximum(x, 1e-6))
+    else:
+        def value_transform(x):
+            return x
+
+    # Maximize log Q if actor_log_q is True (which is default).
+    all_actions = jnp.tile(jnp.arange(6), (batch['observations'].shape[0], 1))  # B x 6
+    qs = jax.lax.stop_gradient(
+        jax.vmap(agent.network.select("critic"), in_axes=(None, None, 1))(batch['observations'], batch['actor_goals'], all_actions)
+    )  # 6 x 2 x B
+    qs = qs.min(axis=1)  # 6 x B
+    qs = value_transform(qs)
+    qs = qs.transpose(1, 0)  # B x 6
+
+    dist_q = distrax.Categorical(logits=qs / jnp.maximum(1e-6, 1))
+    dist_pi = agent.network.select('actor')(batch['observations'], batch['actor_goals'], params=grad_params)
+
+    if FORWARD_KL:
+        actor_loss = dist_q.kl_divergence(dist_pi).mean()
+    else:
+        actor_loss = dist_pi.kl_divergence(dist_q).mean()
+
+    actor_info = {
+        'actor_loss': actor_loss,
+    }
+    return actor_loss, actor_info
+
+@jax.jit
+def total_loss(agent, batch, grad_params, rng=None):
+    """Compute the total loss."""
+    info = {}
+    rng = rng if rng is not None else agent.rng
+
+    rng, actor_rng = jax.random.split(rng)
+    loss, actor_info = actor_loss(agent, batch, grad_params, actor_rng)
+    for k, v in actor_info.items():
+        info[f'actor/{k}'] = v
+    return loss, info
+
+@jax.jit
+def update(agent, batch):
+    """Update the agent and return a new agent with information dictionary."""
+    new_rng, rng = jax.random.split(agent.rng)
+
+    def loss_fn(grad_params):
+        return total_loss(agent, batch, grad_params, rng=rng)
+
+    new_network, info = agent.network.apply_loss_fn(loss_fn=loss_fn)
+
+    return agent.replace(network=new_network, rng=new_rng), info
+
+
+def evaluate_agent_in_specific_env(agent, key, jitted_flatten_batch, config, name, create_gif=False, critic_temp=None):
+    env_eval = create_env(config.env)
+    env_eval = AutoResetWrapper(env_eval)
+    env_eval.step = jax.jit(jax.vmap(env_eval.step))
+    env_eval.reset = jax.jit(jax.vmap(env_eval.reset))
+    prefix = f"eval{name}"
+    prefix_gif = f"gif{name}"
+
+    data_key, double_batch_key = jax.random.split(key, 2)
+    # Use collect_data for evaluation rollouts
+    _, info, timesteps = collect_data(
+        agent,
+        data_key,
+        env_eval,
+        config.exp.num_envs,
+        config.env.episode_length,
+        use_targets=config.exp.use_targets,
+        critic_temp=critic_temp,
+    )
+    timesteps = jax.tree_util.tree_map(lambda x: x.swapaxes(1, 0), timesteps)
+
+    batch_keys = jax.random.split(data_key, config.exp.num_envs)
+    state, future_state, goal_index = jitted_flatten_batch(config.exp.gamma, timesteps, batch_keys)
+
+    # Sample and concatenate batch using the new function
+    state, actions, future_state, goal_index = get_single_pair_from_every_env(
+        state, future_state, goal_index, double_batch_key, use_double_batch_trick=config.exp.use_double_batch_trick
+    )  # state.grid is of shape (batch_size * 2, grid_size, grid_size)
+    if not config.exp.use_targets:
+        state = state.replace(grid=GridStatesEnum.remove_targets(state.grid))
+        future_state = future_state.replace(grid=GridStatesEnum.remove_targets(future_state.grid))
+
+    # Create valid batch
+    valid_batch = {
+        "observations": state.grid.reshape(state.grid.shape[0], -1),
+        "next_observations": future_state.grid.reshape(future_state.grid.shape[0], -1),
+        "actions": actions.squeeze(),
+        "rewards": state.reward.reshape(state.reward.shape[0], -1),
+        "masks": 1.0 - state.done.reshape(state.done.shape[0], -1),
+        "value_goals": future_state.grid.reshape(future_state.grid.shape[0], -1),
+        "actor_goals": future_state.grid.reshape(future_state.grid.shape[0], -1),
+    }
+
+    # Compute losses on example batch
+    loss, loss_info = total_loss(agent, valid_batch, None)
+
+    # Compile evaluation info
+    # Only consider episodes that are done
+    done_mask = timesteps.done
+    eval_info_tmp = {
+        f"{prefix}/mean_reward": timesteps.reward[done_mask].mean(),
+        f"{prefix}/min_reward": timesteps.reward[done_mask].min(),
+        f"{prefix}/max_reward": timesteps.reward[done_mask].max(),
+        f"{prefix}/mean_success": timesteps.success[done_mask].mean(),
+        f"{prefix}/mean_boxes_on_target": info["boxes_on_target"].mean(),
+        f"{prefix}/total_loss": loss,
+        f"{prefix}/actor_loss": loss_info["actor/actor_loss"],
+    }
+
+    if create_gif:
+        log_gif(env_eval, config.env.episode_length, prefix_gif, timesteps, state)
+
+    return eval_info_tmp, loss_info
 
 def eval_agent(agent, key, config, critic_temp=None, different_boxes=False):
     eval_configs = [config]
@@ -71,13 +190,14 @@ def eval_agent(agent, key, config, critic_temp=None, different_boxes=False):
             eval_info.update(loss_info)
     return eval_info
 
+
 # %%
 EPISODE_LENGTH = 100
 NUM_ENVS = 1024
-CHECKPOINT = 10
-RUN_NAME = f"LONG_RUN_{CHECKPOINT}_ckpt"
+CHECKPOINT = 100
+RUN_NAME = f"LONG_RUN_{CHECKPOINT}_ckpt_short"
 MODEL_PATH = "/home/mbortkie/repos/crl_subgoal/experiments/test_generalization_sc_20250814_235903/runs/long_unbugged_check_moving_boxes_5_grid_5_range_3_7_alpha_0.1"
-EPOCHS = 1001
+EPOCHS = 101
 EVAL_EVERY = 10
 FIGURES_PATH = f"/home/mbortkie/repos/crl_subgoal/notebooks/figures/{RUN_NAME}"
 os.makedirs(FIGURES_PATH, exist_ok=True)
@@ -158,61 +278,6 @@ for RANDOM_GOALS in [True, False]:
         agent_new = reset_actor(agent, seed=0, ex_observations=ex_observations, ex_goals=ex_goals)
 
         #%%
-        def actor_loss(agent, batch, grad_params, rng=None):
-            """Compute the actor loss (AWR or DDPG+BC)."""
-            if agent.config['actor_log_q']:
-                def value_transform(x):
-                    return jnp.log(jnp.maximum(x, 1e-6))
-            else:
-                def value_transform(x):
-                    return x
-
-            # Maximize log Q if actor_log_q is True (which is default).
-            all_actions = jnp.tile(jnp.arange(6), (batch['observations'].shape[0], 1))  # B x 6
-            qs = jax.lax.stop_gradient(
-                jax.vmap(agent.network.select("critic"), in_axes=(None, None, 1))(batch['observations'], batch['actor_goals'], all_actions)
-            )  # 6 x 2 x B
-            qs = qs.min(axis=1)  # 6 x B
-            qs = value_transform(qs)
-            qs = qs.transpose(1, 0)  # B x 6
-
-            dist_q = distrax.Categorical(logits=qs / jnp.maximum(1e-6, 1))
-            dist_pi = agent.network.select('actor')(batch['observations'], batch['actor_goals'], params=grad_params)
-
-            if FORWARD_KL:
-                actor_loss = dist_q.kl_divergence(dist_pi).mean()
-            else:
-                actor_loss = dist_pi.kl_divergence(dist_q).mean()
-
-            actor_info = {
-                'actor_loss': actor_loss,
-            }
-            return actor_loss, actor_info
-
-        @jax.jit
-        def total_loss(agent, batch, grad_params, rng=None):
-            """Compute the total loss."""
-            info = {}
-            rng = rng if rng is not None else agent.rng
-
-            rng, actor_rng = jax.random.split(rng)
-            loss, actor_info = actor_loss(agent, batch, grad_params, actor_rng)
-            for k, v in actor_info.items():
-                info[f'actor/{k}'] = v
-            return loss, info
-
-        @jax.jit
-        def update(agent, batch):
-            """Update the agent and return a new agent with information dictionary."""
-            new_rng, rng = jax.random.split(agent.rng)
-
-            def loss_fn(grad_params):
-                return total_loss(agent, batch, grad_params, rng=rng)
-
-            new_network, info = agent.network.apply_loss_fn(loss_fn=loss_fn)
-
-            return agent.replace(network=new_network, rng=new_rng), info
-
         @jax.jit
         def make_batch(buffer_state, key):
             key, batch_key, double_batch_key = jax.random.split(key, 3)
@@ -287,7 +352,7 @@ for RANDOM_GOALS in [True, False]:
 
         eval_info = eval_agent(agent_new, key, config)
         eval_infos.append(eval_info)
-        print(f"Mean reward: {eval_info['eval/mean_reward']:.2f}")
+        print(f"Mean reward: {eval_info['eval/mean_reward']:.2f}, actor loss: {eval_info['actor/actor_loss']:.2f}")
 
         for i in range(EPOCHS):
             key, new_key = jax.random.split(key, 2)
@@ -295,10 +360,10 @@ for RANDOM_GOALS in [True, False]:
             if i%EVAL_EVERY==0 and i > 0:
                 eval_info = eval_agent(agent_new, key, config)
                 eval_infos.append(eval_info)
-                print(f"Mean reward: {eval_info['eval/mean_reward']:.2f}")
+                print(f"Mean reward: {eval_info['eval/mean_reward']:.2f}, actor loss: {eval_info['actor/actor_loss']:.2f}")
 
 
-        # %%
+        # %% Mean rewards plot
         mean_rewards = [info['eval/mean_reward'] for info in eval_infos]
         x_axis = jnp.linspace(0, EPOCHS*10_000, len(mean_rewards))
         plt.plot(x_axis, mean_rewards, label='Actor distilled')
@@ -310,6 +375,19 @@ for RANDOM_GOALS in [True, False]:
         plt.tight_layout()
         plt.savefig(os.path.join(FIGURES_PATH, f'actor_distillation_training_KL_{"forward" if FORWARD_KL else "backward"}_{"random" if RANDOM_GOALS else "future"}_goals.png'))
         plt.close()
+        # %% actor loss plot
+        actor_losses = [info['actor/actor_loss'] for info in eval_infos]
+        x_axis = jnp.linspace(0, EPOCHS*10_000, len(actor_losses))
+        plt.plot(x_axis, actor_losses, label='Actor distilled')
+        plt.hlines(eval_info_critic['actor/actor_loss'], xmin=x_axis.min(), xmax=x_axis.max(), colors='r', linestyles='dashed', label="Softmax(Q)")
+        plt.legend()
+        plt.ylabel('Actor loss')
+        plt.xlabel('Training steps')
+        plt.title('Actor distillation training')
+        plt.tight_layout()
+        plt.savefig(os.path.join(FIGURES_PATH, f'actor_distillation_training_KL_{"forward" if FORWARD_KL else "backward"}_{"random" if RANDOM_GOALS else "future"}_goals.png'))
+        plt.close()
+
         # %% [markdown]
         # ### Generalization tests
 
@@ -329,7 +407,7 @@ for RANDOM_GOALS in [True, False]:
         ax.bar(x - width/2, mean_reward_general_actor, width, label='Actor distilled', alpha=0.8, color='tab:blue')
         ax.bar(x + width/2, mean_reward_general_q, width, label='Softmax(Q)', alpha=0.8, color='tab:orange')
 
-        ax.set_xlabel('X axis label (e.g., timestep)')
+        ax.set_xlabel('Number of boxes')
         ax.set_ylabel('Mean Reward')
         ax.set_title('Comparison of Mean Rewards in generalization setup')
         ax.set_xticks(x)
