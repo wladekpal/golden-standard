@@ -144,7 +144,7 @@ def evaluate_agent_in_specific_env(agent, key, jitted_flatten_batch, config, nam
     env_eval.step = jax.jit(jax.vmap(env_eval.step))
     env_eval.reset = jax.jit(jax.vmap(env_eval.reset))
     prefix = f"eval{name}"
-    prefix_gif = f"gif{name}_{'fw' if FORWARD_KL else 'bw'}_{'random' if RANDOM_GOALS else 'future'}"
+    prefix_gif = f"gif{name}_{'fw' if FORWARD_KL else 'bw'}_{'random' if RANDOM_GOALS else 'future'}_{'critic' if critic_temp is not None else ''}"
 
     data_key, double_batch_key = jax.random.split(key, 2)
     # Use collect_data for evaluation rollouts
@@ -211,9 +211,7 @@ def eval_agent(agent, key, config, critic_temp=None, different_boxes=False, crea
             new_config = copy.deepcopy(config)
             new_config.env = dataclasses.replace(new_config.env, number_of_boxes_min=number_of_boxes, number_of_boxes_max=number_of_boxes, number_of_moving_boxes_max=number_of_boxes)
             eval_configs.append(new_config)
-            name = "_" + str(number_of_boxes)
-            name += "_critic" if critic_temp is not None else ""
-            eval_names_suff.append(name)
+            eval_names_suff.append("_" + str(number_of_boxes))
 
 
     for eval_config, eval_name_suff in zip(eval_configs, eval_names_suff):
