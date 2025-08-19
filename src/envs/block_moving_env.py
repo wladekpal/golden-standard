@@ -98,6 +98,19 @@ class BoxPushingConfig:
     generator_mirroring: bool = False
 
 
+def calculate_number_of_boxes(grid: jax.Array):
+    return int(
+        jnp.sum(grid == GridStatesEnum.BOX_ON_TARGET)
+        + jnp.sum(grid == GridStatesEnum.AGENT_ON_TARGET_WITH_BOX)
+        + jnp.sum(grid == GridStatesEnum.AGENT_CARRYING_BOX)
+        + jnp.sum(grid == GridStatesEnum.AGENT_ON_BOX)
+        + jnp.sum(grid == GridStatesEnum.AGENT_ON_TARGET_CARRYING_BOX)
+        + 2 * jnp.sum(grid == GridStatesEnum.AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX)
+        + 2 * jnp.sum(grid == GridStatesEnum.AGENT_ON_BOX_CARRYING_BOX)
+        + jnp.sum(grid == GridStatesEnum.BOX)
+    )
+
+
 def create_solved_state(state: BoxPushingState) -> BoxPushingState:
     """Create a solved state."""
     # Change all target cells to box on target
