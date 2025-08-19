@@ -98,9 +98,9 @@ def test_create_solved_state_transforms_targets_and_boxes_and_agent_cell():
     """
     grid = jnp.array(
         [
-            [GridStatesEnum.TARGET, GridStatesEnum.BOX, GridStatesEnum.EMPTY],
-            [GridStatesEnum.EMPTY, GridStatesEnum.EMPTY, GridStatesEnum.EMPTY],
-            [GridStatesEnum.EMPTY, GridStatesEnum.EMPTY, GridStatesEnum.EMPTY],
+            [GridStatesEnum.AGENT_ON_TARGET, GridStatesEnum.BOX, GridStatesEnum.TARGET],
+            [GridStatesEnum.BOX_ON_TARGET, GridStatesEnum.AGENT_ON_TARGET_WITH_BOX, GridStatesEnum.EMPTY],
+            [GridStatesEnum.AGENT, GridStatesEnum.EMPTY, GridStatesEnum.EMPTY],
         ],
         dtype=jnp.int8,
     )
@@ -123,5 +123,9 @@ def test_create_solved_state_transforms_targets_and_boxes_and_agent_cell():
 
     assert int(solved.grid[0, 0]) == int(GridStatesEnum.AGENT_ON_TARGET_WITH_BOX)
     assert int(solved.grid[0, 1]) == int(GridStatesEnum.EMPTY)
+    assert int(solved.grid[0, 2]) == int(GridStatesEnum.BOX_ON_TARGET)
+    assert int(solved.grid[1, 0]) == int(GridStatesEnum.BOX_ON_TARGET)
+    assert int(solved.grid[1, 1]) == int(GridStatesEnum.AGENT_ON_TARGET_WITH_BOX)
+    assert int(solved.grid[2, 0]) == int(GridStatesEnum.AGENT)
     # agent_has_box should be cleared to False
     assert bool(solved.agent_has_box) is False

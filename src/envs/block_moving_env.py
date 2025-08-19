@@ -117,11 +117,10 @@ def create_solved_state(state: BoxPushingState) -> BoxPushingState:
         lambda: GridStatesEnum.AGENT_ON_TARGET_WITH_BOX,
         lambda: jax.lax.cond(
             current_cell == GridStatesEnum.AGENT_ON_BOX,
-            lambda: GridStatesEnum.AGENT_ON_TARGET_WITH_BOX,
-            lambda: current_cell,  # It should be just Agent state
+            lambda: GridStatesEnum.AGENT,
+            lambda: current_cell,  # noqa: E501 Here goes: AGENT_ON_TARGET_WITH_BOX -> AGENT_ON_TARGET_WITH_BOX and Agent -> Agent
         ),
     )
-
     state = state.replace(grid=state.grid.at[agent_row, agent_col].set(new_cell_value), agent_has_box=jnp.array(False))
     return state
 
