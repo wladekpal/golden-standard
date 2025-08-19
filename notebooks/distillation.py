@@ -414,7 +414,7 @@ for RANDOM_GOALS in [True, False]:
 
         # %%
         eval_general_actor = eval_agent(agent_new, key, config, None, True)
-        eval_general_q =  eval_agent(agent_new, key, config, 1, True)
+        eval_general_q =  eval_agent(agent_new, key, config, critic_temp=1.0, different_boxes=True)
 
         mean_reward_general_actor = [eval_general_actor[f'eval_{i}/mean_reward'] for i in RANGE_GENERALIZATION]
         mean_reward_general_q = [eval_general_q[f'eval_{i}/mean_reward'] for i in RANGE_GENERALIZATION]
