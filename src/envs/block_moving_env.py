@@ -113,12 +113,12 @@ def create_solved_state(state: BoxPushingState) -> BoxPushingState:
 
     # Update grid based on current cell type
     new_cell_value = jax.lax.cond(
-        current_cell == GridStatesEnum.BOX_ON_TARGET,
-        lambda: GridStatesEnum.AGENT_ON_TARGET_WITH_BOX,  # Agent on target with box
+        current_cell == GridStatesEnum.AGENT_ON_TARGET,
+        lambda: GridStatesEnum.AGENT_ON_TARGET_WITH_BOX,
         lambda: jax.lax.cond(
-            current_cell == GridStatesEnum.EMPTY,
-            lambda: GridStatesEnum.AGENT,  # Agent on empty cell
-            lambda: current_cell,  # Keep current cell if it's already an agent state
+            current_cell == GridStatesEnum.AGENT_ON_BOX,
+            lambda: GridStatesEnum.AGENT_ON_TARGET_WITH_BOX,
+            lambda: current_cell,  # It should be just Agent state
         ),
     )
 
