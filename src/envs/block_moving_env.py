@@ -98,6 +98,19 @@ class BoxPushingConfig:
     generator_mirroring: bool = False
 
 
+def calculate_number_of_boxes(grid: jax.Array):
+    return int(
+        jnp.sum(grid == GridStatesEnum.BOX_ON_TARGET)
+        + jnp.sum(grid == GridStatesEnum.AGENT_ON_TARGET_WITH_BOX)
+        + jnp.sum(grid == GridStatesEnum.AGENT_CARRYING_BOX)
+        + jnp.sum(grid == GridStatesEnum.AGENT_ON_BOX)
+        + jnp.sum(grid == GridStatesEnum.AGENT_ON_TARGET_CARRYING_BOX)
+        + 2 * jnp.sum(grid == GridStatesEnum.AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX)
+        + 2 * jnp.sum(grid == GridStatesEnum.AGENT_ON_BOX_CARRYING_BOX)
+        + jnp.sum(grid == GridStatesEnum.BOX)
+    )
+
+
 def create_solved_state(state: BoxPushingState) -> BoxPushingState:
     """Create a solved state."""
     # Change all target cells to box on target
@@ -113,15 +126,14 @@ def create_solved_state(state: BoxPushingState) -> BoxPushingState:
 
     # Update grid based on current cell type
     new_cell_value = jax.lax.cond(
-        current_cell == GridStatesEnum.BOX_ON_TARGET,
-        lambda: GridStatesEnum.AGENT_ON_TARGET_WITH_BOX,  # Agent on target with box
+        current_cell == GridStatesEnum.AGENT_ON_TARGET,
+        lambda: GridStatesEnum.AGENT_ON_TARGET_WITH_BOX,
         lambda: jax.lax.cond(
-            current_cell == GridStatesEnum.EMPTY,
-            lambda: GridStatesEnum.AGENT,  # Agent on empty cell
-            lambda: current_cell,  # Keep current cell if it's already an agent state
+            current_cell == GridStatesEnum.AGENT_ON_BOX,
+            lambda: GridStatesEnum.AGENT,
+            lambda: current_cell,  # noqa: E501 Here goes: AGENT_ON_TARGET_WITH_BOX -> AGENT_ON_TARGET_WITH_BOX and Agent -> Agent
         ),
     )
-
     state = state.replace(grid=state.grid.at[agent_row, agent_col].set(new_cell_value), agent_has_box=jnp.array(False))
     return state
 

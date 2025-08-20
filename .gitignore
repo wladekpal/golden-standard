@@ -330,3 +330,4 @@ wandb/
 experiments/
 runs/
 notes/
+notebooks/figures

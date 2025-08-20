@@ -1,6 +1,8 @@
 # %%
 import os
 import sys
+
+from matplotlib import animation
 sys.path.append("/home/mbortkie/repos/crl_subgoal/src")
 # os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"   
 # os.environ['CUDA_VISIBLE_DEVICES'] = '4'
@@ -30,6 +32,36 @@ import matplotlib.pyplot as plt
 from impls.utils.networks import GCDiscreteActor
 import copy
 import numpy as np
+
+
+# %%
+RANGE_GENERALIZATION = [1,2,3,4,5,6,7,9,11]
+EPISODE_LENGTH = 100
+NUM_ENVS = 1024
+CHECKPOINT = 100
+RUN_NAME = f"LONG_RUN_{CHECKPOINT}_ckpt_short"
+MODEL_PATH = "/home/mbortkie/repos/crl_subgoal/experiments/test_generalization_sc_20250814_235903/runs/long_unbugged_check_moving_boxes_5_grid_5_range_3_7_alpha_0.1"
+EPOCHS = 101
+EVAL_EVERY = 10
+FIGURES_PATH = f"/home/mbortkie/repos/crl_subgoal/notebooks/figures/{RUN_NAME}"
+GIF_PATH = f"{FIGURES_PATH}/gifs"
+os.makedirs(FIGURES_PATH, exist_ok=True)
+os.makedirs(GIF_PATH, exist_ok=True)
+
+#%%
+def log_gif(original_env, episode_length, prefix_gif, timesteps, state):
+    grid_size = state.grid.shape[-2:]
+    fig, ax = plt.subplots(figsize=grid_size)
+
+    animate = functools.partial(original_env.animate, ax, timesteps, img_prefix=os.path.join(ROOT_DIR, "assets"))
+
+    # Create animation
+    anim = animation.FuncAnimation(fig, animate, frames=episode_length, interval=80, repeat=False)
+
+    # Save as GIF
+    gif_path = os.path.join(GIF_PATH, prefix_gif + ".gif")
+    anim.save(gif_path, writer="pillow")
+    plt.close()
 
 
 def reset_actor(agent, seed, ex_observations, ex_goals):
@@ -112,7 +144,7 @@ def evaluate_agent_in_specific_env(agent, key, jitted_flatten_batch, config, nam
     env_eval.step = jax.jit(jax.vmap(env_eval.step))
     env_eval.reset = jax.jit(jax.vmap(env_eval.reset))
     prefix = f"eval{name}"
-    prefix_gif = f"gif{name}"
+    prefix_gif = f"gif{name}_{'fw' if FORWARD_KL else 'bw'}_{'random' if RANDOM_GOALS else 'future'}_{'critic' if critic_temp is not None else ''}"
 
     data_key, double_batch_key = jax.random.split(key, 2)
     # Use collect_data for evaluation rollouts
@@ -170,12 +202,12 @@ def evaluate_agent_in_specific_env(agent, key, jitted_flatten_batch, config, nam
 
     return eval_info_tmp, loss_info
 
-def eval_agent(agent, key, config, critic_temp=None, different_boxes=False):
+def eval_agent(agent, key, config, critic_temp=None, different_boxes=False, create_gif=True):
     eval_configs = [config]
     eval_names_suff = [""]
     eval_info = {"epoch": 1}
     if different_boxes:
-        for number_of_boxes in range(1, 12, 2):
+        for number_of_boxes in RANGE_GENERALIZATION:
             new_config = copy.deepcopy(config)
             new_config.env = dataclasses.replace(new_config.env, number_of_boxes_min=number_of_boxes, number_of_boxes_max=number_of_boxes, number_of_moving_boxes_max=number_of_boxes)
             eval_configs.append(new_config)
@@ -183,7 +215,7 @@ def eval_agent(agent, key, config, critic_temp=None, different_boxes=False):
 
 
     for eval_config, eval_name_suff in zip(eval_configs, eval_names_suff):
-        eval_info_tmp, loss_info = evaluate_agent_in_specific_env(agent, key, jitted_flatten_batch, eval_config, eval_name_suff ,create_gif=False, critic_temp=critic_temp)
+        eval_info_tmp, loss_info = evaluate_agent_in_specific_env(agent, key, jitted_flatten_batch, eval_config, eval_name_suff,create_gif=create_gif, critic_temp=critic_temp)
         eval_info.update(eval_info_tmp)
 
         if eval_name_suff == "":
@@ -191,16 +223,6 @@ def eval_agent(agent, key, config, critic_temp=None, different_boxes=False):
     return eval_info
 
 
-# %%
-EPISODE_LENGTH = 100
-NUM_ENVS = 1024
-CHECKPOINT = 100
-RUN_NAME = f"LONG_RUN_{CHECKPOINT}_ckpt_short"
-MODEL_PATH = "/home/mbortkie/repos/crl_subgoal/experiments/test_generalization_sc_20250814_235903/runs/long_unbugged_check_moving_boxes_5_grid_5_range_3_7_alpha_0.1"
-EPOCHS = 101
-EVAL_EVERY = 10
-FIGURES_PATH = f"/home/mbortkie/repos/crl_subgoal/notebooks/figures/{RUN_NAME}"
-os.makedirs(FIGURES_PATH, exist_ok=True)
 
 # %%
 config = Config(
@@ -358,7 +380,7 @@ for RANDOM_GOALS in [True, False]:
             key, new_key = jax.random.split(key, 2)
             buffer_state, agent_new, key = train_n_epochs(buffer_state, agent_new, key)
             if i%EVAL_EVERY==0 and i > 0:
-                eval_info = eval_agent(agent_new, key, config)
+                eval_info = eval_agent(agent_new, key, config, create_gif=False)
                 eval_infos.append(eval_info)
                 print(f"Mean reward: {eval_info['eval/mean_reward']:.2f}, actor loss: {eval_info['actor/actor_loss']:.2f}")
 
@@ -392,12 +414,12 @@ for RANDOM_GOALS in [True, False]:
 
         # %%
         eval_general_actor = eval_agent(agent_new, key, config, None, True)
-        eval_general_q =  eval_agent(agent_new, key, config, 1, True)
+        eval_general_q =  eval_agent(agent_new, key, config, critic_temp=1.0, different_boxes=True)
 
-        mean_reward_general_actor = [eval_general_actor[f'eval_{i}/mean_reward'] for i in range(1,12,2)]
-        mean_reward_general_q = [eval_general_q[f'eval_{i}/mean_reward'] for i in range(1,12,2)]
+        mean_reward_general_actor = [eval_general_actor[f'eval_{i}/mean_reward'] for i in RANGE_GENERALIZATION]
+        mean_reward_general_q = [eval_general_q[f'eval_{i}/mean_reward'] for i in RANGE_GENERALIZATION]
 
-        x = np.array(range(1, 12, 2))
+        x = np.array(RANGE_GENERALIZATION)
         width = 0.35  # bar width
 
         fig, ax = plt.subplots(figsize=(8,5))
