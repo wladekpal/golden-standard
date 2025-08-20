@@ -7,7 +7,7 @@ import ml_collections
 import optax
 from impls.utils.encoders import GCEncoder, encoder_modules
 from impls.utils.flax_utils import ModuleDict, TrainState, nonpytree_field
-from impls.utils.networks import GCActor, GCBilinearValue, GCDiscreteActor, GCDiscreteBilinearCritic
+from impls.utils.networks import GCActor, GCBilinearValue, GCDiscreteActor, GCDiscreteBilinearCritic, GridStateEmbedding
 
 # jnp.printoptions(precision=3, threshold=10000, linewidth=200)
 
@@ -22,6 +22,7 @@ class CRLAgent(flax.struct.PyTreeNode):
     rng: Any
     network: Any
     config: Any = nonpytree_field()
+    grid_size: int = 5
 
     def contrastive_loss(self, batch, grad_params, module_name='critic'):
         """Compute the contrastive value loss for the Q or V function."""
@@ -208,6 +209,7 @@ class CRLAgent(flax.struct.PyTreeNode):
         ex_actions,
         config,
         ex_goals=None,
+        grid_size=5,
     ):
         """Create a new agent.
 
@@ -239,7 +241,16 @@ class CRLAgent(flax.struct.PyTreeNode):
             if config['actor_loss'] == 'awr':
                 encoders['value_state'] = encoder_module()
                 encoders['value_goal'] = encoder_module()
-
+        if config['use_embeddings']:
+            embedding_encoder = GridStateEmbedding(
+                num_states=12,  
+                embed_dim=config['embed_dim'],   
+                grid_size=grid_size,    
+                use_position=True
+            ) 
+        else:
+            embedding_encoder = None
+       
         # Define value and actor networks.
         if config['discrete']:
             critic_def = GCDiscreteBilinearCritic(
@@ -251,6 +262,7 @@ class CRLAgent(flax.struct.PyTreeNode):
                 state_encoder=encoders.get('critic_state'),
                 goal_encoder=encoders.get('critic_goal'),
                 action_dim=action_dim,
+                embedding_encoder=embedding_encoder,
             )
         else:
             critic_def = GCBilinearValue(
@@ -261,6 +273,7 @@ class CRLAgent(flax.struct.PyTreeNode):
                 value_exp=True,
                 state_encoder=encoders.get('critic_state'),
                 goal_encoder=encoders.get('critic_goal'),
+                embedding_encoder=embedding_encoder,
             )
 
         if config['actor_loss'] == 'awr':
@@ -273,6 +286,7 @@ class CRLAgent(flax.struct.PyTreeNode):
                 value_exp=True,
                 state_encoder=encoders.get('value_state'),
                 goal_encoder=encoders.get('value_goal'),
+                embedding_encoder=embedding_encoder,
             )
 
         if config['discrete']:
@@ -280,6 +294,7 @@ class CRLAgent(flax.struct.PyTreeNode):
                 hidden_dims=config['actor_hidden_dims'],
                 action_dim=action_dim,
                 gc_encoder=encoders.get('actor'),
+                embedding_encoder=embedding_encoder,
             )
         else:
             actor_def = GCActor(
@@ -288,6 +303,7 @@ class CRLAgent(flax.struct.PyTreeNode):
                 state_dependent_std=False,
                 const_std=config['const_std'],
                 gc_encoder=encoders.get('actor'),
+                embedding_encoder=embedding_encoder,
             )
 
         network_info = dict(
@@ -314,8 +330,10 @@ def get_config():
         dict(
             # Agent hyperparameters.
             agent_name='crl',  # Agent name.
+            use_embeddings=False,
             lr=3e-4,  # Learning rate.
             batch_size=256,  # Batch size.
+            embed_dim=64,
             actor_hidden_dims=(256, 256),  # Actor network hidden dimensions.
             value_hidden_dims=(256, 256),  # Value network hidden dimensions.
             latent_dim=64, 

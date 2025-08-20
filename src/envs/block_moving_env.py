@@ -89,41 +89,44 @@ class BoxPushingConfig:
     level_generator: str = 'default'
     generator_mirroring: bool = False
 
+def calculate_number_of_boxes(grid: jax.Array):
+    return int(
+        jnp.sum(grid == GridStatesEnum.BOX_ON_TARGET)
+        + jnp.sum(grid == GridStatesEnum.AGENT_ON_TARGET_WITH_BOX)
+        + jnp.sum(grid == GridStatesEnum.AGENT_CARRYING_BOX)
+        + jnp.sum(grid == GridStatesEnum.AGENT_ON_BOX)
+        + jnp.sum(grid == GridStatesEnum.AGENT_ON_TARGET_CARRYING_BOX)
+        + 2 * jnp.sum(grid == GridStatesEnum.AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX)
+        + 2 * jnp.sum(grid == GridStatesEnum.AGENT_ON_BOX_CARRYING_BOX)
+        + jnp.sum(grid == GridStatesEnum.BOX)
+    )
+
+
 def create_solved_state(state: BoxPushingState) -> BoxPushingState:
     """Create a solved state."""
     # Change all target cells to box on target
     target_mask = (state.grid == GridStatesEnum.TARGET) | (state.grid == GridStatesEnum.BOX_ON_TARGET)
-    state = state.replace(
-        grid=jnp.where(target_mask, GridStatesEnum.BOX_ON_TARGET, state.grid)
-    )
+    state = state.replace(grid=jnp.where(target_mask, GridStatesEnum.BOX_ON_TARGET, state.grid))
     # Change all boxes to empty - use where to avoid boolean indexing issue
     box_mask = state.grid == GridStatesEnum.BOX
-    state = state.replace(
-        grid=jnp.where(box_mask, GridStatesEnum.EMPTY, state.grid)
-    )
-    
+    state = state.replace(grid=jnp.where(box_mask, GridStatesEnum.EMPTY, state.grid))
+
     # Check what cell the agent is currently on and update accordingly
     agent_row, agent_col = state.agent_pos[0], state.agent_pos[1]
     current_cell = state.grid[agent_row, agent_col]
-    
+
     # Update grid based on current cell type
     new_cell_value = jax.lax.cond(
-        current_cell == GridStatesEnum.BOX_ON_TARGET,
-        lambda: GridStatesEnum.AGENT_ON_TARGET_WITH_BOX,  # Agent on target with box
+        current_cell == GridStatesEnum.AGENT_ON_TARGET,
+        lambda: GridStatesEnum.AGENT_ON_TARGET_WITH_BOX,
         lambda: jax.lax.cond(
-            current_cell == GridStatesEnum.EMPTY,
-            lambda: GridStatesEnum.AGENT,  # Agent on empty cell
-            lambda: current_cell  # Keep current cell if it's already an agent state
-        )
+            current_cell == GridStatesEnum.AGENT_ON_BOX,
+            lambda: GridStatesEnum.AGENT,
+            lambda: current_cell,  # noqa: E501 Here goes: AGENT_ON_TARGET_WITH_BOX -> AGENT_ON_TARGET_WITH_BOX and Agent -> Agent
+        ),
     )
-    
-    state = state.replace(
-        grid=state.grid.at[agent_row, agent_col].set(new_cell_value),
-        agent_has_box=jnp.array(False)
-    )
+    state = state.replace(grid=state.grid.at[agent_row, agent_col].set(new_cell_value), agent_has_box=jnp.array(False))
     return state
-
-
 
 class DefaultLevelGenerator:
     def __init__(self, grid_size, number_of_boxes_min, number_of_boxes_max, number_of_moving_boxes_max):
@@ -588,14 +591,25 @@ class BoxPushingEnv:
         
     def _display_state(self, state: BoxPushingState):
         """Display the current game state in ASCII."""
-        print("\n" + "=" * (self.grid_size * 2 + 1))
+        print("\n" + "CURRENT STATE".center(self.grid_size * 2 + 1, "="))
         for row in range(self.grid_size):
             print("|", end="")
             for col in range(self.grid_size):
                 cell_value = state.grid[row, col]
-                print(f"{cell_value} ", end="")
+                print(f"{cell_value:2}", end="")
             print("|")
         print("=" * (self.grid_size * 2 + 1))
+        
+        # Also display goal state for ProgressiveBoxEnv
+        if hasattr(self, '_create_goal_state'):
+            print("GOAL STATE".center(self.grid_size * 2 + 1, "="))
+            for row in range(self.grid_size):
+                print("|", end="")
+                for col in range(self.grid_size):
+                    cell_value = state.goal[row, col]
+                    print(f"{cell_value:2}", end="")
+                print("|")
+            print("=" * (self.grid_size * 2 + 1))
 
     
     def get_dummy_timestep(self, key):
@@ -689,7 +703,101 @@ class AutoResetWrapper(Wrapper):
         return state, reward, done, info
 
 
+class ProgressiveBoxEnv(BoxPushingEnv):
+    """Box pushing environment where only one box is visible at a time.
+    
+    When the current box is placed on a target, a new box spawns at a random location
+    until all targets are filled.
+    """
+    
+    def reset(self, key: jax.Array) -> Tuple[BoxPushingState, Dict[str, Any]]:
+        """Reset environment with only one box visible."""
+        state = self.level_generator.generate(key)
+        
+        total_targets = jnp.sum((state.grid == GridStatesEnum.TARGET) | 
+                               (state.grid == GridStatesEnum.BOX_ON_TARGET) |
+                               (state.grid == GridStatesEnum.AGENT_ON_TARGET_WITH_BOX))
+        
+        new_grid = jnp.where(state.grid == GridStatesEnum.BOX, GridStatesEnum.EMPTY, state.grid)
+        new_grid = jnp.where(new_grid == GridStatesEnum.AGENT_ON_TARGET_WITH_BOX, GridStatesEnum.AGENT_ON_TARGET, new_grid)
+        
+        key, spawn_key = jax.random.split(key)
+        new_grid = self._spawn_box(new_grid, spawn_key)
+        
+        state = state.replace(
+            grid=new_grid,
+            number_of_boxes=jnp.array(1),
+            agent_has_box=jnp.array(False)
+        )
+        
+        goal = self._create_goal_state(new_grid, total_targets)
+        state = state.replace(goal=goal)
+        
+        info = {
+            'boxes_on_target': jnp.sum(new_grid == GridStatesEnum.BOX_ON_TARGET)
+        }
+        
+        return state, info
+    
+    def step(self, state: BoxPushingState, action: int) -> Tuple[BoxPushingState, float, bool, Dict[str, Any]]:
+        new_state, reward, done, info = super().step(state, action)
+        
+        boxes_on_target_before = jnp.sum(state.grid == GridStatesEnum.BOX_ON_TARGET) + jnp.sum(state.grid == GridStatesEnum.AGENT_ON_TARGET_WITH_BOX)
+        boxes_on_target_after = jnp.sum(new_state.grid == GridStatesEnum.BOX_ON_TARGET) + jnp.sum(new_state.grid == GridStatesEnum.AGENT_ON_TARGET_WITH_BOX)
+        
+        box_just_solved = boxes_on_target_after > boxes_on_target_before
+        
+        empty_targets = jnp.sum(new_state.grid == GridStatesEnum.TARGET) + jnp.sum(new_state.grid == GridStatesEnum.AGENT_ON_TARGET)
+        
+        def spawn_new_box():
+            spawn_key = jax.random.split(new_state.key)[0]
+            new_grid = self._spawn_box(new_state.grid, spawn_key)
+            return new_state.replace(grid=new_grid, number_of_boxes=new_state.number_of_boxes + 1)
+        
+        def keep_current():
+            return new_state
+        
+        new_state = jax.lax.cond(
+            box_just_solved & (empty_targets > 0),
+            spawn_new_box,
+            keep_current
+        )
+        
+        info['boxes_on_target'] = jnp.sum(new_state.grid == GridStatesEnum.BOX_ON_TARGET) + jnp.sum(new_state.grid == GridStatesEnum.AGENT_ON_TARGET_WITH_BOX)
+        
+        return new_state, reward, done, info
+    
+    def _spawn_box(self, grid: jax.Array, key: jax.Array) -> jax.Array:
+        """Spawn a box at a random empty location."""
+        empty_mask = (grid == GridStatesEnum.EMPTY)
+        empty_indices = jnp.where(empty_mask, size=self.grid_size * self.grid_size, fill_value=-1)[0]
+        
+        num_empty = jnp.sum(empty_mask)
+        
+        random_idx = jax.random.randint(key, (), 0, num_empty)
+        selected_flat_idx = empty_indices[random_idx]
+        
+        row = selected_flat_idx // self.grid_size
+        col = selected_flat_idx % self.grid_size
+        
+        new_grid = grid.at[row, col].set(GridStatesEnum.BOX)
+        
+        return new_grid
+    
+    def _create_goal_state(self, grid: jax.Array, total_targets: jax.Array) -> jax.Array:
+        """Create goal state with all targets filled (same as original env)."""
+        goal_grid = jnp.where(grid == GridStatesEnum.TARGET, GridStatesEnum.BOX_ON_TARGET, grid)
+        goal_grid = jnp.where(goal_grid == GridStatesEnum.AGENT_ON_TARGET, GridStatesEnum.AGENT_ON_TARGET_WITH_BOX, goal_grid)
+        return goal_grid
+    
+    def _is_goal_reached(self, grid: jax.Array, number_of_boxes: int) -> bool:
+        """Check if all targets are filled (progressive environment goal)."""
+        empty_targets = jnp.sum(grid == GridStatesEnum.TARGET) + jnp.sum(grid == GridStatesEnum.AGENT_ON_TARGET)
+        return empty_targets == 0
+
+
 if __name__ == "__main__":
-    env = BoxPushingEnv(grid_size=6, number_of_boxes_max=3, number_of_boxes_min=3, number_of_moving_boxes_max=2, level_generator='quarter', generator_mirroring=False)
+    # Test the progressive environment
+    env = ProgressiveBoxEnv(grid_size=6, number_of_boxes_max=3, number_of_boxes_min=3, number_of_moving_boxes_max=2, level_generator='quarter', generator_mirroring=False)
     key = jax.random.PRNGKey(0)
     env.play_game(key)

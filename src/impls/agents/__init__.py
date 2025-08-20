@@ -22,11 +22,13 @@ default_config = ml_collections.FrozenConfigDict(
         dict(
             # Agent hyperparameters.
             agent_name='crl',  # Agent name.
+            use_embeddings=False,
             lr=3e-4,  # Learning rate.
             batch_size=256,  # Batch size.
             actor_hidden_dims=(256, 256),  # Actor network hidden dimensions.
             value_hidden_dims=(256, 256),  # Value network hidden dimensions.
             latent_dim=64, 
+            embed_dim=64,
             layer_norm=True,  # Whether to use layer normalization.
             discount=0.99,  # Discount factor.
             actor_loss='awr',  # Actor loss type ('awr' or 'ddpgbc').
@@ -45,7 +47,10 @@ default_config = ml_collections.FrozenConfigDict(
     )
 
  
-def create_agent(config: ml_collections.FrozenConfigDict, example_batch: dict, seed: int):
+def create_agent(config: ml_collections.FrozenConfigDict, 
+                 example_batch: dict, 
+                 seed: int, grid_size: int,
+                 ):
     if config.agent_name == "crl":
         agent = CRLAgent.create(
             seed,
@@ -53,6 +58,7 @@ def create_agent(config: ml_collections.FrozenConfigDict, example_batch: dict, s
             example_batch['actions'],
             config,
             example_batch['value_goals'],
+            grid_size,
         )
     elif config.agent_name == "gciql":
         agent = GCIQLAgent.create(

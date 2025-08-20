@@ -140,6 +140,65 @@ class RunningMeanStd(flax.struct.PyTreeNode):
         return self.replace(mean=new_mean, var=new_var, count=total_count)
 
 
+class GridStateEmbedding(nn.Module):
+    """Embedding layer for grid states.
+    
+    Converts discrete grid state values (0-11) into dense vector representations.
+    
+    Attributes:
+        num_states: Number of possible grid states (12 for your environment)
+        embed_dim: Dimension of embedding vectors
+        grid_size: Size of the grid (for positional encoding)
+        use_position: Whether to add positional embeddings
+    """
+    
+    num_states: int = 12
+    embed_dim: int = 64
+    grid_size: int = 5
+    use_position: bool = True
+    
+    def setup(self):
+        # State embedding: maps each grid state (0-11) to a dense vector
+        self.state_embedding = nn.Embed(
+            num_embeddings=self.num_states, 
+            features=self.embed_dim
+        )
+        
+        # Optional positional embedding: adds spatial information
+        if self.use_position:
+            self.position_embedding = nn.Embed(
+                num_embeddings=self.grid_size * self.grid_size,  # 25 positions for 5x5 grid
+                features=self.embed_dim
+            )
+    
+    def __call__(self, grid_obs):
+        """
+        Args:
+            grid_obs: Grid observations, shape (batch_size, grid_size*grid_size) with values 0-11
+        
+        Returns:
+            Embedded observations, shape (batch_size, grid_size*grid_size*embed_dim)
+        """
+        batch_size = grid_obs.shape[0]
+        grid_flat = grid_obs.reshape(batch_size, -1)  
+        
+        state_embeds = self.state_embedding(grid_flat)  # (batch, 25, embed_dim)
+        
+        if self.use_position:
+            # Create position indices: [0, 1, 2, ..., 24] for each batch item
+            positions = jnp.tile(
+                jnp.arange(self.grid_size * self.grid_size),
+                (batch_size, 1)
+            )
+            pos_embeds = self.position_embedding(positions)  # (batch, 25, embed_dim)
+            
+            combined_embeds = state_embeds + pos_embeds
+        else:
+            combined_embeds = state_embeds
+        
+        # Flatten to (batch_size, grid_size*grid_size*embed_dim)
+        return combined_embeds.reshape(batch_size, -1)
+
 class GCActor(nn.Module):
     """Goal-conditioned actor.
 
@@ -164,6 +223,7 @@ class GCActor(nn.Module):
     const_std: bool = True
     final_fc_init_scale: float = 1e-2
     gc_encoder: nn.Module = None
+    embedding_encoder: nn.Module = None
 
     def setup(self):
         self.actor_net = MLP(self.hidden_dims, activate_final=True)
@@ -192,10 +252,18 @@ class GCActor(nn.Module):
         if self.gc_encoder is not None:
             inputs = self.gc_encoder(observations, goals, goal_encoded=goal_encoded)
         else:
-            inputs = [observations]
-            if goals is not None:
-                inputs.append(goals)
-            inputs = jnp.concatenate(inputs, axis=-1)
+            if hasattr(self, 'embedding_encoder') and self.embedding_encoder is not None:
+                embedded_obs = self.embedding_encoder(observations)
+                inputs = [embedded_obs]
+                if goals is not None:
+                    embedded_goals = self.embedding_encoder(goals)
+                    inputs.append(embedded_goals)
+                inputs = jnp.concatenate(inputs, axis=-1)
+            else:
+                inputs = [observations]
+                if goals is not None:
+                    inputs.append(goals)
+                inputs = jnp.concatenate(inputs, axis=-1)
         outputs = self.actor_net(inputs)
 
         means = self.mean_net(outputs)
@@ -230,6 +298,7 @@ class GCDiscreteActor(nn.Module):
     action_dim: int
     final_fc_init_scale: float = 1e-2
     gc_encoder: nn.Module = None
+    embedding_encoder: nn.Module = None
 
     def setup(self):
         self.actor_net = MLP(self.hidden_dims, activate_final=True)
@@ -253,10 +322,18 @@ class GCDiscreteActor(nn.Module):
         if self.gc_encoder is not None:
             inputs = self.gc_encoder(observations, goals, goal_encoded=goal_encoded)
         else:
-            inputs = [observations]
-            if goals is not None:
-                inputs.append(goals)
-            inputs = jnp.concatenate(inputs, axis=-1)
+            if hasattr(self, 'embedding_encoder') and self.embedding_encoder is not None:
+                embedded_obs = self.embedding_encoder(observations)
+                inputs = [embedded_obs]
+                if goals is not None:
+                    embedded_goals = self.embedding_encoder(goals)
+                    inputs.append(embedded_goals)
+                inputs = jnp.concatenate(inputs, axis=-1)
+            else:
+                inputs = [observations]
+                if goals is not None:
+                    inputs.append(goals)
+                inputs = jnp.concatenate(inputs, axis=-1)
         outputs = self.actor_net(inputs)
 
         logits = self.logit_net(outputs)
@@ -282,6 +359,7 @@ class GCValue(nn.Module):
     layer_norm: bool = True
     ensemble: bool = True
     gc_encoder: nn.Module = None
+    embedding_encoder: nn.Module = None
 
     def setup(self):
         mlp_module = MLP
@@ -302,9 +380,16 @@ class GCValue(nn.Module):
         if self.gc_encoder is not None:
             inputs = [self.gc_encoder(observations, goals)]
         else:
-            inputs = [observations]
-            if goals is not None:
-                inputs.append(goals)
+            if hasattr(self, 'embedding_encoder') and self.embedding_encoder is not None:
+                embedded_obs = self.embedding_encoder(observations)
+                inputs = [embedded_obs]
+                if goals is not None:
+                    embedded_goals = self.embedding_encoder(goals)
+                    inputs.append(embedded_goals)
+            else:
+                inputs = [observations]
+                if goals is not None:
+                    inputs.append(goals)
         if actions is not None:
             inputs.append(actions)
         inputs = jnp.concatenate(inputs, axis=-1)
@@ -347,6 +432,7 @@ class GCBilinearValue(nn.Module):
     value_exp: bool = False
     state_encoder: nn.Module = None
     goal_encoder: nn.Module = None
+    embedding_encoder: nn.Module = None
 
     def setup(self):
         mlp_module = MLP
@@ -365,6 +451,11 @@ class GCBilinearValue(nn.Module):
             actions: Actions (optional).
             info: Whether to additionally return the representations phi and psi.
         """
+        # Apply embedding encoder if available
+        if hasattr(self, 'embedding_encoder') and self.embedding_encoder is not None:
+            observations = self.embedding_encoder(observations)
+            goals = self.embedding_encoder(goals)
+        
         if self.state_encoder is not None:
             observations = self.state_encoder(observations)
         if self.goal_encoder is not None:
@@ -416,6 +507,7 @@ class GCMRNValue(nn.Module):
     latent_dim: int
     layer_norm: bool = True
     encoder: nn.Module = None
+    embedding_encoder: nn.Module = None
 
     def setup(self):
         self.phi = MLP((*self.hidden_dims, self.latent_dim), activate_final=False, layer_norm=self.layer_norm)
@@ -433,6 +525,11 @@ class GCMRNValue(nn.Module):
             phi_s = observations
             phi_g = goals
         else:
+            # Apply embedding encoder if available
+            if hasattr(self, 'embedding_encoder') and self.embedding_encoder is not None:
+                observations = self.embedding_encoder(observations)
+                goals = self.embedding_encoder(goals)
+                
             if self.encoder is not None:
                 observations = self.encoder(observations)
                 goals = self.encoder(goals)
@@ -471,6 +568,7 @@ class GCIQEValue(nn.Module):
     dim_per_component: int
     layer_norm: bool = True
     encoder: nn.Module = None
+    embedding_encoder: nn.Module = None
 
     def setup(self):
         self.phi = MLP((*self.hidden_dims, self.latent_dim), activate_final=False, layer_norm=self.layer_norm)
@@ -490,6 +588,11 @@ class GCIQEValue(nn.Module):
             phi_s = observations
             phi_g = goals
         else:
+            # Apply embedding encoder if available
+            if hasattr(self, 'embedding_encoder') and self.embedding_encoder is not None:
+                observations = self.embedding_encoder(observations)
+                goals = self.embedding_encoder(goals)
+                
             if self.encoder is not None:
                 observations = self.encoder(observations)
                 goals = self.encoder(goals)

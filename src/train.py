@@ -251,7 +251,10 @@ def train(config: Config):
         'actor_goals': dummy_timestep.grid.reshape(1, -1),
     }
 
-    agent = create_agent(config.agent, example_batch, config.exp.seed)
+    agent = create_agent(config.agent, example_batch, 
+                         config.exp.seed, 
+                         grid_size=config.env.grid_size,
+                         )
 
 
     def make_batch(buffer_state, key):

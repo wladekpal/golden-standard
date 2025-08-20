@@ -199,6 +199,7 @@ def get_config():
     config = ml_collections.ConfigDict(
         dict(
             agent_name='sac',  # Agent name.
+            use_embeddings=False,
             lr=1e-4,  # Learning rate.
             batch_size=256,  # Batch size.
             actor_hidden_dims=(256, 256),  # Actor network hidden dimensions.
