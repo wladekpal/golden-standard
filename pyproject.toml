@@ -25,3 +25,12 @@ dependencies = [
 dev = [
     "ipykernel>=6.29.5",
 ]
+
+[tool.ruff]
+# Max line length for linting and formatting
+line-length = 120
+
+exclude = [
+    "src/impls/",
+    "notebooks/",
+]

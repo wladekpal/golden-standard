@@ -3,6 +3,7 @@ import jax.numpy as jnp
 import pytest
 import sys
 import os
+
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 # adjust the import to where your module actually lives
@@ -12,6 +13,7 @@ from .block_moving_env import (
     QuarterGenerator,
     BoxPushingState,
     create_solved_state,
+    calculate_number_of_boxes,
 )
 
 
@@ -25,14 +27,17 @@ def test_remove_targets_mapping_all_values():
 
 def _count_boxes(grid: jnp.ndarray) -> int:
     """Return number of cells that contain a box (in any form: box, box on target, agent-on-box, etc.)."""
-    box_states = jnp.array([
-        GridStatesEnum.BOX,
-        GridStatesEnum.BOX_ON_TARGET,
-        GridStatesEnum.AGENT_ON_BOX,
-        GridStatesEnum.AGENT_ON_BOX_CARRYING_BOX,
-        GridStatesEnum.AGENT_ON_TARGET_WITH_BOX,
-        GridStatesEnum.AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX,
-    ], dtype=jnp.int8)
+    box_states = jnp.array(
+        [
+            GridStatesEnum.BOX,
+            GridStatesEnum.BOX_ON_TARGET,
+            GridStatesEnum.AGENT_ON_BOX,
+            GridStatesEnum.AGENT_ON_BOX_CARRYING_BOX,
+            GridStatesEnum.AGENT_ON_TARGET_WITH_BOX,
+            GridStatesEnum.AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX,
+        ],
+        dtype=jnp.int8,
+    )
     mask = jnp.zeros_like(grid, dtype=bool)
     for s in box_states:
         mask = mask | (grid == s)
@@ -41,14 +46,17 @@ def _count_boxes(grid: jnp.ndarray) -> int:
 
 def _count_targets(grid: jnp.ndarray) -> int:
     """Return number of target cells (targets, box-on-target, or agent-on-target variants)."""
-    target_states = jnp.array([
-        GridStatesEnum.TARGET,
-        GridStatesEnum.BOX_ON_TARGET,
-        GridStatesEnum.AGENT_ON_TARGET,
-        GridStatesEnum.AGENT_ON_TARGET_CARRYING_BOX,
-        GridStatesEnum.AGENT_ON_TARGET_WITH_BOX,
-        GridStatesEnum.AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX,
-    ], dtype=jnp.int8)
+    target_states = jnp.array(
+        [
+            GridStatesEnum.TARGET,
+            GridStatesEnum.BOX_ON_TARGET,
+            GridStatesEnum.AGENT_ON_TARGET,
+            GridStatesEnum.AGENT_ON_TARGET_CARRYING_BOX,
+            GridStatesEnum.AGENT_ON_TARGET_WITH_BOX,
+            GridStatesEnum.AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX,
+        ],
+        dtype=jnp.int8,
+    )
     mask = jnp.zeros_like(grid, dtype=bool)
     for s in target_states:
         mask = mask | (grid == s)
@@ -58,7 +66,7 @@ def _count_targets(grid: jnp.ndarray) -> int:
 @pytest.mark.parametrize("seed", [0, 7, 123])
 def test_default_generator_box_and_target_counts(seed):
     """DefaultLevelGenerator should create exactly `number_of_boxes` boxes (in any state)
-       and exactly `number_of_boxes` target cells (some targets may host boxes)."""
+    and exactly `number_of_boxes` target cells (some targets may host boxes)."""
     gen = DefaultLevelGenerator(grid_size=5, number_of_boxes_min=2, number_of_boxes_max=4, number_of_moving_boxes_max=1)
     key = jax.random.PRNGKey(seed)
     state = gen.generate(key)
@@ -71,7 +79,9 @@ def test_default_generator_box_and_target_counts(seed):
 @pytest.mark.parametrize("seed", [1, 11])
 def test_quarter_generator_box_and_target_counts(seed):
     """QuarterGenerator should also produce matching counts for boxes and targets."""
-    gen = QuarterGenerator(grid_size=4, number_of_boxes_min=2, number_of_boxes_max=3, number_of_moving_boxes_max=1, mirror=False)
+    gen = QuarterGenerator(
+        grid_size=4, number_of_boxes_min=2, number_of_boxes_max=3, number_of_moving_boxes_max=1, mirror=False
+    )
     key = jax.random.PRNGKey(seed)
     state = gen.generate(key)
     grid = state.grid
@@ -80,18 +90,21 @@ def test_quarter_generator_box_and_target_counts(seed):
     assert _count_targets(grid) == nboxes, f"targets found {_count_targets(grid)} != number_of_boxes {nboxes}"
 
 
-def test_create_solved_state_transforms_targets_and_boxes_and_agent_cell():
+def test_create_solved_state_transforms_targets_and_boxes_and_agent_cell1():
     """A small hand-crafted grid: TARGET at (0,0), BOX at (0,1), agent at (0,0).
-       After create_solved_state:
-         - the target cell should become BOX_ON_TARGET with the agent on it -> AGENT_ON_TARGET_WITH_BOX
-         - BOX at (0,1) should be cleared to EMPTY
-         - agent_has_box must be False
+    After create_solved_state:
+      - the target cell should become BOX_ON_TARGET with the agent on it -> AGENT_ON_TARGET_WITH_BOX
+      - BOX at (0,1) should be cleared to EMPTY
+      - agent_has_box must be False
     """
-    grid = jnp.array([
-        [GridStatesEnum.TARGET, GridStatesEnum.BOX,    GridStatesEnum.EMPTY],
-        [GridStatesEnum.EMPTY,  GridStatesEnum.EMPTY,  GridStatesEnum.EMPTY],
-        [GridStatesEnum.EMPTY,  GridStatesEnum.EMPTY,  GridStatesEnum.EMPTY],
-    ], dtype=jnp.int8)
+    grid = jnp.array(
+        [
+            [GridStatesEnum.AGENT_ON_TARGET, GridStatesEnum.BOX, GridStatesEnum.TARGET],
+            [GridStatesEnum.BOX_ON_TARGET, GridStatesEnum.EMPTY, GridStatesEnum.EMPTY],
+            [GridStatesEnum.EMPTY, GridStatesEnum.BOX, GridStatesEnum.EMPTY],
+        ],
+        dtype=jnp.int8,
+    )
 
     agent_pos = jnp.array([0, 0], dtype=jnp.int32)
     key = jax.random.PRNGKey(42)
@@ -111,5 +124,135 @@ def test_create_solved_state_transforms_targets_and_boxes_and_agent_cell():
 
     assert int(solved.grid[0, 0]) == int(GridStatesEnum.AGENT_ON_TARGET_WITH_BOX)
     assert int(solved.grid[0, 1]) == int(GridStatesEnum.EMPTY)
+    assert int(solved.grid[0, 2]) == int(GridStatesEnum.BOX_ON_TARGET)
+    assert int(solved.grid[1, 0]) == int(GridStatesEnum.BOX_ON_TARGET)
+    assert calculate_number_of_boxes(state.grid) == 3
+    assert calculate_number_of_boxes(solved.grid) == 3
+    # agent_has_box should be cleared to False
+    assert bool(solved.agent_has_box) is False
+
+
+def test_create_solved_state_transforms_targets_and_boxes_and_agent_cell2():
+    """A small hand-crafted grid: TARGET at (0,0), BOX at (0,1), agent at (0,0).
+    After create_solved_state:
+      - the target cell should become BOX_ON_TARGET with the agent on it -> AGENT_ON_TARGET_WITH_BOX
+      - BOX at (0,1) should be cleared to EMPTY
+      - agent_has_box must be False
+    """
+    grid = jnp.array(
+        [
+            [GridStatesEnum.AGENT_ON_TARGET_WITH_BOX, GridStatesEnum.BOX, GridStatesEnum.TARGET],
+            [GridStatesEnum.BOX_ON_TARGET, GridStatesEnum.EMPTY, GridStatesEnum.EMPTY],
+            [GridStatesEnum.AGENT, GridStatesEnum.EMPTY, GridStatesEnum.EMPTY],
+        ],
+        dtype=jnp.int8,
+    )
+
+    agent_pos = jnp.array([0, 0], dtype=jnp.int32)
+    key = jax.random.PRNGKey(42)
+    state = BoxPushingState(
+        key=key,
+        grid=grid,
+        agent_pos=agent_pos,
+        agent_has_box=jnp.array(True),
+        steps=jnp.array(0),
+        number_of_boxes=jnp.array(1),
+        goal=jnp.zeros_like(grid),
+        reward=jnp.array(0),
+        success=jnp.array(0),
+    )
+
+    solved = create_solved_state(state)
+
+    assert int(solved.grid[0, 0]) == int(GridStatesEnum.AGENT_ON_TARGET_WITH_BOX)
+    assert int(solved.grid[0, 1]) == int(GridStatesEnum.EMPTY)
+    assert int(solved.grid[0, 2]) == int(GridStatesEnum.BOX_ON_TARGET)
+    assert int(solved.grid[1, 0]) == int(GridStatesEnum.BOX_ON_TARGET)
+    assert calculate_number_of_boxes(state.grid) == 3
+    assert calculate_number_of_boxes(solved.grid) == 3
+    # agent_has_box should be cleared to False
+    assert bool(solved.agent_has_box) is False
+
+
+def test_create_solved_state_transforms_targets_and_boxes_and_agent_cell3():
+    """A small hand-crafted grid: TARGET at (0,0), BOX at (0,1), agent at (0,0).
+    After create_solved_state:
+      - the target cell should become BOX_ON_TARGET with the agent on it -> AGENT_ON_TARGET_WITH_BOX
+      - BOX at (0,1) should be cleared to EMPTY
+      - agent_has_box must be False
+    """
+    grid = jnp.array(
+        [
+            [GridStatesEnum.AGENT_ON_BOX, GridStatesEnum.BOX, GridStatesEnum.TARGET],
+            [GridStatesEnum.BOX_ON_TARGET, GridStatesEnum.EMPTY, GridStatesEnum.EMPTY],
+            [GridStatesEnum.AGENT, GridStatesEnum.TARGET, GridStatesEnum.EMPTY],
+        ],
+        dtype=jnp.int8,
+    )
+
+    agent_pos = jnp.array([0, 0], dtype=jnp.int32)
+    key = jax.random.PRNGKey(42)
+    state = BoxPushingState(
+        key=key,
+        grid=grid,
+        agent_pos=agent_pos,
+        agent_has_box=jnp.array(True),
+        steps=jnp.array(0),
+        number_of_boxes=jnp.array(1),
+        goal=jnp.zeros_like(grid),
+        reward=jnp.array(0),
+        success=jnp.array(0),
+    )
+
+    solved = create_solved_state(state)
+
+    assert int(solved.grid[0, 0]) == int(GridStatesEnum.AGENT)
+    assert int(solved.grid[0, 1]) == int(GridStatesEnum.EMPTY)
+    assert int(solved.grid[0, 2]) == int(GridStatesEnum.BOX_ON_TARGET)
+    assert int(solved.grid[1, 0]) == int(GridStatesEnum.BOX_ON_TARGET)
+    assert calculate_number_of_boxes(state.grid) == 3
+    assert calculate_number_of_boxes(solved.grid) == 3
+    # agent_has_box should be cleared to False
+    assert bool(solved.agent_has_box) is False
+
+
+def test_create_solved_state_transforms_targets_and_boxes_and_agent_cell4():
+    """A small hand-crafted grid: TARGET at (0,0), BOX at (0,1), agent at (0,0).
+    After create_solved_state:
+      - the target cell should become BOX_ON_TARGET with the agent on it -> AGENT_ON_TARGET_WITH_BOX
+      - BOX at (0,1) should be cleared to EMPTY
+      - agent_has_box must be False
+    """
+    grid = jnp.array(
+        [
+            [GridStatesEnum.AGENT, GridStatesEnum.BOX, GridStatesEnum.TARGET],
+            [GridStatesEnum.BOX_ON_TARGET, GridStatesEnum.EMPTY, GridStatesEnum.EMPTY],
+            [GridStatesEnum.AGENT, GridStatesEnum.EMPTY, GridStatesEnum.EMPTY],
+        ],
+        dtype=jnp.int8,
+    )
+
+    agent_pos = jnp.array([0, 0], dtype=jnp.int32)
+    key = jax.random.PRNGKey(42)
+    state = BoxPushingState(
+        key=key,
+        grid=grid,
+        agent_pos=agent_pos,
+        agent_has_box=jnp.array(True),
+        steps=jnp.array(0),
+        number_of_boxes=jnp.array(1),
+        goal=jnp.zeros_like(grid),
+        reward=jnp.array(0),
+        success=jnp.array(0),
+    )
+
+    solved = create_solved_state(state)
+
+    assert int(solved.grid[0, 0]) == int(GridStatesEnum.AGENT)
+    assert int(solved.grid[0, 1]) == int(GridStatesEnum.EMPTY)
+    assert int(solved.grid[0, 2]) == int(GridStatesEnum.BOX_ON_TARGET)
+    assert int(solved.grid[1, 0]) == int(GridStatesEnum.BOX_ON_TARGET)
+    assert calculate_number_of_boxes(state.grid) == 2
+    assert calculate_number_of_boxes(solved.grid) == 2
     # agent_has_box should be cleared to False
     assert bool(solved.agent_has_box) is False

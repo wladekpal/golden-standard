@@ -9,7 +9,6 @@ from impls.utils.encoders import GCEncoder, encoder_modules
 from impls.utils.flax_utils import ModuleDict, TrainState, nonpytree_field
 from impls.utils.networks import GCActor, GCBilinearValue, GCDiscreteActor, GCDiscreteBilinearCritic, GridStateEmbedding
 
-# jnp.printoptions(precision=3, threshold=10000, linewidth=200)
 
 
 class CRLAgent(flax.struct.PyTreeNode):
