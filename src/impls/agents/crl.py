@@ -74,6 +74,20 @@ class CRLAgent(flax.struct.PyTreeNode):
             )(logits)
 
             contrastive_loss = jnp.mean(contrastive_loss)
+        elif self.config['contrastive_loss'] == 'dpo':
+            def dpo_loss(_logits):
+                positive = jnp.diag(_logits)
+                diffs = positive[:, None] - _logits
+                loss = -jnp.mean(jax.nn.log_sigmoid(diffs))
+                return loss
+
+            contrastive_loss = jax.vmap(
+                dpo_loss,
+                in_axes=-1,
+                out_axes=-1,
+            )(logits)
+
+            contrastive_loss = jnp.mean(contrastive_loss)
 
 
         # Compute additional statistics.
