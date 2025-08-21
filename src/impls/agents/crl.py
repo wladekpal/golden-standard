@@ -41,15 +41,40 @@ class CRLAgent(flax.struct.PyTreeNode):
         if len(phi.shape) == 2:  # Non-ensemble.
             phi = phi[None, ...]
             psi = psi[None, ...]
-        logits = jnp.einsum('eik,ejk->ije', phi, psi) / jnp.sqrt(phi.shape[-1])
+
+        # Phi and psi have shape [Ensemble, Batch, Embedding]
+        if self.config['energy_fn'] == 'dot':
+            logits = jnp.einsum('eik,ejk->ije', phi, psi) / jnp.sqrt(phi.shape[-1])
+        elif self.config['energy_fn'] == 'l2':
+            # Broadcasting dimensions for pairwise distance
+            phi = phi[:, :, None, :]
+            psi = psi[:, None, :, :]
+            logits = -jnp.sum((phi - psi) ** 2, axis=-1)
+            # Move ensemble dimension to the end
+            logits = logits.swapaxes(0, 2)
         # logits.shape is (B, B, e) with one term for positive pair and (B - 1) terms for negative pairs in each row.
+
         I = jnp.eye(batch_size)
-        contrastive_loss = jax.vmap(
-            lambda _logits: optax.sigmoid_binary_cross_entropy(logits=_logits, labels=I),
-            in_axes=-1,
-            out_axes=-1,
-        )(logits)
-        contrastive_loss = jnp.mean(contrastive_loss)
+        if self.config['contrastive_loss'] == 'binary':
+            contrastive_loss = jax.vmap(
+                lambda _logits: optax.sigmoid_binary_cross_entropy(logits=_logits, labels=I),
+                in_axes=-1,
+                out_axes=-1,
+            )(logits)
+            contrastive_loss = jnp.mean(contrastive_loss)
+        elif self.config['contrastive_loss'] == 'sym_infonce':
+            infonce_loss = lambda _logits: -jnp.mean(
+                2 * jnp.diag(_logits) - jax.nn.logsumexp(_logits, axis=0) - jax.nn.logsumexp(_logits, axis=1)
+            )
+
+            contrastive_loss = jax.vmap(
+                infonce_loss,
+                in_axes=-1,
+                out_axes=-1,
+            )(logits)
+
+            contrastive_loss = jnp.mean(contrastive_loss)
+
 
         # Compute additional statistics.
         logits = jnp.mean(logits, axis=-1)
