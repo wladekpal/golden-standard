@@ -233,6 +233,7 @@ def flatten_batch(gamma, transition, sample_key, get_next_obs=False):
     # 1) are greater than i
     # 2) have the same traj_id as the ith time index
 
+    # TODO: make sure, that we take future states only from single trajectory, when no future states, take the same one
     new_probs = probs * jnp.diag(jnp.ones(probs.shape[0] - 1), k=1)
     goal_index_next_state = jax.random.categorical(sample_key, jnp.log(new_probs))
     next_state = jax.tree_util.tree_map(

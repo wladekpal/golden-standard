@@ -159,14 +159,13 @@ def evaluate_agent_in_specific_env(agent, key, jitted_flatten_batch, config, nam
     )  # state.grid is of shape (batch_size * 2, grid_size, grid_size)
     if not config.exp.use_targets:
         state = state.replace(grid=GridStatesEnum.remove_targets(state.grid))
+        next_state = next_state.replace(grid=GridStatesEnum.remove_targets(next_state.grid))
         future_state = future_state.replace(grid=GridStatesEnum.remove_targets(future_state.grid))
 
     # Create valid batch
     valid_batch = {
         "observations": state.grid.reshape(state.grid.shape[0], -1),
-        "next_observations": next_state.grid.reshape(
-            next_state.grid.shape[0], -1
-        ),  # TODO: przy włączonej i wyłączonej fladze jest źle - debug this
+        "next_observations": next_state.grid.reshape(next_state.grid.shape[0], -1),
         "actions": actions.squeeze(),
         "rewards": state.reward.reshape(state.reward.shape[0], -1),
         "masks": 1.0 - state.done.reshape(state.done.shape[0], -1),
@@ -202,6 +201,7 @@ def evaluate_agent_in_specific_env(agent, key, jitted_flatten_batch, config, nam
             {
                 f"{prefix}/critic_loss": loss_info["critic/critic_loss"],
                 f"{prefix}/q_mean": loss_info["critic/q_mean"],
+                f"{prefix}/v_mean": loss_info["value/v_mean"],
             }
         )
     else:
@@ -325,6 +325,7 @@ def train(config: Config):
         )
         if not config.exp.use_targets:
             state = state.replace(grid=GridStatesEnum.remove_targets(state.grid))
+            next_state = next_state.replace(grid=GridStatesEnum.remove_targets(next_state.grid))
             future_state = future_state.replace(grid=GridStatesEnum.remove_targets(future_state.grid))
         # Create valid batch
         batch = {
