@@ -89,6 +89,8 @@ class CRLAgent(flax.struct.PyTreeNode):
 
             contrastive_loss = jnp.mean(contrastive_loss)
 
+        logsumexp = jax.nn.logsumexp(logits + 1e-6, axis=1)
+        contrastive_loss += self.config['logsumexp_coeff'] * jnp.mean(logsumexp**2)
 
         # Compute additional statistics.
         logits = jnp.mean(logits, axis=-1)
