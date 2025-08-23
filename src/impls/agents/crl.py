@@ -56,24 +56,19 @@ class CRLAgent(flax.struct.PyTreeNode):
 
         I = jnp.eye(batch_size)
         if self.config['contrastive_loss'] == 'binary':
-            contrastive_loss = jax.vmap(
-                lambda _logits: optax.sigmoid_binary_cross_entropy(logits=_logits, labels=I),
-                in_axes=-1,
-                out_axes=-1,
-            )(logits)
-            contrastive_loss = jnp.mean(contrastive_loss)
+            loss_fn = lambda _logits: optax.sigmoid_binary_cross_entropy(logits=_logits, labels=I)
         elif self.config['contrastive_loss'] == 'sym_infonce':
-            infonce_loss = lambda _logits: -jnp.mean(
+            loss_fn = lambda _logits: -jnp.mean(
                 2 * jnp.diag(_logits) - jax.nn.logsumexp(_logits, axis=0) - jax.nn.logsumexp(_logits, axis=1)
             )
 
-            contrastive_loss = jax.vmap(
-                infonce_loss,
-                in_axes=-1,
-                out_axes=-1,
-            )(logits)
+        contrastive_loss = jax.vmap(
+            loss_fn,
+            in_axes=-1,
+            out_axes=-1,
+        )(logits)
 
-            contrastive_loss = jnp.mean(contrastive_loss)
+        contrastive_loss = jnp.mean(contrastive_loss)
 
         logsumexp = jax.nn.logsumexp(logits + 1e-6, axis=1)
         contrastive_loss += self.config['logsumexp_coeff'] * jnp.mean(logsumexp**2)
