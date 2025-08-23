@@ -168,7 +168,8 @@ def evaluate_agent_in_specific_env(agent, key, jitted_flatten_batch, config, nam
         "next_observations": next_state.grid.reshape(next_state.grid.shape[0], -1),
         "actions": actions.squeeze(),
         "rewards": state.reward.reshape(state.reward.shape[0], -1),
-        "masks": 1.0 - state.done.reshape(state.done.shape[0], -1),
+        # "masks": 1.0 - state.done.reshape(state.done.shape[0], -1),
+        "masks": jnp.ones_like(state.done.reshape(state.done.shape[0], -1)),
         "value_goals": future_state.grid.reshape(future_state.grid.shape[0], -1),
         "actor_goals": future_state.grid.reshape(future_state.grid.shape[0], -1),
     }
@@ -273,6 +274,7 @@ def train(config: Config):
     )
 
     env = create_env(config.env)
+    print(f"DEnse:{env.dense_rewards}")
     env = AutoResetWrapper(env)
     key = random.PRNGKey(config.exp.seed)
     env.step = jax.jit(jax.vmap(env.step))
@@ -333,7 +335,8 @@ def train(config: Config):
             "next_observations": next_state.grid.reshape(next_state.grid.shape[0], -1),
             "actions": actions.squeeze(),
             "rewards": state.reward.reshape(state.reward.shape[0], -1),
-            "masks": 1.0 - state.reward.reshape(state.reward.shape[0], -1),  # TODO: add success and reward separately
+            # "masks": 1.0 - state.reward.reshape(state.reward.shape[0], -1),  # TODO: add success and reward separately
+            "masks": jnp.ones_like(state.done.reshape(state.done.shape[0], -1)),
             "value_goals": future_state.grid.reshape(future_state.grid.shape[0], -1),
             "actor_goals": future_state.grid.reshape(future_state.grid.shape[0], -1),
         }
