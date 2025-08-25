@@ -52,6 +52,8 @@ class CRLAgent(flax.struct.PyTreeNode):
             logits = -jnp.sum((phi - psi) ** 2, axis=-1)
             # Move ensemble dimension to the end
             logits = logits.swapaxes(0, 2)
+        else:
+            raise ValueError(f"Unknown energy function: {self.config['energy_fn']}")
         # logits.shape is (B, B, e) with one term for positive pair and (B - 1) terms for negative pairs in each row.
 
         I = jnp.eye(batch_size)
@@ -61,6 +63,8 @@ class CRLAgent(flax.struct.PyTreeNode):
             loss_fn = lambda _logits: -jnp.mean(
                 2 * jnp.diag(_logits) - jax.nn.logsumexp(_logits, axis=0) - jax.nn.logsumexp(_logits, axis=1)
             )
+        else:
+            raise ValueError(f"Unknown contrastive loss function: {self.config['contrastive_loss']}")
 
         contrastive_loss = jax.vmap(
             loss_fn,
