@@ -93,7 +93,7 @@ class BoxPushingConfig:
     number_of_boxes_max: int = 4
     number_of_moving_boxes_max: int = 2
     episode_length: int = 100
-    truncate_when_success: bool = False
+    terminate_when_success: bool = False
     dense_rewards: bool = False
     negative_sparse: bool = True
     level_generator: str = "default"
@@ -331,7 +331,7 @@ class BoxPushingEnv:
         number_of_boxes_min: int = 3,
         number_of_boxes_max: int = 4,
         number_of_moving_boxes_max: int = 2,
-        truncate_when_success: bool = False,
+        terminate_when_success: bool = False,
         dense_rewards: bool = False,
         negative_sparse: bool = True,
         level_generator: str = "default",
@@ -346,7 +346,7 @@ class BoxPushingEnv:
         self.number_of_boxes_min = number_of_boxes_min
         self.number_of_boxes_max = number_of_boxes_max
         self.number_of_moving_boxes_max = number_of_moving_boxes_max
-        self.truncate_when_success = truncate_when_success
+        self.terminate_when_success = terminate_when_success
         self.dense_rewards = dense_rewards
         self.negative_sparse = negative_sparse
 
@@ -405,16 +405,11 @@ class BoxPushingEnv:
 
         new_pos, new_grid, new_agent_has_box = action_result
 
-        # Check if done
-        truncated = jnp.bool_(False)
-        # TODO: change to terminate when success and change done accordingly
-        if self.truncate_when_success:
-            truncated = (new_steps >= self.episode_length) | self._is_goal_reached(new_grid, state.number_of_boxes)
-        else:
-            truncated = new_steps >= self.episode_length
-
+        truncated = new_steps >= self.episode_length
         reward = self._get_reward(state.grid, new_grid, state.number_of_boxes)
         success = self._is_goal_reached(new_grid, state.number_of_boxes).astype(jnp.int32)
+        if self.terminate_when_success:
+            done = self._is_goal_reached(new_grid, state.number_of_boxes)
 
         new_state = BoxPushingState(
             key=state.key,
@@ -625,7 +620,7 @@ class BoxPushingEnv:
         print("Goal: Move boxes to target cells (marked with 'T')")
         print("Press 'q' to quit\n")
 
-        while not done:
+        while True:
             # Display current state
             self._display_state(state)
             print(f"Steps: {state.steps}, Return: {total_reward}, Reward: {reward}")
@@ -665,11 +660,6 @@ class BoxPushingEnv:
             else:
                 state, reward, done, info = self.step(state, action)
                 total_reward += reward
-
-        # Final display
-        self._display_state(state)
-        print(f"\nGame Over! Final Reward: {total_reward}")
-        print(f"Boxes moved to target: {info['boxes_moved']}/{info['total_boxes']}")
 
     def _display_state(self, state: BoxPushingState):
         """Display the current game state in ASCII."""
@@ -766,19 +756,22 @@ class AutoResetWrapper(Wrapper):
             reset_state, reset_info = self._env.reset(key)
             return reset_state
 
-        state = jax.lax.cond(info["truncated"], lambda: reset_fn(key_new), lambda: state)
+        state = jax.lax.cond(jnp.logical_or(info["truncated"], done), lambda: reset_fn(key_new), lambda: state)
         return state, reward, done, info
 
 
 if __name__ == "__main__":
     env = BoxPushingEnv(
         grid_size=4,
-        number_of_boxes_max=3,
-        number_of_boxes_min=3,
-        number_of_moving_boxes_max=2,
+        number_of_boxes_max=2,
+        number_of_boxes_min=2,
+        number_of_moving_boxes_max=1,
         level_generator="quarter",
         generator_mirroring=False,
         dense_rewards=True,
+        terminate_when_success=True,
+        episode_length=3,
     )
+    env = AutoResetWrapper(env)
     key = jax.random.PRNGKey(0)
     env.play_game(key)
