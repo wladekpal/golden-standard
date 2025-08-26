@@ -38,9 +38,9 @@ import numpy as np
 RANGE_GENERALIZATION = [1,2,3,4,5,6,7,9,11]
 EPISODE_LENGTH = 100
 NUM_ENVS = 1024
-CHECKPOINT = 100
-RUN_NAME = f"LONG_RUN_{CHECKPOINT}_ckpt_short"
-MODEL_PATH = "/home/mbortkie/repos/crl_subgoal/experiments/test_generalization_sc_20250814_235903/runs/long_unbugged_check_moving_boxes_5_grid_5_range_3_7_alpha_0.1"
+CHECKPOINT = 50
+RUN_NAME = f"CORRECTLY_{CHECKPOINT}_ckpt_short_more_data"
+MODEL_PATH = "/home/mbortkie/repos/crl_subgoal/experiments/test_generalization_sc_20250820_001752/runs/CORRECTLY_fixed_bug_with_solved_state_moving_boxes_5_grid_5_range_3_7_alpha_0.1"
 EPOCHS = 101
 EVAL_EVERY = 10
 FIGURES_PATH = f"/home/mbortkie/repos/crl_subgoal/notebooks/figures/{RUN_NAME}"
@@ -110,6 +110,8 @@ def actor_loss(agent, batch, grad_params, rng=None):
 
     actor_info = {
         'actor_loss': actor_loss,
+        'actor_loss_forward': jax.lax.stop_gradient(dist_q.kl_divergence(dist_pi).mean()),
+        'actor_loss_backward': jax.lax.stop_gradient(dist_pi.kl_divergence(dist_q).mean()),
     }
     return actor_loss, actor_info
 
@@ -195,6 +197,8 @@ def evaluate_agent_in_specific_env(agent, key, jitted_flatten_batch, config, nam
         f"{prefix}/mean_boxes_on_target": info["boxes_on_target"].mean(),
         f"{prefix}/total_loss": loss,
         f"{prefix}/actor_loss": loss_info["actor/actor_loss"],
+        f"{prefix}/actor_loss_backward": loss_info["actor/actor_loss_backward"],
+        f"{prefix}/actor_loss_forward": loss_info["actor/actor_loss_forward"],
     }
 
     if create_gif:
@@ -398,16 +402,29 @@ for RANDOM_GOALS in [True, False]:
         plt.savefig(os.path.join(FIGURES_PATH, f'mean_reward_distillation_training_KL_{"forward" if FORWARD_KL else "backward"}_{"random" if RANDOM_GOALS else "future"}_goals.png'))
         plt.close()
         # %% actor loss plot
-        actor_losses = [info['actor/actor_loss'] for info in eval_infos]
+        actor_losses = [info['actor/actor_loss_forward'] for info in eval_infos]
         x_axis = jnp.linspace(0, EPOCHS*10_000, len(actor_losses))
         plt.plot(x_axis, actor_losses, label='Actor distilled')
         plt.legend()
-        plt.ylabel('Actor loss')
+        plt.ylabel('Actor loss forward')
         plt.xlabel('Training steps')
         plt.title(f'Actor loss: {"forward" if FORWARD_KL else "backward"} KL, {"random" if RANDOM_GOALS else "future"} goals')
         plt.tight_layout()
-        plt.savefig(os.path.join(FIGURES_PATH, f'actor_loss_distillation_training_KL_{"forward" if FORWARD_KL else "backward"}_{"random" if RANDOM_GOALS else "future"}_goals.png'))
+        plt.savefig(os.path.join(FIGURES_PATH, f'actor_loss_forward_distillation_training_KL_{"forward" if FORWARD_KL else "backward"}_{"random" if RANDOM_GOALS else "future"}_goals.png'))
         plt.close()
+
+        # %% actor loss plot
+        actor_losses = [info['actor/actor_loss_backward'] for info in eval_infos]
+        x_axis = jnp.linspace(0, EPOCHS*10_000, len(actor_losses))
+        plt.plot(x_axis, actor_losses, label='Actor distilled')
+        plt.legend()
+        plt.ylabel('Actor loss backward')
+        plt.xlabel('Training steps')
+        plt.title(f'Actor loss: {"forward" if FORWARD_KL else "backward"} KL, {"random" if RANDOM_GOALS else "future"} goals')
+        plt.tight_layout()
+        plt.savefig(os.path.join(FIGURES_PATH, f'actor_loss_backward_distillation_training_KL_{"forward" if FORWARD_KL else "backward"}_{"random" if RANDOM_GOALS else "future"}_goals.png'))
+        plt.close()
+
 
         # %% [markdown]
         # ### Generalization tests
