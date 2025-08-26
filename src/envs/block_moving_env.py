@@ -94,6 +94,7 @@ class BoxPushingConfig:
     episode_length: int = 100
     truncate_when_success: bool = False
     dense_rewards: bool = False
+    negative_sparse: bool = True
     level_generator: str = "default"
     generator_mirroring: bool = False
 
@@ -331,6 +332,7 @@ class BoxPushingEnv:
         number_of_moving_boxes_max: int = 2,
         truncate_when_success: bool = False,
         dense_rewards: bool = False,
+        negative_sparse: bool = True,
         level_generator: str = "default",
         **kwargs,
     ):
@@ -345,6 +347,7 @@ class BoxPushingEnv:
         self.number_of_moving_boxes_max = number_of_moving_boxes_max
         self.truncate_when_success = truncate_when_success
         self.dense_rewards = dense_rewards
+        self.negative_sparse = negative_sparse
 
         if level_generator == "default":
             self.level_generator = DefaultLevelGenerator(
@@ -562,7 +565,10 @@ class BoxPushingEnv:
             diff = boxes_on_targets_new - boxes_on_targets_old
             return diff
         else:
-            return (boxes_on_targets_new == number_of_boxes).astype(jnp.int32)
+            if self.negative_sparse:
+                return (boxes_on_targets_new == number_of_boxes).astype(jnp.int32) - 1
+            else:
+                return (boxes_on_targets_new == number_of_boxes).astype(jnp.int32)
 
     def _handle_pickup(self, state: BoxPushingState) -> Tuple[jax.Array, bool]:
         """Handle pickup action."""
