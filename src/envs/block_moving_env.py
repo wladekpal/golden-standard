@@ -27,6 +27,7 @@ class BoxPushingState(struct.PyTreeNode):
 class TimeStep(BoxPushingState):
     action: jax.Array
     done: jax.Array
+    truncated: jax.Array
 
 
 @dataclass
@@ -370,9 +371,10 @@ class BoxPushingEnv:
         grid = state.grid
 
         info = {
+            "truncated": jnp.bool_(False),
             "boxes_on_target": jnp.sum(grid == GridStatesEnum.BOX_ON_TARGET)
             + jnp.sum(grid == GridStatesEnum.AGENT_ON_TARGET_WITH_BOX)
-            + jnp.sum(grid == GridStatesEnum.AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX)
+            + jnp.sum(grid == GridStatesEnum.AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX),
         }
 
         return state, info
@@ -404,10 +406,12 @@ class BoxPushingEnv:
         new_pos, new_grid, new_agent_has_box = action_result
 
         # Check if done
+        truncated = jnp.bool_(False)
+        # TODO: change to terminate when success and change done accordingly
         if self.truncate_when_success:
-            done = (new_steps >= self.episode_length) | self._is_goal_reached(new_grid, state.number_of_boxes)
+            truncated = (new_steps >= self.episode_length) | self._is_goal_reached(new_grid, state.number_of_boxes)
         else:
-            done = new_steps >= self.episode_length
+            truncated = new_steps >= self.episode_length
 
         reward = self._get_reward(state.grid, new_grid, state.number_of_boxes)
         success = self._is_goal_reached(new_grid, state.number_of_boxes).astype(jnp.int32)
@@ -425,9 +429,10 @@ class BoxPushingEnv:
         )
 
         info = {
+            "truncated": truncated,
             "boxes_on_target": jnp.sum(new_grid == GridStatesEnum.BOX_ON_TARGET)
             + jnp.sum(new_grid == GridStatesEnum.AGENT_ON_TARGET_WITH_BOX)
-            + jnp.sum(new_grid == GridStatesEnum.AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX)
+            + jnp.sum(new_grid == GridStatesEnum.AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX),
         }
 
         return new_state, reward, done, info
@@ -685,6 +690,7 @@ class BoxPushingEnv:
             reward=jnp.zeros((1,), dtype=jnp.int8),
             success=jnp.zeros((1,), dtype=jnp.int8),
             done=jnp.zeros((1,), dtype=jnp.int8),
+            truncated=jnp.zeros((1,), dtype=jnp.int8),
         )
 
         return dummy_timestep
@@ -760,7 +766,7 @@ class AutoResetWrapper(Wrapper):
             reset_state, reset_info = self._env.reset(key)
             return reset_state
 
-        state = jax.lax.cond(done, lambda: reset_fn(key_new), lambda: state)
+        state = jax.lax.cond(info["truncated"], lambda: reset_fn(key_new), lambda: state)
         return state, reward, done, info
 
 
