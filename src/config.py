@@ -29,7 +29,6 @@ class ExpConfig:
 
     # Miscellaneous
     use_targets: bool = False
-    use_double_batch_trick: bool = False
     gamma: float = 0.99
 
     # Evaluation settings

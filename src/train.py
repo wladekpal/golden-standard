@@ -61,6 +61,7 @@ def collect_data(agent, key, env, num_envs, episode_length, use_targets=False, c
             reward=reward,
             success=state.success,
             done=done,
+            truncated=info["truncated"],
         )
         return (new_state, info, key), timestep
 
@@ -75,51 +76,19 @@ def extract_at_indices(data, indices):
     return jax.tree_util.tree_map(lambda x: x[jnp.arange(x.shape[0]), indices], data)
 
 
-@functools.partial(jax.jit, static_argnums=(4,))
-def get_single_pair_from_every_env(state, future_state, goal_index, key, use_double_batch_trick=False):
+@functools.partial(jax.jit)
+def get_single_pair_from_every_env(state, next_state, future_state, goal_index, key):
     """Sample two random indices and concatenate the results."""
-
-    # Sample two random indices for each batch
-    def double_batch_fn(key):
-        subkey1, subkey2, subkey3 = jax.random.split(key, 3)
-        random_indices1 = jax.random.randint(subkey1, (state.grid.shape[0],), minval=0, maxval=state.grid.shape[1])
-        random_indices2 = jax.random.randint(subkey2, (state.grid.shape[0],), minval=0, maxval=state.grid.shape[1])
-
-        state1 = extract_at_indices(state, random_indices1)
-        state2 = extract_at_indices(state, random_indices2)
-        future_state1 = extract_at_indices(future_state, random_indices1)
-        future_state2 = extract_at_indices(future_state, random_indices2)
-        goal_index1 = extract_at_indices(goal_index, random_indices1)
-        goal_index2 = extract_at_indices(goal_index, random_indices2)
-
-        envs_to_take = jax.random.randint(subkey3, (state.grid.shape[0] // 2,), minval=0, maxval=state.grid.shape[0])
-        state1 = jax.tree_util.tree_map(lambda x: x[envs_to_take], state1)
-        state2 = jax.tree_util.tree_map(lambda x: x[envs_to_take], state2)
-        future_state1 = jax.tree_util.tree_map(lambda x: x[envs_to_take], future_state1)
-        future_state2 = jax.tree_util.tree_map(lambda x: x[envs_to_take], future_state2)
-        goal_index1 = jax.tree_util.tree_map(lambda x: x[envs_to_take], goal_index1)
-        goal_index2 = jax.tree_util.tree_map(lambda x: x[envs_to_take], goal_index2)
-
-        # Concatenate the two samples
-        state_concat = jax.tree_util.tree_map(
-            lambda x1, x2: jnp.concatenate([x1, x2], axis=0), state1, state2
-        )  # (batch_size, grid_size, grid_size)
-        actions = jnp.concatenate([state1.action, state2.action], axis=0)
-        future_state_concat = jax.tree_util.tree_map(
-            lambda x1, x2: jnp.concatenate([x1, x2], axis=0), future_state1, future_state2
-        )
-        goal_index_concat = jnp.concatenate([goal_index1, goal_index2], axis=0)
-
-        return state_concat, actions, future_state_concat, goal_index_concat
 
     def single_batch_fn(key):
         random_indices = jax.random.randint(key, (state.grid.shape[0],), minval=0, maxval=state.grid.shape[1])
         state_single = extract_at_indices(state, random_indices)  # (batch_size, grid_size, grid_size)
+        next_state_single = extract_at_indices(next_state, random_indices)  # (batch_size, grid_size, grid_size)
         future_state_single = extract_at_indices(future_state, random_indices)
         goal_index_single = extract_at_indices(goal_index, random_indices)
-        return state_single, state_single.action, future_state_single, goal_index_single
+        return state_single, state_single.action, next_state_single, future_state_single, goal_index_single
 
-    return jax.lax.cond(use_double_batch_trick, double_batch_fn, single_batch_fn, key)
+    return single_batch_fn(key)
 
 
 def evaluate_agent_in_specific_env(agent, key, jitted_flatten_batch, config, name, create_gif=False, critic_temp=None):
@@ -130,7 +99,7 @@ def evaluate_agent_in_specific_env(agent, key, jitted_flatten_batch, config, nam
     prefix = f"eval{name}"
     prefix_gif = f"gif{name}"
 
-    data_key, double_batch_key = jax.random.split(key, 2)
+    data_key, batch_key = jax.random.split(key, 2)
     # Use collect_data for evaluation rollouts
     _, info, timesteps = collect_data(
         agent,
@@ -144,23 +113,28 @@ def evaluate_agent_in_specific_env(agent, key, jitted_flatten_batch, config, nam
     timesteps = jax.tree_util.tree_map(lambda x: x.swapaxes(1, 0), timesteps)
 
     batch_keys = jax.random.split(data_key, config.exp.num_envs)
-    state, future_state, goal_index = jitted_flatten_batch(config.exp.gamma, timesteps, batch_keys)
+    state, next_state, future_state, goal_index = jitted_flatten_batch(config.exp.gamma, timesteps, batch_keys)
 
     # Sample and concatenate batch using the new function
-    state, actions, future_state, goal_index = get_single_pair_from_every_env(
-        state, future_state, goal_index, double_batch_key, use_double_batch_trick=config.exp.use_double_batch_trick
+    state, actions, next_state, future_state, goal_index = get_single_pair_from_every_env(
+        state,
+        next_state,
+        future_state,
+        goal_index,
+        batch_key,
     )  # state.grid is of shape (batch_size * 2, grid_size, grid_size)
     if not config.exp.use_targets:
         state = state.replace(grid=GridStatesEnum.remove_targets(state.grid))
+        next_state = next_state.replace(grid=GridStatesEnum.remove_targets(next_state.grid))
         future_state = future_state.replace(grid=GridStatesEnum.remove_targets(future_state.grid))
 
     # Create valid batch
     valid_batch = {
         "observations": state.grid.reshape(state.grid.shape[0], -1),
-        "next_observations": future_state.grid.reshape(future_state.grid.shape[0], -1),
+        "next_observations": next_state.grid.reshape(next_state.grid.shape[0], -1),
         "actions": actions.squeeze(),
-        "rewards": state.reward.reshape(state.reward.shape[0], -1),
-        "masks": 1.0 - state.done.reshape(state.done.shape[0], -1),
+        "rewards": state.reward.reshape(state.reward.shape[0], -1).squeeze(),
+        "masks": 1.0 - state.done.reshape(state.done.shape[0], -1).squeeze(),
         "value_goals": future_state.grid.reshape(future_state.grid.shape[0], -1),
         "actor_goals": future_state.grid.reshape(future_state.grid.shape[0], -1),
     }
@@ -170,12 +144,12 @@ def evaluate_agent_in_specific_env(agent, key, jitted_flatten_batch, config, nam
 
     # Compile evaluation info
     # Only consider episodes that are done
-    done_mask = timesteps.done
+    truncated_mask = timesteps.truncated
     eval_info_tmp = {
-        f"{prefix}/mean_reward": timesteps.reward[done_mask].mean(),
-        f"{prefix}/min_reward": timesteps.reward[done_mask].min(),
-        f"{prefix}/max_reward": timesteps.reward[done_mask].max(),
-        f"{prefix}/mean_success": timesteps.success[done_mask].mean(),
+        f"{prefix}/mean_reward": timesteps.reward[truncated_mask].mean(),
+        f"{prefix}/min_reward": timesteps.reward[truncated_mask].min(),
+        f"{prefix}/max_reward": timesteps.reward[truncated_mask].max(),
+        f"{prefix}/mean_success": timesteps.success[truncated_mask].mean(),
         f"{prefix}/mean_boxes_on_target": info["boxes_on_target"].mean(),
         f"{prefix}/total_loss": loss,
         f"{prefix}/actor_loss": loss_info["actor/actor_loss"],
@@ -185,6 +159,7 @@ def evaluate_agent_in_specific_env(agent, key, jitted_flatten_batch, config, nam
             {
                 f"{prefix}/contrastive_loss": loss_info["critic/contrastive_loss"],
                 f"{prefix}/cat_acc": loss_info["critic/categorical_accuracy"],
+                f"{prefix}/v_mean": loss_info["critic/v_mean"],
             }
         )
     elif config.agent.agent_name == "gciql":
@@ -192,6 +167,7 @@ def evaluate_agent_in_specific_env(agent, key, jitted_flatten_batch, config, nam
             {
                 f"{prefix}/critic_loss": loss_info["critic/critic_loss"],
                 f"{prefix}/q_mean": loss_info["critic/q_mean"],
+                f"{prefix}/v_mean": loss_info["value/v_mean"],
             }
         )
     else:
@@ -235,6 +211,9 @@ def evaluate_agent(agent, key, jitted_flatten_batch, epoch, config):
             agent, key, jitted_flatten_batch, eval_config, eval_name_suff, create_gif=create_gif
         )
         eval_info.update(eval_info_tmp)
+        if eval_name_suff == "":
+            eval_info.update(loss_info)
+
         # With critic softmax(Q) actions:
         eval_info_tmp, loss_info = evaluate_agent_in_specific_env(
             agent,
@@ -246,9 +225,6 @@ def evaluate_agent(agent, key, jitted_flatten_batch, epoch, config):
             critic_temp=1.0,
         )
         eval_info.update(eval_info_tmp)
-
-        if eval_name_suff == "":
-            eval_info.update(loss_info)
 
     wandb.log(eval_info)
 
@@ -263,6 +239,7 @@ def train(config: Config):
     )
 
     env = create_env(config.env)
+    print(f"DEnse:{env.dense_rewards}")
     env = AutoResetWrapper(env)
     key = random.PRNGKey(config.exp.seed)
     env.step = jax.jit(jax.vmap(env.step))
@@ -287,11 +264,9 @@ def train(config: Config):
         "observations": dummy_timestep.grid.reshape(1, -1),  # Add batch dimension
         "next_observations": dummy_timestep.grid.reshape(1, -1),
         "actions": jnp.ones((1,), dtype=jnp.int8)
-        * (
-            env._env.action_space - 1
-        ),  # TODO: make sure it should be the maximal value of action space  # Single action for batch size 1
-        "rewards": dummy_timestep.reward.reshape(1, -1),
-        "masks": 1.0 - dummy_timestep.reward.reshape(1, -1),
+        * (env._env.action_space - 1),  # it should be the maximal value of action space
+        "rewards": jnp.ones((1,), dtype=jnp.int8),
+        "masks": jnp.ones((1,), dtype=jnp.int8),
         "value_goals": dummy_timestep.grid.reshape(1, -1),
         "actor_goals": dummy_timestep.grid.reshape(1, -1),
     }
@@ -299,25 +274,30 @@ def train(config: Config):
     agent = create_agent(config.agent, example_batch, config.exp.seed)
 
     def make_batch(buffer_state, key):
-        key, batch_key, double_batch_key = jax.random.split(key, 3)
+        key, sampling_key, batch_key = jax.random.split(key, 3)
         # Sample and process transitions
         buffer_state, transitions = replay_buffer.sample(buffer_state)
         batch_keys = jax.random.split(batch_key, transitions.grid.shape[0])
-        state, future_state, goal_index = jitted_flatten_batch(config.exp.gamma, transitions, batch_keys)
+        state, next_state, future_state, goal_index = jitted_flatten_batch(config.exp.gamma, transitions, batch_keys)
 
-        state, actions, future_state, goal_index = get_single_pair_from_every_env(
-            state, future_state, goal_index, double_batch_key, use_double_batch_trick=config.exp.use_double_batch_trick
+        state, actions, next_state, future_state, goal_index = get_single_pair_from_every_env(
+            state,
+            next_state,
+            future_state,
+            goal_index,
+            sampling_key,
         )
         if not config.exp.use_targets:
             state = state.replace(grid=GridStatesEnum.remove_targets(state.grid))
+            next_state = next_state.replace(grid=GridStatesEnum.remove_targets(next_state.grid))
             future_state = future_state.replace(grid=GridStatesEnum.remove_targets(future_state.grid))
         # Create valid batch
         batch = {
             "observations": state.grid.reshape(state.grid.shape[0], -1),
-            "next_observations": future_state.grid.reshape(future_state.grid.shape[0], -1),
+            "next_observations": next_state.grid.reshape(next_state.grid.shape[0], -1),
             "actions": actions.squeeze(),
-            "rewards": state.reward.reshape(state.reward.shape[0], -1),
-            "masks": 1.0 - state.reward.reshape(state.reward.shape[0], -1),  # TODO: add success and reward separately
+            "rewards": state.reward.reshape(state.reward.shape[0], -1).squeeze(),
+            "masks": 1.0 - state.done.reshape(state.done.shape[0], -1).squeeze(),
             "value_goals": future_state.grid.reshape(future_state.grid.shape[0], -1),
             "actor_goals": future_state.grid.reshape(future_state.grid.shape[0], -1),
         }
