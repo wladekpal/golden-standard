@@ -211,6 +211,9 @@ def evaluate_agent(agent, key, jitted_flatten_batch, epoch, config):
             agent, key, jitted_flatten_batch, eval_config, eval_name_suff, create_gif=create_gif
         )
         eval_info.update(eval_info_tmp)
+        if eval_name_suff == "":
+            eval_info.update(loss_info)
+
         # With critic softmax(Q) actions:
         eval_info_tmp, loss_info = evaluate_agent_in_specific_env(
             agent,
@@ -222,9 +225,6 @@ def evaluate_agent(agent, key, jitted_flatten_batch, epoch, config):
             critic_temp=1.0,
         )
         eval_info.update(eval_info_tmp)
-
-        if eval_name_suff == "":
-            eval_info.update(loss_info)
 
     wandb.log(eval_info)
 
@@ -274,7 +274,7 @@ def train(config: Config):
     agent = create_agent(config.agent, example_batch, config.exp.seed)
 
     def make_batch(buffer_state, key):
-        key, batch_key, batch_key = jax.random.split(key, 3)
+        key, sampling_key, batch_key = jax.random.split(key, 3)
         # Sample and process transitions
         buffer_state, transitions = replay_buffer.sample(buffer_state)
         batch_keys = jax.random.split(batch_key, transitions.grid.shape[0])
@@ -285,7 +285,7 @@ def train(config: Config):
             next_state,
             future_state,
             goal_index,
-            batch_key,
+            sampling_key,
         )
         if not config.exp.use_targets:
             state = state.replace(grid=GridStatesEnum.remove_targets(state.grid))
