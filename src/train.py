@@ -154,7 +154,7 @@ def evaluate_agent_in_specific_env(agent, key, jitted_flatten_batch, config, nam
         f"{prefix}/total_loss": loss,
         f"{prefix}/actor_loss": loss_info["actor/actor_loss"],
     }
-    if config.agent.agent_name == "crl":
+    if config.agent.agent_name == "crl" or config.agent.agent_name == "crl_search":
         eval_info_tmp.update(
             {
                 f"{prefix}/contrastive_loss": loss_info["critic/contrastive_loss"],
@@ -162,7 +162,7 @@ def evaluate_agent_in_specific_env(agent, key, jitted_flatten_batch, config, nam
                 f"{prefix}/v_mean": loss_info["critic/v_mean"],
             }
         )
-    elif config.agent.agent_name == "gciql":
+    elif config.agent.agent_name == "gciql" or config.agent.agent_name == "gciql_search":
         eval_info_tmp.update(
             {
                 f"{prefix}/critic_loss": loss_info["critic/critic_loss"],
