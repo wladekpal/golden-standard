@@ -14,7 +14,7 @@ import jax.numpy as jnp
 from jax import random
 
 from impls.agents import create_agent
-from envs.block_moving_env import wrap_for_eval, wrap_for_training, TimeStep, GridStatesEnum
+from envs.block_moving_env import wrap_for_eval, wrap_for_training, TimeStep, remove_targets
 from config import ROOT_DIR
 from impls.utils.checkpoints import save_agent
 from utils import log_gif, sample_actions_critic
@@ -30,9 +30,7 @@ def collect_data(agent, key, env, num_envs, episode_length, use_targets=False, c
         state_agent = jax.lax.cond(
             use_targets,
             lambda: state.replace(),
-            lambda: state.replace(
-                grid=GridStatesEnum.remove_targets(state.grid), goal=GridStatesEnum.remove_targets(state.goal)
-            ),
+            lambda: state.replace(grid=remove_targets(state.grid), goal=remove_targets(state.goal)),
         )
 
         if critic_temp is None:
@@ -109,11 +107,9 @@ def create_batch(
         sampling_key,
     )
     if not use_targets:
-        state = state.replace(
-            grid=GridStatesEnum.remove_targets(state.grid), goal=GridStatesEnum.remove_targets(state.goal)
-        )
-        next_state = next_state.replace(grid=GridStatesEnum.remove_targets(next_state.grid))
-        future_state = future_state.replace(grid=GridStatesEnum.remove_targets(future_state.grid))
+        state = state.replace(grid=remove_targets(state.grid), goal=remove_targets(state.goal))
+        next_state = next_state.replace(grid=remove_targets(next_state.grid))
+        future_state = future_state.replace(grid=remove_targets(future_state.grid))
 
     if use_env_goals:
         value_goals = state.goal.reshape(state.goal.shape[0], -1)

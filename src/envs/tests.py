@@ -14,13 +14,14 @@ from .block_moving_env import (
     BoxPushingState,
     create_solved_state,
     calculate_number_of_boxes,
+    remove_targets,
 )
 
 
 def test_remove_targets_mapping_all_values():
     """Ensure remove_targets maps every enum to the expected no-target state."""
     inp = jnp.arange(12, dtype=jnp.int8)  # values 0..11
-    out = GridStatesEnum.remove_targets(inp)
+    out = remove_targets(inp)
     expected = jnp.array([0, 1, 0, 3, 4, 5, 3, 4, 5, 11, 1, 11], dtype=jnp.int8)
     assert jnp.array_equal(out, expected), f"got {out}, expected {expected}"
 
