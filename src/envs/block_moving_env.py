@@ -22,6 +22,7 @@ class BoxPushingState(struct.PyTreeNode):
     goal: jax.Array  # Goal cell coordinates for boxes
     reward: jax.Array  # Reward for the current step
     success: jax.Array  # Whether all boxes are on targets
+    extras: Dict  # Field for extra information used by filtering wrappers
 
 
 class TimeStep(BoxPushingState):
@@ -97,7 +98,7 @@ class BoxPushingConfig:
     dense_rewards: bool = False
     negative_sparse: bool = True
     level_generator: str = "default"
-    generator_mirroring: bool = False
+    generator_special: bool = False
 
 
 def calculate_number_of_boxes(grid: jax.Array):
@@ -138,6 +139,26 @@ def create_solved_state(state: BoxPushingState) -> BoxPushingState:
     )
     state = state.replace(grid=state.grid.at[agent_row, agent_col].set(new_cell_value), agent_has_box=jnp.array(False))
     return state
+
+
+def find_agent_position(grid) -> jnp.array:
+    actor_states = jnp.isin(
+        grid,
+        jnp.array(
+            [
+                GridStatesEnum.AGENT,
+                GridStatesEnum.AGENT_ON_BOX,
+                GridStatesEnum.AGENT_ON_TARGET,
+                GridStatesEnum.AGENT_ON_TARGET_WITH_BOX,
+            ]
+        ),
+    )
+    idx = jnp.argmax(actor_states)
+
+    row_idx = idx // grid.shape[1]
+    col_idx = idx % grid.shape[1]
+
+    return jnp.array([row_idx, col_idx])
 
 
 class DefaultLevelGenerator:
@@ -212,6 +233,7 @@ class DefaultLevelGenerator:
             goal=jnp.zeros_like(grid),
             reward=0,
             success=0,
+            extras={},
         )
 
         goal = create_solved_state(state)
@@ -219,14 +241,31 @@ class DefaultLevelGenerator:
 
         return state
 
+    def get_dummy_timestep(self, key):
+        return TimeStep(
+            key=key,
+            grid=jnp.zeros((self.grid_size, self.grid_size), dtype=jnp.int8),
+            number_of_boxes=jnp.zeros((1,), dtype=jnp.int8),
+            agent_pos=jnp.zeros((2,), dtype=jnp.int8),
+            agent_has_box=jnp.zeros((1,), dtype=jnp.int8),
+            steps=jnp.zeros((1,), dtype=jnp.int8),
+            action=jnp.zeros((1,), dtype=jnp.int8),
+            goal=jnp.zeros((self.grid_size, self.grid_size), dtype=jnp.int8),
+            reward=jnp.zeros((1,), dtype=jnp.int8),
+            success=jnp.zeros((1,), dtype=jnp.int8),
+            done=jnp.zeros((1,), dtype=jnp.int8),
+            truncated=jnp.zeros((1,), dtype=jnp.int8),
+            extras={},
+        )
+
 
 # This generator puts targets in one quarter of the board, and boxes in another quarter
 class QuarterGenerator(DefaultLevelGenerator):
-    def __init__(self, grid_size, number_of_boxes_min, number_of_boxes_max, number_of_moving_boxes_max, mirror=False):
+    def __init__(self, grid_size, number_of_boxes_min, number_of_boxes_max, number_of_moving_boxes_max, special=False):
         # This is mostly for convenience, without it there would have to be a lot of if statements
         assert grid_size % 2 == 0
         assert number_of_boxes_max <= grid_size * grid_size / 4
-        self.mirror = mirror
+        self.special = special
 
         super().__init__(grid_size, number_of_boxes_min, number_of_boxes_max, number_of_moving_boxes_max)
 
@@ -266,7 +305,7 @@ class QuarterGenerator(DefaultLevelGenerator):
 
     def generate(self, key):
         box_quarter_key, target_quarter_key, permutation_3_key, number_of_boxes_key, agent_key, state_key = (
-            random.split(key, 6)
+            jax.random.split(key, 6)
         )
 
         number_of_boxes = jax.random.randint(
@@ -278,6 +317,9 @@ class QuarterGenerator(DefaultLevelGenerator):
         # We set quarter with boxes
         box_quarter = self.generate_box_quarter(number_of_targets_without_boxes, box_quarter_key)
 
+        # The agent always starts on quarter with boxes
+        agent_pos, box_quarter = self.place_agent(box_quarter, agent_key)
+
         # We set quarter with targets
         target_quarter = self.generate_target_quarter(
             number_of_boxes_on_target, number_of_targets_without_boxes, target_quarter_key
@@ -288,10 +330,51 @@ class QuarterGenerator(DefaultLevelGenerator):
         empty_quarter_2 = jnp.full_like(box_quarter, GridStatesEnum.EMPTY)
 
         # We shuffle all quarters and concatenate them into the full grid
-        if self.mirror:
-            block_grid = jnp.stack([empty_quarter_1, box_quarter, target_quarter, empty_quarter_2])
+        if self.special:
+            train_permutations = jnp.stack(
+                [
+                    # Diagonal
+                    jnp.stack([box_quarter, empty_quarter_1, empty_quarter_2, target_quarter]),
+                    jnp.stack([target_quarter, empty_quarter_1, empty_quarter_2, box_quarter]),
+                    jnp.stack([empty_quarter_1, target_quarter, box_quarter, empty_quarter_2]),
+                    jnp.stack([empty_quarter_1, box_quarter, target_quarter, empty_quarter_2]),
+                ]
+            )
+            block_grid = jax.random.choice(permutation_3_key, train_permutations)
+            blocks_allowed = jnp.array([1, 1, 1, 1])
         else:
-            block_grid = jnp.stack([box_quarter, empty_quarter_1, empty_quarter_2, target_quarter])
+            train_permutations = jnp.stack(
+                [
+                    # Horizontal
+                    jnp.stack([box_quarter, target_quarter, empty_quarter_1, empty_quarter_2]),
+                    jnp.stack([empty_quarter_1, empty_quarter_2, box_quarter, target_quarter]),
+                    jnp.stack([target_quarter, box_quarter, empty_quarter_1, empty_quarter_2]),
+                    jnp.stack([empty_quarter_1, empty_quarter_2, target_quarter, box_quarter]),
+                    # Vertical
+                    jnp.stack([box_quarter, empty_quarter_1, target_quarter, empty_quarter_2]),
+                    jnp.stack([empty_quarter_1, box_quarter, empty_quarter_2, target_quarter]),
+                    jnp.stack([target_quarter, empty_quarter_1, box_quarter, empty_quarter_2]),
+                    jnp.stack([empty_quarter_1, target_quarter, empty_quarter_2, box_quarter]),
+                ]
+            )
+
+            quarters_allowed = jnp.array(
+                [
+                    # Horizontal
+                    [1, 1, 0, 0],
+                    [0, 0, 1, 1],
+                    [1, 1, 0, 0],
+                    [0, 0, 1, 1],
+                    # Vertical
+                    [1, 0, 1, 0],
+                    [0, 1, 0, 1],
+                    [1, 0, 1, 0],
+                    [0, 1, 0, 1],
+                ]
+            )
+            perm_idx = jax.random.randint(permutation_3_key, (1,), minval=0, maxval=train_permutations.shape[0])
+            block_grid = train_permutations[perm_idx][0]
+            blocks_allowed = quarters_allowed[perm_idx][0]
 
         permuted_grid = block_grid
 
@@ -299,7 +382,8 @@ class QuarterGenerator(DefaultLevelGenerator):
         bottom = jnp.concatenate([permuted_grid[2], permuted_grid[3]], axis=1)
         grid = jnp.concatenate([top, bottom], axis=0)
 
-        agent_pos, grid = self.place_agent(grid, agent_key)
+        # We have to readjust agents position
+        agent_pos = find_agent_position(grid)
 
         state = BoxPushingState(
             key=state_key,
@@ -311,12 +395,17 @@ class QuarterGenerator(DefaultLevelGenerator):
             goal=jnp.zeros_like(grid),
             reward=0,
             success=0,
+            extras={"quarters_allowed": blocks_allowed},
         )
 
         goal = create_solved_state(state)
         state = state.replace(goal=goal.grid)
 
         return state
+
+    def get_dummy_timestep(self, key):
+        default_dummy_timestep = super().get_dummy_timestep(key)
+        return default_dummy_timestep.replace(extras={"quarters_allowed": jnp.zeros((4,), dtype=jnp.int8)})
 
 
 class BoxPushingEnv:
@@ -360,7 +449,7 @@ class BoxPushingEnv:
                 number_of_boxes_min,
                 number_of_boxes_max,
                 number_of_moving_boxes_max,
-                mirror=kwargs["generator_mirroring"],
+                special=kwargs["generator_special"],
             )
         else:
             raise ValueError("Unknown level generator selected")
@@ -421,6 +510,7 @@ class BoxPushingEnv:
             goal=state.goal,
             reward=reward,
             success=success,
+            extras=state.extras,
         )
 
         info = {
@@ -668,22 +758,23 @@ class BoxPushingEnv:
         print("=" * (self.grid_size * 2 + 1))
 
     def get_dummy_timestep(self, key):
-        dummy_timestep = TimeStep(
-            key=key,
-            grid=jnp.zeros((self.grid_size, self.grid_size), dtype=jnp.int8),
-            number_of_boxes=jnp.zeros((1,), dtype=jnp.int8),
-            agent_pos=jnp.zeros((2,), dtype=jnp.int8),
-            agent_has_box=jnp.zeros((1,), dtype=jnp.int8),
-            steps=jnp.zeros((1,), dtype=jnp.int8),
-            action=jnp.zeros((1,), dtype=jnp.int8),
-            goal=jnp.zeros((self.grid_size, self.grid_size), dtype=jnp.int8),
-            reward=jnp.zeros((1,), dtype=jnp.int8),
-            success=jnp.zeros((1,), dtype=jnp.int8),
-            done=jnp.zeros((1,), dtype=jnp.int8),
-            truncated=jnp.zeros((1,), dtype=jnp.int8),
-        )
+        return self.level_generator.get_dummy_timestep(key)
+        # dummy_timestep = TimeStep(
+        #     key=key,
+        #     grid=jnp.zeros((self.grid_size, self.grid_size), dtype=jnp.int8),
+        #     number_of_boxes=jnp.zeros((1,), dtype=jnp.int8),
+        #     agent_pos=jnp.zeros((2,), dtype=jnp.int8),
+        #     agent_has_box=jnp.zeros((1,), dtype=jnp.int8),
+        #     steps=jnp.zeros((1,), dtype=jnp.int8),
+        #     action=jnp.zeros((1,), dtype=jnp.int8),
+        #     goal=jnp.zeros((self.grid_size, self.grid_size), dtype=jnp.int8),
+        #     reward=jnp.zeros((1,), dtype=jnp.int8),
+        #     success=jnp.zeros((1,), dtype=jnp.int8),
+        #     done=jnp.zeros((1,), dtype=jnp.int8),
+        #     truncated=jnp.zeros((1,), dtype=jnp.int8),
+        # )
 
-        return dummy_timestep
+        # return dummy_timestep
 
     @staticmethod
     def animate(ax, timesteps, frame, img_prefix="assets"):
@@ -733,6 +824,8 @@ class Wrapper(BoxPushingEnv):
             "number_of_boxes_min",
             "number_of_boxes_max",
             "number_of_moving_boxes_max",
+            "action_space",
+            "level_generator",
         ]:
             if hasattr(env, attr):
                 setattr(self, attr, getattr(env, attr))
@@ -760,6 +853,74 @@ class AutoResetWrapper(Wrapper):
         return state, reward, done, info
 
 
+class SymmetryFilter(Wrapper):
+    def __init__(self, env: BoxPushingEnv, axis="horizontal"):
+        assert env.grid_size % 2 == 0  # For clarity and convenience
+        self.axis = axis
+        super().__init__(env)
+
+    def check_symmetry_crossing(self, old_state: BoxPushingState, new_state: BoxPushingState):
+        middle = self._env.grid_size // 2
+
+        if self.axis == "horizontal":
+            old_pos = old_state.agent_pos[0]
+            new_pos = new_state.agent_pos[0]
+        else:
+            old_pos = old_state.agent_pos[1]
+            new_pos = new_state.agent_pos[1]
+
+        # If old_pos and new_pos are on different sides of the middle it means we've crossed the boundry,
+        # and so we reset the environment
+        return jnp.logical_xor(old_pos < middle, new_pos < middle)
+
+    def step(self, state: BoxPushingState, action: int) -> Tuple[BoxPushingState, float, bool, Dict[str, Any]]:
+        new_state, reward, done, info = self._env.step(state, action)
+        done = jnp.logical_or(done, self.check_symmetry_crossing(state, new_state))
+
+        return new_state, reward, done, info
+
+
+class QuarterFilter(Wrapper):
+    def __init__(self, env: BoxPushingEnv):
+        assert env.grid_size % 2 == 0  # For clarity and convenience
+        super().__init__(env)
+
+    def check_wrong_quarter_crossing(self, new_state: BoxPushingState):
+        quarters_allowed = new_state.extras["quarters_allowed"]
+
+        agent_row, agent_col = new_state.agent_pos[0], new_state.agent_pos[1]
+        current_quarter = 2 * (agent_row >= new_state.grid.shape[0] // 2) + (agent_col >= new_state.grid.shape[1] // 2)
+
+        return jnp.logical_not(quarters_allowed[current_quarter])
+
+    def step(self, state: BoxPushingState, action: int) -> Tuple[BoxPushingState, float, bool, Dict[str, Any]]:
+        new_state, reward, done, info = self._env.step(state, action)
+        done = jnp.logical_or(done, self.check_wrong_quarter_crossing(new_state))
+
+        return new_state, reward, done, info
+
+
+def wrap_for_training(config, env):
+    if config.exp.filtering in ["horizontal", "vertical"]:
+        env = SymmetryFilter(env, axis=config.exp.filtering)
+    elif config.exp.filtering == "quarter":
+        env = QuarterFilter(env)
+    elif config.exp.filtering is None:
+        pass
+    else:
+        raise ValueError(f"Unknown filtering type: {config.exp.filtering}")
+
+    env = AutoResetWrapper(env)
+
+    return env
+
+
+def wrap_for_eval(env):
+    env = AutoResetWrapper(env)
+
+    return env
+
+
 if __name__ == "__main__":
     env = BoxPushingEnv(
         grid_size=4,
@@ -767,7 +928,7 @@ if __name__ == "__main__":
         number_of_boxes_min=2,
         number_of_moving_boxes_max=1,
         level_generator="quarter",
-        generator_mirroring=False,
+        generator_special=False,
         dense_rewards=True,
         terminate_when_success=True,
         episode_length=3,
