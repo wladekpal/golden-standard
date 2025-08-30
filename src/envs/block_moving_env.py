@@ -759,22 +759,6 @@ class BoxPushingEnv:
 
     def get_dummy_timestep(self, key):
         return self.level_generator.get_dummy_timestep(key)
-        # dummy_timestep = TimeStep(
-        #     key=key,
-        #     grid=jnp.zeros((self.grid_size, self.grid_size), dtype=jnp.int8),
-        #     number_of_boxes=jnp.zeros((1,), dtype=jnp.int8),
-        #     agent_pos=jnp.zeros((2,), dtype=jnp.int8),
-        #     agent_has_box=jnp.zeros((1,), dtype=jnp.int8),
-        #     steps=jnp.zeros((1,), dtype=jnp.int8),
-        #     action=jnp.zeros((1,), dtype=jnp.int8),
-        #     goal=jnp.zeros((self.grid_size, self.grid_size), dtype=jnp.int8),
-        #     reward=jnp.zeros((1,), dtype=jnp.int8),
-        #     success=jnp.zeros((1,), dtype=jnp.int8),
-        #     done=jnp.zeros((1,), dtype=jnp.int8),
-        #     truncated=jnp.zeros((1,), dtype=jnp.int8),
-        # )
-
-        # return dummy_timestep
 
     @staticmethod
     def animate(ax, timesteps, frame, img_prefix="assets"):
@@ -875,9 +859,11 @@ class SymmetryFilter(Wrapper):
 
     def step(self, state: BoxPushingState, action: int) -> Tuple[BoxPushingState, float, bool, Dict[str, Any]]:
         new_state, reward, done, info = self._env.step(state, action)
-        done = jnp.logical_or(done, self.check_symmetry_crossing(state, new_state))
+        is_truncated = jnp.logical_or(info["truncated"], self.check_symmetry_crossing(state, new_state))
+        
+        new_info = {**info, "truncated":is_truncated}
 
-        return new_state, reward, done, info
+        return new_state, reward, done, new_info
 
 
 class QuarterFilter(Wrapper):
@@ -895,9 +881,11 @@ class QuarterFilter(Wrapper):
 
     def step(self, state: BoxPushingState, action: int) -> Tuple[BoxPushingState, float, bool, Dict[str, Any]]:
         new_state, reward, done, info = self._env.step(state, action)
-        done = jnp.logical_or(done, self.check_wrong_quarter_crossing(new_state))
+        is_truncated = jnp.logical_or(info["truncated"], self.check_wrong_quarter_crossing(new_state))
+        
+        new_info = {**info, "truncated":is_truncated}
 
-        return new_state, reward, done, info
+        return new_state, reward, done, new_info
 
 
 def wrap_for_training(config, env):
