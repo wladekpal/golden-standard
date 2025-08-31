@@ -210,7 +210,7 @@ class DefaultLevelGenerator:
             steps=0,
             number_of_boxes=number_of_boxes,
             goal=jnp.zeros_like(grid),
-            reward=0,
+            reward=0.0,
             success=0,
         )
 
@@ -309,7 +309,7 @@ class QuarterGenerator(DefaultLevelGenerator):
             steps=0,
             number_of_boxes=number_of_boxes,
             goal=jnp.zeros_like(grid),
-            reward=0,
+            reward=0.0,
             success=0,
         )
 
@@ -386,7 +386,7 @@ class BoxPushingEnv:
         # Increment steps
         new_steps = state.steps + 1
 
-        reward = 0
+        reward = 0.0
         done = False
 
         # Use jax.lax.switch instead of if-elif to handle traced arrays
@@ -406,7 +406,7 @@ class BoxPushingEnv:
         new_pos, new_grid, new_agent_has_box = action_result
 
         truncated = new_steps >= self.episode_length
-        reward = self._get_reward(state.grid, new_grid, state.number_of_boxes)
+        reward = self._get_reward(state.grid, new_grid, state.number_of_boxes).astype(jnp.float32)
         success = self._is_goal_reached(new_grid, state.number_of_boxes).astype(jnp.int32)
         if self.terminate_when_success:
             done = self._is_goal_reached(new_grid, state.number_of_boxes)
@@ -563,12 +563,12 @@ class BoxPushingEnv:
                 + jnp.sum(old_grid == GridStatesEnum.AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX)
             )
             diff = boxes_on_targets_new - boxes_on_targets_old
-            return diff
+            return diff.astype(jnp.float32)
         else:
             if self.negative_sparse:
-                return (boxes_on_targets_new == number_of_boxes).astype(jnp.int32) - 1
+                return (boxes_on_targets_new == number_of_boxes).astype(jnp.float32) - 1
             else:
-                return (boxes_on_targets_new == number_of_boxes).astype(jnp.int32)
+                return (boxes_on_targets_new == number_of_boxes).astype(jnp.float32)
 
     def _handle_pickup(self, state: BoxPushingState) -> Tuple[jax.Array, bool]:
         """Handle pickup action."""
@@ -677,7 +677,7 @@ class BoxPushingEnv:
             steps=jnp.zeros((1,), dtype=jnp.int8),
             action=jnp.zeros((1,), dtype=jnp.int8),
             goal=jnp.zeros((self.grid_size, self.grid_size), dtype=jnp.int8),
-            reward=jnp.zeros((1,), dtype=jnp.int8),
+            reward=jnp.zeros((1,), dtype=jnp.float32),
             success=jnp.zeros((1,), dtype=jnp.int8),
             done=jnp.zeros((1,), dtype=jnp.int8),
             truncated=jnp.zeros((1,), dtype=jnp.int8),

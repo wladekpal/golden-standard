@@ -7,7 +7,7 @@ import wandb
 import dataclasses
 import copy
 
-from rb import TrajectoryUniformSamplingQueue, jit_wrap, flatten_batch
+from rb import TrajectoryUniformSamplingQueue, jit_wrap, flatten_batch, get_discounted_rewards
 
 import jax
 import jax.numpy as jnp
@@ -246,6 +246,7 @@ def train(config: Config):
     env.reset = jax.jit(jax.vmap(env.reset))
     partial_flatten = functools.partial(flatten_batch, get_next_obs=config.agent.use_next_obs)
     jitted_flatten_batch = jax.jit(jax.vmap(partial_flatten, in_axes=(None, 0, 0)), static_argnums=(0,))
+    jitted_get_discounted_rewards = jax.jit(jax.vmap(get_discounted_rewards, in_axes=(1, 1, None), out_axes=1))
 
     dummy_timestep = env.get_dummy_timestep(key)
 
@@ -265,7 +266,7 @@ def train(config: Config):
         "next_observations": dummy_timestep.grid.reshape(1, -1),
         "actions": jnp.ones((1,), dtype=jnp.int8)
         * (env._env.action_space - 1),  # it should be the maximal value of action space
-        "rewards": jnp.ones((1,), dtype=jnp.int8),
+        "rewards": jnp.ones((1,), dtype=jnp.float32),
         "masks": jnp.ones((1,), dtype=jnp.int8),
         "value_goals": dummy_timestep.grid.reshape(1, -1),
         "actor_goals": dummy_timestep.grid.reshape(1, -1),
@@ -317,6 +318,12 @@ def train(config: Config):
         _, _, timesteps = collect_data(
             agent, data_key, env, config.exp.num_envs, config.env.episode_length, use_targets=config.exp.use_targets
         )
+        
+        if config.exp.use_discounted_mc_rewards:
+            discounted_rewards = jitted_get_discounted_rewards(timesteps.steps, timesteps.reward, config.exp.gamma)
+            timesteps = timesteps.replace(reward=discounted_rewards)
+        
+
         buffer_state = replay_buffer.insert(buffer_state, timesteps)
         (buffer_state, agent, _), _ = jax.lax.scan(
             update_step, (buffer_state, agent, up_key), None, length=config.exp.updates_per_rollout

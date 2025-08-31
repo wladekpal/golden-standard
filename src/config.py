@@ -40,6 +40,9 @@ class ExpConfig:
     save_dir: str | None = None
     gif_every: int = 10
 
+    # Rewards
+    use_discounted_mc_rewards: bool = False
+
 
 @dataclass
 class Config:

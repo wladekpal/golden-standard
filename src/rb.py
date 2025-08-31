@@ -249,6 +249,57 @@ def flatten_batch(gamma, transition, sample_key, get_next_obs=False):
     return states, next_state, future_state, goal_index
 
 
+# Computes cumulative discounted returns for each time step until the end of its trajectory
+# Supports multiple trajectories in a rollout and wrap-around episodes
+def get_discounted_rewards(steps, rewards, gamma):
+    rollout_len = steps.shape[0]
+
+    # Mask that identifies present and future time steps
+    arrangement = jnp.arange(3 * rollout_len)
+    is_future_mask = jnp.array(
+        arrangement[:, None] <= arrangement[None], dtype=jnp.float32
+    ) 
+
+    # We extend the arrays so that there is no trouble with wrap-around episodes
+    extended_steps = jnp.concatenate([steps] * 3, axis=0) # (3*rollout_len)
+    extended_rewards = jnp.concatenate([rewards] * 3, axis=0) # (3 * rollout_len)
+    extended_rewards = jnp.stack([extended_rewards] * 3 * rollout_len, axis=0) # (3*rollout_len, 3*rollout_len)
+
+
+    single_trajectories = segment_ids_per_row(extended_steps.squeeze())
+    single_trajectories = jnp.concatenate(
+        [single_trajectories[:, jnp.newaxis].T] * 3 * rollout_len,
+        axis=0,
+    ) # (3*rollout_len, 3*rollout_len)
+
+    
+    # Trajectory mask is 1 for each row in places that are future or present of trajectory
+    trajectory_mask = is_future_mask * jnp.equal(single_trajectories, single_trajectories.T)
+
+    discount = gamma ** jnp.array(arrangement[None] - arrangement[:, None], dtype=jnp.float32)
+
+    # These are rewards for each time step, discounted and masked so that only future and present rewards are considered
+    final_point_rewards = extended_rewards * discount * trajectory_mask
+    # We reverse rewads to be able to do cumsum on them
+    reversed_point_rewards = jnp.flip(final_point_rewards, axis=1)
+    # After cumsum we reverse the rewards again
+    # The result are rewards for each time step, discounted and summed over all future and present time steps from trajectory
+    final_discounted_rewards = jnp.flip(jnp.cumsum(reversed_point_rewards, axis=1), axis=1) # (3*rollout_len, 3*rollout_len)
+
+    # We are interested in diagonal of that array
+    final_discounted_rewards = jnp.diag(final_discounted_rewards) # (3*rollout_len,)
+    # We can only take the middle part, the extension we did earlier was only to make sure that wrap-around episodes are not a problem
+    final_discounted_rewards = final_discounted_rewards[rollout_len:2*rollout_len]  # (rollout_len,)
+
+
+    return final_discounted_rewards
+
+    
+
+
+
+
+
 if __name__ == "__main__":
     # test segment_ids_per_row
     row = jnp.array([13, 14, 15, 0, 1, 2, 3, 0, 2])
