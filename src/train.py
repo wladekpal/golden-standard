@@ -113,7 +113,7 @@ def evaluate_agent_in_specific_env(agent, key, jitted_flatten_batch, config, nam
     timesteps = jax.tree_util.tree_map(lambda x: x.swapaxes(1, 0), timesteps)
 
     batch_keys = jax.random.split(data_key, config.exp.num_envs)
-    state, next_state, future_state, goal_index = jitted_flatten_batch(config.exp.gamma, timesteps, batch_keys)
+    state, next_state, future_state, goal_index = jitted_flatten_batch(config.exp.gamma, False, timesteps, batch_keys)
 
     # Sample and concatenate batch using the new function
     state, actions, next_state, future_state, goal_index = get_single_pair_from_every_env(
@@ -244,9 +244,8 @@ def train(config: Config):
     key = random.PRNGKey(config.exp.seed)
     env.step = jax.jit(jax.vmap(env.step))
     env.reset = jax.jit(jax.vmap(env.reset))
-    partial_flatten = functools.partial(flatten_batch, get_next_obs=config.agent.use_next_obs)
-    jitted_flatten_batch = jax.jit(jax.vmap(partial_flatten, in_axes=(None, 0, 0)), static_argnums=(0,))
-    jitted_get_discounted_rewards = jax.jit(jax.vmap(get_discounted_rewards, in_axes=(1, 1, None), out_axes=1))
+    partial_flatten = functools.partial(flatten_batch)
+    jitted_flatten_batch = jax.jit(jax.vmap(partial_flatten, in_axes=(None, None, 0, 0)), static_argnums=(0, 1,))
 
     dummy_timestep = env.get_dummy_timestep(key)
 
@@ -279,7 +278,7 @@ def train(config: Config):
         # Sample and process transitions
         buffer_state, transitions = replay_buffer.sample(buffer_state)
         batch_keys = jax.random.split(batch_key, transitions.grid.shape[0])
-        state, next_state, future_state, goal_index = jitted_flatten_batch(config.exp.gamma, transitions, batch_keys)
+        state, next_state, future_state, goal_index = jitted_flatten_batch(config.exp.gamma, config.exp.use_discounted_mc_rewards, transitions, batch_keys)
 
         state, actions, next_state, future_state, goal_index = get_single_pair_from_every_env(
             state,
@@ -318,10 +317,6 @@ def train(config: Config):
         _, _, timesteps = collect_data(
             agent, data_key, env, config.exp.num_envs, config.env.episode_length, use_targets=config.exp.use_targets
         )
-
-        if config.exp.use_discounted_mc_rewards:
-            discounted_rewards = jitted_get_discounted_rewards(timesteps.steps, timesteps.reward, config.exp.gamma)
-            timesteps = timesteps.replace(reward=discounted_rewards)
 
         buffer_state = replay_buffer.insert(buffer_state, timesteps)
         (buffer_state, agent, _), _ = jax.lax.scan(

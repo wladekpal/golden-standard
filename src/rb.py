@@ -203,8 +203,15 @@ def segment_ids_per_row(x: jnp.ndarray) -> jnp.ndarray:
 
 
 # TODO: will need to adjust it later for minigrid envs (if we would like to use them)
-def flatten_batch(gamma, transition, sample_key, get_next_obs=False):
+def flatten_batch(gamma, get_mc_discounted_rewards, transition, sample_key):
     # Because it's vmaped transition.obs.shape is of shape (episode_len, obs_dim)
+
+    if get_mc_discounted_rewards:
+        rewards = transition.reward
+        steps = transition.steps
+        discounted_rewards = get_discounted_rewards(steps.squeeze(), rewards.squeeze(), gamma)
+        transition = transition.replace(reward=discounted_rewards)
+
     seq_len = transition.grid.shape[0]
     arrangement = jnp.arange(seq_len)
     is_future_mask = jnp.array(
