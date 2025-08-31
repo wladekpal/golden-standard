@@ -318,11 +318,10 @@ def train(config: Config):
         _, _, timesteps = collect_data(
             agent, data_key, env, config.exp.num_envs, config.env.episode_length, use_targets=config.exp.use_targets
         )
-        
+
         if config.exp.use_discounted_mc_rewards:
             discounted_rewards = jitted_get_discounted_rewards(timesteps.steps, timesteps.reward, config.exp.gamma)
             timesteps = timesteps.replace(reward=discounted_rewards)
-        
 
         buffer_state = replay_buffer.insert(buffer_state, timesteps)
         (buffer_state, agent, _), _ = jax.lax.scan(
