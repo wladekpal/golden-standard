@@ -7,14 +7,14 @@ import wandb
 import dataclasses
 import copy
 
-from rb import TrajectoryUniformSamplingQueue, jit_wrap, flatten_batch, get_discounted_rewards
+from rb import TrajectoryUniformSamplingQueue, jit_wrap, flatten_batch
 
 import jax
 import jax.numpy as jnp
 from jax import random
 
 from impls.agents import create_agent
-from envs.block_moving_env import AutoResetWrapper, TimeStep, GridStatesEnum
+from envs.block_moving_env import wrap_for_eval, wrap_for_training, TimeStep, GridStatesEnum
 from config import ROOT_DIR
 from impls.utils.checkpoints import save_agent
 from utils import log_gif, sample_actions_critic
@@ -62,6 +62,7 @@ def collect_data(agent, key, env, num_envs, episode_length, use_targets=False, c
             success=state.success,
             done=done,
             truncated=info["truncated"],
+            extras=state.extras,
         )
         return (new_state, info, key), timestep
 
@@ -93,7 +94,7 @@ def get_single_pair_from_every_env(state, next_state, future_state, goal_index, 
 
 def evaluate_agent_in_specific_env(agent, key, jitted_flatten_batch, config, name, create_gif=False, critic_temp=None):
     env_eval = create_env(config.env)
-    env_eval = AutoResetWrapper(env_eval)
+    env_eval = wrap_for_eval(env_eval)
     env_eval.step = jax.jit(jax.vmap(env_eval.step))
     env_eval.reset = jax.jit(jax.vmap(env_eval.reset))
     prefix = f"eval{name}"
@@ -188,11 +189,11 @@ def evaluate_agent(agent, key, jitted_flatten_batch, epoch, config):
     eval_info = {"epoch": epoch}
     create_gif = epoch > 0 and epoch % config.exp.gif_every == 0
 
-    if config.exp.eval_mirrored:
-        mirroring_config = copy.deepcopy(config)
-        mirroring_config.env.generator_mirroring = True
-        eval_configs.append(mirroring_config)
-        eval_names_suff.append("_mirrored")
+    if config.exp.eval_special:
+        special_config = copy.deepcopy(config)
+        special_config.env.generator_special = True
+        eval_configs.append(special_config)
+        eval_names_suff.append("_special")
 
     if config.exp.eval_different_box_numbers:
         for number_of_boxes in range(1, 12, 2):
@@ -240,12 +241,18 @@ def train(config: Config):
 
     env = create_env(config.env)
     print(f"DEnse:{env.dense_rewards}")
-    env = AutoResetWrapper(env)
+    env = wrap_for_training(config, env)
     key = random.PRNGKey(config.exp.seed)
     env.step = jax.jit(jax.vmap(env.step))
     env.reset = jax.jit(jax.vmap(env.reset))
     partial_flatten = functools.partial(flatten_batch)
-    jitted_flatten_batch = jax.jit(jax.vmap(partial_flatten, in_axes=(None, None, 0, 0)), static_argnums=(0, 1,))
+    jitted_flatten_batch = jax.jit(
+        jax.vmap(partial_flatten, in_axes=(None, None, 0, 0)),
+        static_argnums=(
+            0,
+            1,
+        ),
+    )
 
     dummy_timestep = env.get_dummy_timestep(key)
 
@@ -278,7 +285,9 @@ def train(config: Config):
         # Sample and process transitions
         buffer_state, transitions = replay_buffer.sample(buffer_state)
         batch_keys = jax.random.split(batch_key, transitions.grid.shape[0])
-        state, next_state, future_state, goal_index = jitted_flatten_batch(config.exp.gamma, config.exp.use_discounted_mc_rewards, transitions, batch_keys)
+        state, next_state, future_state, goal_index = jitted_flatten_batch(
+            config.exp.gamma, config.exp.use_discounted_mc_rewards, transitions, batch_keys
+        )
 
         state, actions, next_state, future_state, goal_index = get_single_pair_from_every_env(
             state,

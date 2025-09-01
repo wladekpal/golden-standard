@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from envs import legal_envs
 from impls.agents import default_config
 from ml_collections import FrozenConfigDict
+from typing import Literal
 
 SRC_ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -33,7 +34,12 @@ class ExpConfig:
 
     # Evaluation settings
     eval_different_box_numbers: bool = False
-    eval_mirrored: bool = False
+    eval_special: bool = False
+    """In addition to standard evaluation also evaluate in 'special' mode. The specifics of special mode depend on level generator used."""
+
+    # Filtering settings
+    filtering: Literal["horizontal", "vertical", "quarter"] | None = None
+    """Type of filtering used during TRAINING.'horizontal' and 'vertical' doesn't allow to cross respctive board symmetry. 'quarter' only allows the agent to be in the quarter with boxes or targets"""
 
     # Gifs and
     num_gifs: int = 1
