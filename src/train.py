@@ -91,7 +91,41 @@ def get_single_pair_from_every_env(state, next_state, future_state, goal_index, 
     return single_batch_fn(key)
 
 
-def evaluate_agent_in_specific_env(agent, key, jitted_flatten_batch, config, name, create_gif=False, critic_temp=None):
+def create_batch(timesteps, key, gamma, use_targets, jitted_flatten_batch):
+    batch_key, sampling_key = jax.random.split(key, 2)
+    batch_keys = jax.random.split(batch_key, timesteps.grid.shape[0])
+    state, next_state, future_state, goal_index = jitted_flatten_batch(gamma, timesteps, batch_keys)
+
+    state, actions, next_state, future_state, goal_index = get_single_pair_from_every_env(
+        state,
+        next_state,
+        future_state,
+        goal_index,
+        sampling_key,
+    )
+    if not use_targets:
+        state = state.replace(
+            grid=GridStatesEnum.remove_targets(state.grid), goal=GridStatesEnum.remove_targets(state.goal)
+        )
+        next_state = next_state.replace(grid=GridStatesEnum.remove_targets(next_state.grid))
+        future_state = future_state.replace(grid=GridStatesEnum.remove_targets(future_state.grid))
+
+    # Create valid batch
+    batch = {
+        "observations": state.grid.reshape(state.grid.shape[0], -1),
+        "next_observations": next_state.grid.reshape(next_state.grid.shape[0], -1),
+        "actions": actions.squeeze(),
+        "rewards": state.reward.reshape(state.reward.shape[0], -1).squeeze(),
+        "masks": 1.0 - state.done.reshape(state.done.shape[0], -1).squeeze(),
+        # "value_goals": future_state.grid.reshape(future_state.grid.shape[0], -1),
+        "actor_goals": future_state.grid.reshape(future_state.grid.shape[0], -1),
+        "value_goals": state.goal.reshape(future_state.goal.shape[0], -1),
+        # "actor_goals": state.goal.reshape(future_state.goal.shape[0], -1),
+    }
+    return batch
+
+
+def evaluate_agent_in_specific_env(agent, key, jitted_create_batch, config, name, create_gif=False, critic_temp=None):
     env_eval = create_env(config.env)
     env_eval = AutoResetWrapper(env_eval)
     env_eval.step = jax.jit(jax.vmap(env_eval.step))
@@ -112,32 +146,7 @@ def evaluate_agent_in_specific_env(agent, key, jitted_flatten_batch, config, nam
     )
     timesteps = jax.tree_util.tree_map(lambda x: x.swapaxes(1, 0), timesteps)
 
-    batch_keys = jax.random.split(data_key, config.exp.num_envs)
-    state, next_state, future_state, goal_index = jitted_flatten_batch(config.exp.gamma, timesteps, batch_keys)
-
-    # Sample and concatenate batch using the new function
-    state, actions, next_state, future_state, goal_index = get_single_pair_from_every_env(
-        state,
-        next_state,
-        future_state,
-        goal_index,
-        batch_key,
-    )  # state.grid is of shape (batch_size * 2, grid_size, grid_size)
-    if not config.exp.use_targets:
-        state = state.replace(grid=GridStatesEnum.remove_targets(state.grid))
-        next_state = next_state.replace(grid=GridStatesEnum.remove_targets(next_state.grid))
-        future_state = future_state.replace(grid=GridStatesEnum.remove_targets(future_state.grid))
-
-    # Create valid batch
-    valid_batch = {
-        "observations": state.grid.reshape(state.grid.shape[0], -1),
-        "next_observations": next_state.grid.reshape(next_state.grid.shape[0], -1),
-        "actions": actions.squeeze(),
-        "rewards": state.reward.reshape(state.reward.shape[0], -1).squeeze(),
-        "masks": 1.0 - state.done.reshape(state.done.shape[0], -1).squeeze(),
-        "value_goals": future_state.grid.reshape(future_state.grid.shape[0], -1),
-        "actor_goals": future_state.grid.reshape(future_state.grid.shape[0], -1),
-    }
+    valid_batch = jitted_create_batch(timesteps, batch_key)
 
     # Compute losses on example batch
     loss, loss_info = agent.total_loss(valid_batch, None)
@@ -174,12 +183,12 @@ def evaluate_agent_in_specific_env(agent, key, jitted_flatten_batch, config, nam
         raise ValueError(f"Unknown agent name {config.agent.agent_name}")
 
     if create_gif:
-        log_gif(env_eval, config.env.episode_length, prefix_gif, timesteps, state)
+        log_gif(env_eval, config.env.episode_length, prefix_gif, timesteps)
 
     return eval_info_tmp, loss_info
 
 
-def evaluate_agent(agent, key, jitted_flatten_batch, epoch, config):
+def evaluate_agent(agent, key, jitted_create_batch, epoch, config):
     """Evaluate agent by running rollouts using collect_data and computing losses."""
 
     eval_configs = [config]
@@ -208,7 +217,7 @@ def evaluate_agent(agent, key, jitted_flatten_batch, epoch, config):
 
     for eval_config, eval_name_suff in zip(eval_configs, eval_names_suff):
         eval_info_tmp, loss_info = evaluate_agent_in_specific_env(
-            agent, key, jitted_flatten_batch, eval_config, eval_name_suff, create_gif=create_gif
+            agent, key, jitted_create_batch, eval_config, eval_name_suff, create_gif=create_gif
         )
         eval_info.update(eval_info_tmp)
         if eval_name_suff == "":
@@ -218,7 +227,7 @@ def evaluate_agent(agent, key, jitted_flatten_batch, epoch, config):
         eval_info_tmp, loss_info = evaluate_agent_in_specific_env(
             agent,
             key,
-            jitted_flatten_batch,
+            jitted_create_batch,
             eval_config,
             eval_name_suff + "soft_q",
             create_gif=create_gif,
@@ -230,6 +239,7 @@ def evaluate_agent(agent, key, jitted_flatten_batch, epoch, config):
 
 
 def train(config: Config):
+    # Create dirs, init wandb
     wandb.init(
         project=config.exp.project,
         name=config.exp.name,
@@ -237,7 +247,13 @@ def train(config: Config):
         entity=config.exp.entity,
         mode=config.exp.mode,
     )
+    if config.exp.save_dir is None:
+        run_directory = os.path.join(ROOT_DIR, "runs", config.exp.name)
+    else:
+        run_directory = os.path.join(config.exp.save_dir, config.exp.name)
+    os.makedirs(run_directory, exist_ok=True)
 
+    # Create environment and batch functions
     env = create_env(config.env)
     print(f"DEnse:{env.dense_rewards}")
     env = AutoResetWrapper(env)
@@ -246,7 +262,14 @@ def train(config: Config):
     env.reset = jax.jit(jax.vmap(env.reset))
     partial_flatten = functools.partial(flatten_batch, get_next_obs=config.agent.use_next_obs)
     jitted_flatten_batch = jax.jit(jax.vmap(partial_flatten, in_axes=(None, 0, 0)), static_argnums=(0,))
+    jitted_create_batch = functools.partial(
+        create_batch,
+        gamma=config.exp.gamma,
+        use_targets=config.exp.use_targets,
+        jitted_flatten_batch=jitted_flatten_batch,
+    )
 
+    # Create replay buffer and agent
     dummy_timestep = env.get_dummy_timestep(key)
 
     replay_buffer = jit_wrap(
@@ -270,44 +293,15 @@ def train(config: Config):
         "value_goals": dummy_timestep.grid.reshape(1, -1),
         "actor_goals": dummy_timestep.grid.reshape(1, -1),
     }
-
     agent = create_agent(config.agent, example_batch, config.exp.seed)
 
-    def make_batch(buffer_state, key):
-        key, sampling_key, batch_key = jax.random.split(key, 3)
-        # Sample and process transitions
-        buffer_state, transitions = replay_buffer.sample(buffer_state)
-        batch_keys = jax.random.split(batch_key, transitions.grid.shape[0])
-        state, next_state, future_state, goal_index = jitted_flatten_batch(config.exp.gamma, transitions, batch_keys)
-
-        state, actions, next_state, future_state, goal_index = get_single_pair_from_every_env(
-            state,
-            next_state,
-            future_state,
-            goal_index,
-            sampling_key,
-        )
-        if not config.exp.use_targets:
-            state = state.replace(grid=GridStatesEnum.remove_targets(state.grid))
-            next_state = next_state.replace(grid=GridStatesEnum.remove_targets(next_state.grid))
-            future_state = future_state.replace(grid=GridStatesEnum.remove_targets(future_state.grid))
-        # Create valid batch
-        batch = {
-            "observations": state.grid.reshape(state.grid.shape[0], -1),
-            "next_observations": next_state.grid.reshape(next_state.grid.shape[0], -1),
-            "actions": actions.squeeze(),
-            "rewards": state.reward.reshape(state.reward.shape[0], -1).squeeze(),
-            "masks": 1.0 - state.done.reshape(state.done.shape[0], -1).squeeze(),
-            "value_goals": future_state.grid.reshape(future_state.grid.shape[0], -1),
-            "actor_goals": future_state.grid.reshape(future_state.grid.shape[0], -1),
-        }
-        return buffer_state, batch
-
+    # Training functions
     @jax.jit
     def update_step(carry, _):
         buffer_state, agent, key = carry
         key, batch_key = jax.random.split(key, 2)
-        buffer_state, batch = make_batch(buffer_state, batch_key)
+        buffer_state, transitions = replay_buffer.sample(buffer_state)
+        batch = jitted_create_batch(transitions, batch_key)
         agent, update_info = agent.update(batch)
         return (buffer_state, agent, key), update_info
 
@@ -323,22 +317,15 @@ def train(config: Config):
         )
         return buffer_state, agent, key
 
-    if config.exp.save_dir is None:
-        run_directory = os.path.join(ROOT_DIR, "runs", config.exp.name)
-    else:
-        run_directory = os.path.join(config.exp.save_dir, config.exp.name)
-
-    os.makedirs(run_directory, exist_ok=True)
-
-    # Evaluate before training
-    evaluate_agent(agent, key, jitted_flatten_batch, 0, config)
+    # Main training loop with evaluation
+    evaluate_agent(agent, key, jitted_create_batch, 0, config)
     save_agent(agent, config, save_dir=run_directory, epoch=0)
 
     for epoch in range(config.exp.epochs):
         for _ in range(config.exp.intervals_per_epoch):
             buffer_state, agent, key = train_interval(buffer_state, agent, key)
 
-        evaluate_agent(agent, key, jitted_flatten_batch, epoch + 1, config)
+        evaluate_agent(agent, key, jitted_create_batch, epoch + 1, config)
         save_agent(agent, config, save_dir=run_directory, epoch=epoch + 1)
 
 
