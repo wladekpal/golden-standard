@@ -161,7 +161,6 @@ def evaluate_agent_in_specific_env(agent, key, jitted_create_batch, config, name
         f"{prefix}/mean_success": timesteps.success[truncated_mask].mean(),
         f"{prefix}/mean_boxes_on_target": info["boxes_on_target"].mean(),
         f"{prefix}/total_loss": loss,
-        f"{prefix}/actor_loss": loss_info["actor/actor_loss"],
     }
     if config.agent.agent_name == "crl" or config.agent.agent_name == "crl_search":
         eval_info_tmp.update(
@@ -169,6 +168,7 @@ def evaluate_agent_in_specific_env(agent, key, jitted_create_batch, config, name
                 f"{prefix}/contrastive_loss": loss_info["critic/contrastive_loss"],
                 f"{prefix}/cat_acc": loss_info["critic/categorical_accuracy"],
                 f"{prefix}/v_mean": loss_info["critic/v_mean"],
+                f"{prefix}/actor_loss": loss_info["actor/actor_loss"],
             }
         )
     elif config.agent.agent_name == "gciql" or config.agent.agent_name == "gciql_search":
@@ -177,6 +177,16 @@ def evaluate_agent_in_specific_env(agent, key, jitted_create_batch, config, name
                 f"{prefix}/critic_loss": loss_info["critic/critic_loss"],
                 f"{prefix}/q_mean": loss_info["critic/q_mean"],
                 f"{prefix}/v_mean": loss_info["value/v_mean"],
+                f"{prefix}/actor_loss": loss_info["actor/actor_loss"],
+            }
+        )
+    elif config.agent.agent_name == "gcdqn":
+        eval_info_tmp.update(
+            {
+                f"{prefix}/critic_loss": loss_info["critic/critic_loss"],
+                f"{prefix}/q_mean": loss_info["critic/q_mean"],
+                f"{prefix}/q_min": loss_info["critic/q_min"],
+                f"{prefix}/q_max": loss_info["critic/q_max"],
             }
         )
     else:
