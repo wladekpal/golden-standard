@@ -30,6 +30,7 @@ class ExpConfig:
     # Miscellaneous
     use_targets: bool = False
     gamma: float = 0.99
+    use_env_goals: bool = False
 
     # Evaluation settings
     eval_different_box_numbers: bool = False

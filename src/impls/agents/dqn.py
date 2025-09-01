@@ -38,7 +38,6 @@ class GCDQNAgent(flax.struct.PyTreeNode):
         # Ensure shapes are (batch,)
         q1_a = jnp.squeeze(q1_a, axis=-1) if q1_a.ndim > 1 else q1_a
         q2_a = jnp.squeeze(q2_a, axis=-1) if q2_a.ndim > 1 else q2_a
-        # jax.debug.print("q1_a.shape: {x}", x=q1_a.shape)
 
         # Target Q: use target critic to get Q-vector for next states, average ensemble, take max over actions
         all_actions = jnp.tile(jnp.arange(6), (batch['next_observations'].shape[0], 1))  # B x 6
@@ -47,11 +46,9 @@ class GCDQNAgent(flax.struct.PyTreeNode):
         qs = qs.transpose(1, 0) # B x 6
         # q1_next, q2_next expected shape: (batch, action_dim)
         max_next_q = jnp.max(qs, axis=-1)
-        # jax.debug.print("max_next_q.shape: {x}", x=max_next_q.shape)
 
         # TD target
         target = batch['rewards'] + self.config['discount'] * batch['masks'] * max_next_q
-        # jax.debug.print("target.shape: {x}", x=target.shape)
 
         # MSE loss on both heads (keeps two-head training similar to your critic ensemble)
         critic_loss = ((q1_a - target) ** 2 + (q2_a - target) ** 2).mean()

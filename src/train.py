@@ -91,7 +91,7 @@ def get_single_pair_from_every_env(state, next_state, future_state, goal_index, 
     return single_batch_fn(key)
 
 
-def create_batch(timesteps, key, gamma, use_targets, jitted_flatten_batch):
+def create_batch(timesteps, key, gamma, use_targets, use_env_goals, jitted_flatten_batch):
     batch_key, sampling_key = jax.random.split(key, 2)
     batch_keys = jax.random.split(batch_key, timesteps.grid.shape[0])
     state, next_state, future_state, goal_index = jitted_flatten_batch(gamma, timesteps, batch_keys)
@@ -110,6 +110,13 @@ def create_batch(timesteps, key, gamma, use_targets, jitted_flatten_batch):
         next_state = next_state.replace(grid=GridStatesEnum.remove_targets(next_state.grid))
         future_state = future_state.replace(grid=GridStatesEnum.remove_targets(future_state.grid))
 
+    if use_env_goals:
+        value_goals = state.goal.reshape(future_state.goal.shape[0], -1)
+        actor_goals = state.goal.reshape(future_state.goal.shape[0], -1)
+    else:
+        value_goals = future_state.grid.reshape(future_state.grid.shape[0], -1)
+        actor_goals = future_state.grid.reshape(future_state.grid.shape[0], -1)
+
     # Create valid batch
     batch = {
         "observations": state.grid.reshape(state.grid.shape[0], -1),
@@ -117,10 +124,8 @@ def create_batch(timesteps, key, gamma, use_targets, jitted_flatten_batch):
         "actions": actions.squeeze(),
         "rewards": state.reward.reshape(state.reward.shape[0], -1).squeeze(),
         "masks": 1.0 - state.done.reshape(state.done.shape[0], -1).squeeze(),
-        # "value_goals": future_state.grid.reshape(future_state.grid.shape[0], -1),
-        "actor_goals": future_state.grid.reshape(future_state.grid.shape[0], -1),
-        "value_goals": state.goal.reshape(future_state.goal.shape[0], -1),
-        # "actor_goals": state.goal.reshape(future_state.goal.shape[0], -1),
+        "value_goals": value_goals,
+        "actor_goals": actor_goals,
     }
     return batch
 
@@ -276,6 +281,7 @@ def train(config: Config):
         create_batch,
         gamma=config.exp.gamma,
         use_targets=config.exp.use_targets,
+        use_env_goals=config.exp.use_env_goals,
         jitted_flatten_batch=jitted_flatten_batch,
     )
 
