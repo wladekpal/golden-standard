@@ -1,7 +1,9 @@
 from impls.agents.crl import CRLAgent
 from impls.agents.crl_search import CRLSearchAgent
+from impls.agents.dqn import GCDQNAgent
 from impls.agents.gcbc import GCBCAgent
 from impls.agents.gciql import GCIQLAgent
+from impls.agents.gciql_search import GCIQLSearchAgent
 from impls.agents.gcivl import GCIVLAgent
 from impls.agents.hiql import HIQLAgent
 from impls.agents.qrl import QRLAgent
@@ -74,7 +76,14 @@ def create_agent(config: ml_collections.FrozenConfigDict, example_batch: dict, s
             config,
         )
     elif config.agent_name == "gciql_search":
-        agent = GCIQLAgent.create(
+        agent = GCIQLSearchAgent.create(
+            seed,
+            example_batch['observations'],
+            example_batch['actions'],
+            config,
+        )
+    elif config.agent_name == "gcdqn":
+        agent = GCDQNAgent.create(
             seed,
             example_batch['observations'],
             example_batch['actions'],

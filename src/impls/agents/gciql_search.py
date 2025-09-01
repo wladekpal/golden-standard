@@ -12,7 +12,7 @@ from impls.utils.flax_utils import ModuleDict, TrainState, nonpytree_field
 from impls.utils.networks import GCActor, GCDiscreteActor, GCDiscreteCritic, GCValue, LogParam
 
 
-class GCIQLAgent(flax.struct.PyTreeNode):
+class GCIQLSearchAgent(flax.struct.PyTreeNode):
     """Goal-conditioned implicit Q-learning (GCIQL) agent.
 
     This implementation supports both AWR (actor_loss='awr') and DDPG+BC (actor_loss='ddpgbc') for the actor loss.
@@ -258,7 +258,7 @@ def get_config():
     config = ml_collections.ConfigDict(
         dict(
             # Agent hyperparameters.
-            agent_name='gciql',  # Agent name.
+            agent_name='gciql_search',  # Agent name.
             lr=3e-4,  # Learning rate.
             batch_size=1024,  # Batch size.
             actor_hidden_dims=(512, 512, 512),  # Actor network hidden dimensions.
