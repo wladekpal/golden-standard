@@ -80,7 +80,7 @@ def test_default_generator_box_and_target_counts(seed):
 def test_quarter_generator_box_and_target_counts(seed):
     """QuarterGenerator should also produce matching counts for boxes and targets."""
     gen = QuarterGenerator(
-        grid_size=4, number_of_boxes_min=2, number_of_boxes_max=3, number_of_moving_boxes_max=1, mirror=False
+        grid_size=4, number_of_boxes_min=2, number_of_boxes_max=3, number_of_moving_boxes_max=1, special=False
     )
     key = jax.random.PRNGKey(seed)
     state = gen.generate(key)
