@@ -112,8 +112,8 @@ def create_batch(timesteps, key, gamma, use_targets, use_env_goals, jitted_flatt
         future_state = future_state.replace(grid=GridStatesEnum.remove_targets(future_state.grid))
 
     if use_env_goals:
-        value_goals = state.goal.reshape(future_state.goal.shape[0], -1)
-        actor_goals = state.goal.reshape(future_state.goal.shape[0], -1)
+        value_goals = state.goal.reshape(state.goal.shape[0], -1)
+        actor_goals = state.goal.reshape(state.goal.shape[0], -1)
     else:
         value_goals = future_state.grid.reshape(future_state.grid.shape[0], -1)
         actor_goals = future_state.grid.reshape(future_state.grid.shape[0], -1)
@@ -271,7 +271,6 @@ def train(config: Config):
 
     # Create environment and batch functions
     env = create_env(config.env)
-    print(f"DEnse:{env.dense_rewards}")
     env = wrap_for_training(config, env)
     key = random.PRNGKey(config.exp.seed)
     env.step = jax.jit(jax.vmap(env.step))
