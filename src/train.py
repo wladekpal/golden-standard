@@ -92,10 +92,12 @@ def get_single_pair_from_every_env(state, next_state, future_state, goal_index, 
     return single_batch_fn(key)
 
 
-def create_batch(timesteps, key, gamma, use_targets, use_env_goals, jitted_flatten_batch):
+def create_batch(timesteps, key, gamma, use_targets, use_env_goals, use_discounted_mc_rewards, jitted_flatten_batch):
     batch_key, sampling_key = jax.random.split(key, 2)
     batch_keys = jax.random.split(batch_key, timesteps.grid.shape[0])
-    state, next_state, future_state, goal_index = jitted_flatten_batch(gamma, timesteps, batch_keys)
+    state, next_state, future_state, goal_index = jitted_flatten_batch(
+        gamma, use_discounted_mc_rewards, timesteps, batch_keys
+    )
 
     state, actions, next_state, future_state, goal_index = get_single_pair_from_every_env(
         state,
@@ -275,13 +277,20 @@ def train(config: Config):
     key = random.PRNGKey(config.exp.seed)
     env.step = jax.jit(jax.vmap(env.step))
     env.reset = jax.jit(jax.vmap(env.reset))
-    partial_flatten = functools.partial(flatten_batch, get_mc_discounted_rewards=config.exp.use_discounted_mc_rewards)
-    jitted_flatten_batch = jax.jit(jax.vmap(partial_flatten, in_axes=(None, 0, 0)), static_argnums=(0,))
+    partial_flatten = functools.partial(flatten_batch)
+    jitted_flatten_batch = jax.jit(
+        jax.vmap(partial_flatten, in_axes=(None, None, 0, 0)),
+        static_argnums=(
+            0,
+            1,
+        ),
+    )
     jitted_create_batch = functools.partial(
         create_batch,
         gamma=config.exp.gamma,
         use_targets=config.exp.use_targets,
         use_env_goals=config.exp.use_env_goals,
+        use_discounted_mc_rewards=config.agent.use_discounted_mc_rewards,
         jitted_flatten_batch=jitted_flatten_batch,
     )
 

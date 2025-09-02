@@ -44,7 +44,10 @@ class GCIQLAgent(flax.struct.PyTreeNode):
     def critic_loss(self, batch, grad_params):
         """Compute the IQL critic loss."""
         next_v = self.network.select('value')(batch['next_observations'], batch['value_goals'])
-        q = batch['rewards'] + self.config['discount'] * batch['masks'] * next_v
+        if self.config['use_discounted_mc_rewards']:
+            q = batch['rewards'] 
+        else:
+            q = batch['rewards'] + self.config['discount'] * batch['masks'] * next_v
 
         q1, q2 = self.network.select('critic')(
             batch['observations'], batch['value_goals'], batch['actions'], params=grad_params

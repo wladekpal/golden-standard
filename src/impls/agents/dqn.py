@@ -47,8 +47,11 @@ class GCDQNAgent(flax.struct.PyTreeNode):
         # q1_next, q2_next expected shape: (batch, action_dim)
         max_next_q = jnp.max(qs, axis=-1)
 
-        # TD target
-        target = batch['rewards'] + self.config['discount'] * batch['masks'] * max_next_q
+        # TD or MC target
+        if self.config['use_discounted_mc_rewards']:
+            target = batch['rewards'] 
+        else:
+            target = batch['rewards'] + self.config['discount'] * batch['masks'] * max_next_q
 
         # MSE loss on both heads (keeps two-head training similar to your critic ensemble)
         critic_loss = ((q1_a - target) ** 2 + (q2_a - target) ** 2).mean()
