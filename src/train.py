@@ -277,9 +277,8 @@ def train(config: Config):
     key = random.PRNGKey(config.exp.seed)
     env.step = jax.jit(jax.vmap(env.step))
     env.reset = jax.jit(jax.vmap(env.reset))
-    partial_flatten = functools.partial(flatten_batch)
     jitted_flatten_batch = jax.jit(
-        jax.vmap(partial_flatten, in_axes=(None, None, 0, 0)),
+        jax.vmap(flatten_batch, in_axes=(None, None, 0, 0)),
         static_argnums=(
             0,
             1,
