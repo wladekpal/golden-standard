@@ -29,6 +29,7 @@ default_config = ml_collections.FrozenConfigDict(
             value_hidden_dims=(256, 256),  # Value network hidden dimensions.
             latent_dim=64, 
             embed_dim=64,
+            use_position_embeddings=True, 
             layer_norm=True,  # Whether to use layer normalization.
             discount=0.99,  # Discount factor.
             actor_loss='awr',  # Actor loss type ('awr' or 'ddpgbc').

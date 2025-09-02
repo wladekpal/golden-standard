@@ -245,7 +245,7 @@ class CRLAgent(flax.struct.PyTreeNode):
                 num_states=12,  
                 embed_dim=config['embed_dim'],   
                 grid_size=grid_size,    
-                use_position=True
+                use_position=config['use_position_embeddings']
             ) 
         else:
             embedding_encoder = None
@@ -333,6 +333,7 @@ def get_config():
             lr=3e-4,  # Learning rate.
             batch_size=256,  # Batch size.
             embed_dim=64,
+            use_position_embeddings=True, 
             actor_hidden_dims=(256, 256),  # Actor network hidden dimensions.
             value_hidden_dims=(256, 256),  # Value network hidden dimensions.
             latent_dim=64, 
