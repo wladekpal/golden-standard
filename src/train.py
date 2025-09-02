@@ -275,8 +275,8 @@ def train(config: Config):
     key = random.PRNGKey(config.exp.seed)
     env.step = jax.jit(jax.vmap(env.step))
     env.reset = jax.jit(jax.vmap(env.reset))
-    partial_flatten = functools.partial(flatten_batch, get_next_obs=config.agent.use_next_obs)
-    jitted_flatten_batch = jax.jit(jax.vmap(partial_flatten, in_axes=(None, None, 0, 0)), static_argnums=(0, 1))
+    partial_flatten = functools.partial(flatten_batch, get_mc_discounted_rewards=config.exp.use_discounted_mc_rewards)
+    jitted_flatten_batch = jax.jit(jax.vmap(partial_flatten, in_axes=(None, 0, 0)), static_argnums=(0,))
     jitted_create_batch = functools.partial(
         create_batch,
         gamma=config.exp.gamma,
@@ -326,7 +326,6 @@ def train(config: Config):
         _, _, timesteps = collect_data(
             agent, data_key, env, config.exp.num_envs, config.env.episode_length, use_targets=config.exp.use_targets
         )
-
         buffer_state = replay_buffer.insert(buffer_state, timesteps)
         (buffer_state, agent, _), _ = jax.lax.scan(
             update_step, (buffer_state, agent, up_key), None, length=config.exp.updates_per_rollout
