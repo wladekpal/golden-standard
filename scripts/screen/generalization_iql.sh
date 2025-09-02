@@ -53,25 +53,29 @@ moving_boxes_max=5
 
 for seed in 1 2 3
 do
-    for alpha in 0.1 
+    for alpha in 0.3 
     do
+      for bs in 128 32 256 
+      do
         CUDA_VISIBLE_DEVICES=$GPU_ID uv run --active src/train.py \
         env:box-pushing \
         --agent.agent_name gciql \
-        --exp.name new_repr3_new_reward_no_targets_moving_boxes_${moving_boxes_max}_grid_${grid_size}_range_${number_of_boxes_min}_${number_of_boxes_max}_alpha_${alpha} \
+        --exp.name test2_jcb_default_actor_geom_qv_env_goals_${bs}_bs_moving_boxes_${moving_boxes_max}_grid_${grid_size}_range_${number_of_boxes_min}_${number_of_boxes_max}_alpha_${alpha}_expc_${expectile} \
         --env.number_of_boxes_max ${number_of_boxes_max} \
         --env.number_of_boxes_min ${number_of_boxes_min} \
         --env.number_of_moving_boxes_max ${moving_boxes_max} \
         --env.grid_size ${grid_size} \
-        --env.dense_rewards \
         --exp.gamma 0.99 \
         --env.episode_length 100 \
         --exp.seed $seed \
-        --exp.project "test_gciql_subgoal" \
+        --exp.project "gciql_env_goals" \
         --exp.epochs 50 \
         --exp.gif_every 10 \
         --agent.alpha ${alpha} \
         --exp.max_replay_size 10000 \
+        --agent.expectile 0.5  \
+        --agent.batch_size ${bs} \
         --exp.eval-different-box-numbers
+        done
     done
 done
