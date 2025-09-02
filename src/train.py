@@ -285,8 +285,8 @@ def train(config: Config):
         gamma=config.exp.gamma,
         use_targets=config.exp.use_targets,
         use_env_goals=config.exp.use_env_goals,
-        use_discounted_mc_rewards=config.agent.use_discounted_mc_rewards,
         jitted_flatten_batch=jitted_flatten_batch,
+        use_discounted_mc_rewards=config.agent.use_discounted_mc_rewards,
     )
 
     # Create replay buffer and agent
@@ -320,9 +320,7 @@ def train(config: Config):
         buffer_state, agent, key = carry
         key, batch_key = jax.random.split(key, 2)
         buffer_state, transitions = replay_buffer.sample(buffer_state)
-        batch = jitted_create_batch(
-            transitions, batch_key, use_discounted_mc_rewards=config.exp.use_discounted_mc_rewards
-        )
+        batch = jitted_create_batch(transitions, batch_key)
         agent, update_info = agent.update(batch)
         return (buffer_state, agent, key), update_info
 
