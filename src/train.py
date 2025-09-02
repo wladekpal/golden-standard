@@ -275,7 +275,7 @@ def train(config: Config):
     key = random.PRNGKey(config.exp.seed)
     env.step = jax.jit(jax.vmap(env.step))
     env.reset = jax.jit(jax.vmap(env.reset))
-    partial_flatten = functools.partial(flatten_batch, get_next_obs=config.agent.use_next_obs)
+    partial_flatten = functools.partial(flatten_batch, get_mc_discounted_rewards=config.exp.use_discounted_mc_rewards)
     jitted_flatten_batch = jax.jit(jax.vmap(partial_flatten, in_axes=(None, 0, 0)), static_argnums=(0,))
     jitted_create_batch = functools.partial(
         create_batch,
@@ -304,14 +304,13 @@ def train(config: Config):
         "next_observations": dummy_timestep.grid.reshape(1, -1),
         "actions": jnp.ones((1,), dtype=jnp.int8)
         * (env._env.action_space - 1),  # it should be the maximal value of action space
-        "rewards": jnp.ones((1,), dtype=jnp.int8),
+        "rewards": jnp.ones((1,), dtype=jnp.float32),
         "masks": jnp.ones((1,), dtype=jnp.int8),
         "value_goals": dummy_timestep.grid.reshape(1, -1),
         "actor_goals": dummy_timestep.grid.reshape(1, -1),
     }
     agent = create_agent(config.agent, example_batch, config.exp.seed)
 
-    # Training functions
     @jax.jit
     def update_step(carry, _):
         buffer_state, agent, key = carry
