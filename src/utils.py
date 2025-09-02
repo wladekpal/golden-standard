@@ -10,8 +10,8 @@ import distrax
 from impls.agents.crl import CRLAgent
 
 
-def log_gif(original_env, episode_length, prefix_gif, timesteps, state):
-    grid_size = state.grid.shape[-2:]
+def log_gif(original_env, episode_length, prefix_gif, timesteps):
+    grid_size = timesteps.grid.shape[-2:]
     fig, ax = plt.subplots(figsize=grid_size)
 
     animate = functools.partial(original_env.animate, ax, timesteps, img_prefix=os.path.join(ROOT_DIR, "assets"))
