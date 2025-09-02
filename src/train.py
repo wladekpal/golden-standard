@@ -92,7 +92,9 @@ def get_single_pair_from_every_env(state, next_state, future_state, goal_index, 
     return single_batch_fn(key)
 
 
-def create_batch(timesteps, key, gamma, use_targets, use_env_goals, use_discounted_mc_rewards, jitted_flatten_batch):
+def create_batch(
+    timesteps, key, gamma, use_targets, use_env_goals, jitted_flatten_batch, use_discounted_mc_rewards=False
+):
     batch_key, sampling_key = jax.random.split(key, 2)
     batch_keys = jax.random.split(batch_key, timesteps.grid.shape[0])
     state, next_state, future_state, goal_index = jitted_flatten_batch(
@@ -277,13 +279,7 @@ def train(config: Config):
     key = random.PRNGKey(config.exp.seed)
     env.step = jax.jit(jax.vmap(env.step))
     env.reset = jax.jit(jax.vmap(env.reset))
-    jitted_flatten_batch = jax.jit(
-        jax.vmap(flatten_batch, in_axes=(None, None, 0, 0)),
-        static_argnums=(
-            0,
-            1,
-        ),
-    )
+    jitted_flatten_batch = jax.jit(jax.vmap(flatten_batch, in_axes=(None, None, 0, 0)), static_argnums=(0, 1))
     jitted_create_batch = functools.partial(
         create_batch,
         gamma=config.exp.gamma,
@@ -324,7 +320,9 @@ def train(config: Config):
         buffer_state, agent, key = carry
         key, batch_key = jax.random.split(key, 2)
         buffer_state, transitions = replay_buffer.sample(buffer_state)
-        batch = jitted_create_batch(transitions, batch_key)
+        batch = jitted_create_batch(
+            transitions, batch_key, use_discounted_mc_rewards=config.exp.use_discounted_mc_rewards
+        )
         agent, update_info = agent.update(batch)
         return (buffer_state, agent, key), update_info
 
@@ -334,6 +332,7 @@ def train(config: Config):
         _, _, timesteps = collect_data(
             agent, data_key, env, config.exp.num_envs, config.env.episode_length, use_targets=config.exp.use_targets
         )
+
         buffer_state = replay_buffer.insert(buffer_state, timesteps)
         (buffer_state, agent, _), _ = jax.lax.scan(
             update_step, (buffer_state, agent, up_key), None, length=config.exp.updates_per_rollout
