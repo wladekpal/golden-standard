@@ -59,6 +59,63 @@ class MLP(nn.Module):
                     x = nn.LayerNorm()(x)
         return x
 
+lecun_unfirom = nn.initializers.variance_scaling(1/3, "fan_in", "uniform")
+bias_init = nn.initializers.zeros
+
+class ResidualBlock(nn.Module):
+    hidden_dim: int = 1024
+    activation: Any = nn.swish
+    
+    @nn.compact
+    def __call__(self, x):
+        identity = x
+        x = nn.Dense(self.hidden_dim, kernel_init=lecun_unfirom, bias_init=bias_init)(x)
+        x = nn.LayerNorm()(x)
+        x = self.activation(x)
+        x = nn.Dense(self.hidden_dim, kernel_init=lecun_unfirom, bias_init=bias_init)(x)
+        x = nn.LayerNorm()(x)
+        x = self.activation(x)
+        x = nn.Dense(self.hidden_dim, kernel_init=lecun_unfirom, bias_init=bias_init)(x)
+        x = nn.LayerNorm()(x)
+        x = self.activation(x)
+        x = nn.Dense(self.hidden_dim, kernel_init=lecun_unfirom, bias_init=bias_init)(x)
+        x = nn.LayerNorm()(x)
+        x = self.activation(x)
+        x = x + identity
+        return x
+    
+class ResidualNetwork(nn.Module):
+    blocks_dims: Sequence[int]
+    activations: Any = nn.swish
+    activate_final: bool = False
+    kernel_init: Any = lecun_unfirom
+    layer_norm: bool = True
+
+    def setup(self):
+        assert self.layer_norm, "ResidualNetwork requires layer_norm=True"
+        return super().setup()
+
+    @nn.compact
+    def __call__(self, x):
+        output_dim = self.blocks_dims[-1]
+        blocks_dims = self.blocks_dims[:-1]
+        x = nn.Dense(self.blocks_dims[0], kernel_init=lecun_unfirom, bias_init=bias_init)(x)
+        x = nn.LayerNorm()(x)
+        x = self.activations(x)
+        for block_dim in blocks_dims:
+            x = ResidualBlock(block_dim, self.activations)(x)
+        x = nn.Dense(output_dim, kernel_init=lecun_unfirom, bias_init=bias_init)(x)
+        if self.activate_final:
+            x = self.activations(x)
+        return x
+    
+def create_network(net_type: str) -> nn.Module:
+    if net_type == 'mlp':
+        return MLP
+    elif net_type == 'res_block':
+        return ResidualNetwork
+    else:
+        raise ValueError(f"Unknown network type {net_type}")
 
 class LengthNormalize(nn.Module):
     """Length normalization layer.
@@ -164,9 +221,11 @@ class GCActor(nn.Module):
     const_std: bool = True
     final_fc_init_scale: float = 1e-2
     gc_encoder: nn.Module = None
+    net_arch: str = 'mlp'
 
     def setup(self):
-        self.actor_net = MLP(self.hidden_dims, activate_final=True)
+        net = create_network(self.net_arch)
+        self.actor_net = net(self.hidden_dims, activate_final=True)
         self.mean_net = nn.Dense(self.action_dim, kernel_init=default_init(self.final_fc_init_scale))
         if self.state_dependent_std:
             self.log_std_net = nn.Dense(self.action_dim, kernel_init=default_init(self.final_fc_init_scale))
@@ -230,9 +289,11 @@ class GCDiscreteActor(nn.Module):
     action_dim: int
     final_fc_init_scale: float = 1e-2
     gc_encoder: nn.Module = None
+    net_arch: str = 'mlp'
 
     def setup(self):
-        self.actor_net = MLP(self.hidden_dims, activate_final=True)
+        net = create_network(self.net_arch)
+        self.actor_net = net(self.hidden_dims, activate_final=True)
         self.logit_net = nn.Dense(self.action_dim, kernel_init=default_init(self.final_fc_init_scale))
 
     def __call__(
@@ -282,9 +343,10 @@ class GCValue(nn.Module):
     layer_norm: bool = True
     ensemble: bool = True
     gc_encoder: nn.Module = None
+    net_arch: str = 'mlp'
 
     def setup(self):
-        mlp_module = MLP
+        mlp_module = create_network(self.net_arch)
         if self.ensemble:
             mlp_module = ensemblize(mlp_module, 2)
         value_net = mlp_module((*self.hidden_dims, 1), activate_final=False, layer_norm=self.layer_norm)
@@ -347,9 +409,10 @@ class GCBilinearValue(nn.Module):
     value_exp: bool = False
     state_encoder: nn.Module = None
     goal_encoder: nn.Module = None
+    net_arch: str = 'mlp'
 
     def setup(self):
-        mlp_module = MLP
+        mlp_module = create_network(self.net_arch)
         if self.ensemble:
             mlp_module = ensemblize(mlp_module, 2)
 
@@ -416,9 +479,11 @@ class GCMRNValue(nn.Module):
     latent_dim: int
     layer_norm: bool = True
     encoder: nn.Module = None
+    net_arch: str = 'mlp'
 
     def setup(self):
-        self.phi = MLP((*self.hidden_dims, self.latent_dim), activate_final=False, layer_norm=self.layer_norm)
+        net = create_network(self.net_arch)
+        self.phi = net((*self.hidden_dims, self.latent_dim), activate_final=False, layer_norm=self.layer_norm)
 
     def __call__(self, observations, goals, is_phi=False, info=False):
         """Return the MRN value function.
@@ -471,9 +536,11 @@ class GCIQEValue(nn.Module):
     dim_per_component: int
     layer_norm: bool = True
     encoder: nn.Module = None
+    net_arch: str = 'mlp'
 
     def setup(self):
-        self.phi = MLP((*self.hidden_dims, self.latent_dim), activate_final=False, layer_norm=self.layer_norm)
+        net = create_network(self.net_arch)
+        self.phi = net((*self.hidden_dims, self.latent_dim), activate_final=False, layer_norm=self.layer_norm)
         self.alpha = Param()
 
     def __call__(self, observations, goals, is_phi=False, info=False):

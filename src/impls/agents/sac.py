@@ -160,6 +160,7 @@ class SACAgent(flax.struct.PyTreeNode):
             hidden_dims=config['value_hidden_dims'],
             layer_norm=config['layer_norm'],
             ensemble=True,
+            net_arch=config['net_arch'],
         )
 
         actor_def = GCActor(
@@ -170,6 +171,7 @@ class SACAgent(flax.struct.PyTreeNode):
             state_dependent_std=config['state_dependent_std'],
             const_std=False,
             final_fc_init_scale=config['actor_fc_scale'],
+            net_arch=config['net_arch'],
         )
 
         # Define the dual alpha variable.

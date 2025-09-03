@@ -155,18 +155,40 @@ class CRLSearchAgent(flax.struct.PyTreeNode):
         seed=None,
         temperature=1.0,
     ):
-        """Sample actions from the actor."""
+        """Greedy action selection for discrete DQN.
+
+        Returns integer action indices. Continuous actions are not supported here.
+        """
+        if not self.config['discrete']:
+            raise NotImplementedError("GCDQNAgent.sample_actions supports only discrete action spaces.")
+        
         def value_transform(x):
             return jnp.log(jnp.maximum(x, 1e-6))
+
+        # Use critic to get Q-values (use first/ensemble as appropriate). Prefer the minimum head for conservative action,
+        # or average — here we average the two heads and pick argmax.
+        # q1, q2 = self.network.select('critic')(observations, goals)
         all_actions = jnp.tile(jnp.arange(6), (observations.shape[0], 1))  # B x 6
         qs = jax.lax.stop_gradient(jax.vmap(self.network.select('critic'), in_axes=(None, None, 1))(observations, goals, all_actions)) # 6 x 2 x B
-        qs = qs.min(axis=1) # 6 x B
+        qs = qs.mean(axis=1) # 6 x B
         qs = value_transform(qs)
         qs = qs.transpose(1, 0) # B x 6
-        alpha = jax.lax.stop_gradient(self.network.select('alpha')(params=None))
-        dist = distrax.Categorical(logits=qs / jnp.maximum(1e-6, alpha))
-        actions = dist.sample(seed=seed)
+        
+        # Softmax actions
+        # dist = distrax.Categorical(logits=qs / jnp.maximum(1e-6, 1))
+        # actions = dist.sample(seed=seed)
+
+        greedy_actions = jnp.argmax(qs, axis=-1)  # B
+        # random actions
+        rng, rng_uniform = jax.random.split(seed)
+        random_actions = jax.random.randint(rng, greedy_actions.shape, 0, 6)
+
+        # ε-greedy: pick random with prob ε, else greedy
+        probs = jax.random.uniform(rng_uniform, greedy_actions.shape)
+        actions = jnp.where(probs < 0.1, random_actions, greedy_actions)
+
         return actions
+
 
     @classmethod
     def create(
@@ -219,6 +241,7 @@ class CRLSearchAgent(flax.struct.PyTreeNode):
                 state_encoder=encoders.get('critic_state'),
                 goal_encoder=encoders.get('critic_goal'),
                 action_dim=action_dim,
+                net_arch=config['net_arch'],
             )
         else:
             critic_def = GCBilinearValue(
@@ -229,6 +252,7 @@ class CRLSearchAgent(flax.struct.PyTreeNode):
                 value_exp=True,
                 state_encoder=encoders.get('critic_state'),
                 goal_encoder=encoders.get('critic_goal'),
+                net_arch=config['net_arch'],
             )
 
         if config['actor_loss'] == 'awr':
@@ -241,6 +265,7 @@ class CRLSearchAgent(flax.struct.PyTreeNode):
                 value_exp=True,
                 state_encoder=encoders.get('value_state'),
                 goal_encoder=encoders.get('value_goal'),
+                net_arch=config['net_arch'],
             )
 
         if config['discrete']:
@@ -248,6 +273,7 @@ class CRLSearchAgent(flax.struct.PyTreeNode):
                 hidden_dims=config['actor_hidden_dims'],
                 action_dim=action_dim,
                 gc_encoder=encoders.get('actor'),
+                net_arch=config['net_arch'],
             )
         else:
             actor_def = GCActor(
@@ -256,6 +282,7 @@ class CRLSearchAgent(flax.struct.PyTreeNode):
                 state_dependent_std=False,
                 const_std=config['const_std'],
                 gc_encoder=encoders.get('actor'),
+                net_arch=config['net_arch'],
             )
 
         if config['target_entropy'] is None:
