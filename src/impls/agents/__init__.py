@@ -30,6 +30,7 @@ default_config = ml_collections.FrozenConfigDict(
             actor_hidden_dims=(256, 256),  # Actor network hidden dimensions.
             value_hidden_dims=(256, 256),  # Value network hidden dimensions.
             latent_dim=64, 
+            value_type='bilinear',  # Value function type ('bilinear' or 'mrn').
             layer_norm=True,  # Whether to use layer normalization.
             discount=0.99,  # Discount factor.
             contrastive_loss = 'binary',

@@ -7,7 +7,7 @@ import ml_collections
 import optax
 from impls.utils.encoders import GCEncoder, encoder_modules
 from impls.utils.flax_utils import ModuleDict, TrainState, nonpytree_field
-from impls.utils.networks import GCActor, GCBilinearValue, GCDiscreteActor, GCDiscreteBilinearCritic
+from impls.utils.networks import GCActor, GCBilinearValue, GCDiscreteActor, GCDiscreteBilinearCritic, GCMRNValue, GCDiscreteMRNValue
 
 
 
@@ -265,40 +265,83 @@ class CRLAgent(flax.struct.PyTreeNode):
                 encoders['value_state'] = encoder_module()
                 encoders['value_goal'] = encoder_module()
 
-        # Define value and actor networks.
-        if config['discrete']:
-            critic_def = GCDiscreteBilinearCritic(
-                hidden_dims=config['value_hidden_dims'],
-                latent_dim=config['latent_dim'],
-                layer_norm=config['layer_norm'],
-                ensemble=True,
-                value_exp=True,
-                state_encoder=encoders.get('critic_state'),
-                goal_encoder=encoders.get('critic_goal'),
-                action_dim=action_dim,
-            )
-        else:
-            critic_def = GCBilinearValue(
-                hidden_dims=config['value_hidden_dims'],
-                latent_dim=config['latent_dim'],
-                layer_norm=config['layer_norm'],
-                ensemble=True,
-                value_exp=True,
-                state_encoder=encoders.get('critic_state'),
-                goal_encoder=encoders.get('critic_goal'),
-            )
+        # Define value and actor networks based on value_type configuration.
+        value_type = config.get('value_type', 'bilinear')  # Default to bilinear for backward compatibility
+        
+        if value_type == 'bilinear':
+            # Original bilinear value functions
+            if config['discrete']:
+                critic_def = GCDiscreteBilinearCritic(
+                    hidden_dims=config['value_hidden_dims'],
+                    latent_dim=config['latent_dim'],
+                    layer_norm=config['layer_norm'],
+                    ensemble=True,
+                    value_exp=True,
+                    state_encoder=encoders.get('critic_state'),
+                    goal_encoder=encoders.get('critic_goal'),
+                    action_dim=action_dim,
+                )
+            else:
+                critic_def = GCBilinearValue(
+                    hidden_dims=config['value_hidden_dims'],
+                    latent_dim=config['latent_dim'],
+                    layer_norm=config['layer_norm'],
+                    ensemble=True,
+                    value_exp=True,
+                    state_encoder=encoders.get('critic_state'),
+                    goal_encoder=encoders.get('critic_goal'),
+                )
+            
+            if config['actor_loss'] == 'awr':
+                # AWR requires a separate V network to compute advantages (Q - V).
+                value_def = GCBilinearValue(
+                    hidden_dims=config['value_hidden_dims'],
+                    latent_dim=config['latent_dim'],
+                    layer_norm=config['layer_norm'],
+                    ensemble=False,
+                    value_exp=True,
+                    state_encoder=encoders.get('value_state'),
+                    goal_encoder=encoders.get('value_goal'),
+                )
+                
+        elif value_type == 'mrn':
+            # MRN (Metric Residual Network) value functions
+            # Ensure latent_dim is even for MRN (symmetric/asymmetric split)
+            if config['latent_dim'] % 2 != 0:
+                raise ValueError(f"For MRN value type, latent_dim must be even, got {config['latent_dim']}")
+                
+            if config['discrete']:
+                critic_def = GCDiscreteMRNValue(
+                    hidden_dims=config['value_hidden_dims'],
+                    latent_dim=config['latent_dim'],
+                    layer_norm=config['layer_norm'],
+                    ensemble=True,
+                    state_encoder=encoders.get('critic_state'),
+                    goal_encoder=encoders.get('critic_goal'),
+                    action_dim=action_dim,
+                )
+            else:
+                critic_def = GCMRNValue(
+                    hidden_dims=config['value_hidden_dims'],
+                    latent_dim=config['latent_dim'],
+                    layer_norm=config['layer_norm'],
+                    ensemble=True,
+                    state_encoder=encoders.get('critic_state'),
+                    goal_encoder=encoders.get('critic_goal'),
+                )
 
-        if config['actor_loss'] == 'awr':
-            # AWR requires a separate V network to compute advantages (Q - V).
-            value_def = GCBilinearValue(
-                hidden_dims=config['value_hidden_dims'],
-                latent_dim=config['latent_dim'],
-                layer_norm=config['layer_norm'],
-                ensemble=False,
-                value_exp=True,
-                state_encoder=encoders.get('value_state'),
-                goal_encoder=encoders.get('value_goal'),
-            )
+            if config['actor_loss'] == 'awr':
+                # AWR requires a separate V network to compute advantages (Q - V).
+                value_def = GCMRNValue(
+                    hidden_dims=config['value_hidden_dims'],
+                    latent_dim=config['latent_dim'],
+                    layer_norm=config['layer_norm'],
+                    ensemble=False,
+                    state_encoder=encoders.get('value_state'),
+                    goal_encoder=encoders.get('value_goal'),
+                )
+        else:
+            raise ValueError(f"Unsupported value_type: {value_type}. Supported types: 'bilinear', 'mrn'")
 
         if config['discrete']:
             actor_def = GCDiscreteActor(
@@ -343,7 +386,8 @@ def get_config():
             batch_size=256,  # Batch size.
             actor_hidden_dims=(256, 256),  # Actor network hidden dimensions.
             value_hidden_dims=(256, 256),  # Value network hidden dimensions.
-            latent_dim=64, 
+            latent_dim=64,  # Latent dimension for value function.
+            value_type='bilinear',  # Value function type ('bilinear' or 'mrn').
             layer_norm=True,  # Whether to use layer normalization.
             discount=0.99,  # Discount factor.
             actor_loss='awr',  # Actor loss type ('awr' or 'ddpgbc').
