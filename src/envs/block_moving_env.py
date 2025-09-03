@@ -169,7 +169,7 @@ class DefaultLevelGenerator:
         self.number_of_moving_boxes_max = number_of_moving_boxes_max
 
     def place_agent(self, grid, agent_key):
-        agent_pos = random.randint(agent_key, (2,), 0, self.grid_size)
+        agent_pos = random.randint(agent_key, (2,), 0, grid.shape[0])
         current_cell = grid[agent_pos[0], agent_pos[1]]
 
         # TODO: This is ugly, maybe it can be refactored somehow ?
@@ -231,7 +231,7 @@ class DefaultLevelGenerator:
             steps=0,
             number_of_boxes=number_of_boxes,
             goal=jnp.zeros_like(grid),
-            reward=0,
+            reward=0.0,
             success=0,
             extras={},
         )
@@ -251,7 +251,7 @@ class DefaultLevelGenerator:
             steps=jnp.zeros((1,), dtype=jnp.int8),
             action=jnp.zeros((1,), dtype=jnp.int8),
             goal=jnp.zeros((self.grid_size, self.grid_size), dtype=jnp.int8),
-            reward=jnp.zeros((1,), dtype=jnp.int8),
+            reward=jnp.zeros((1,), dtype=jnp.float32),
             success=jnp.zeros((1,), dtype=jnp.int8),
             done=jnp.zeros((1,), dtype=jnp.int8),
             truncated=jnp.zeros((1,), dtype=jnp.int8),
@@ -393,7 +393,7 @@ class QuarterGenerator(DefaultLevelGenerator):
             steps=0,
             number_of_boxes=number_of_boxes,
             goal=jnp.zeros_like(grid),
-            reward=0,
+            reward=0.0,
             success=0,
             extras={"quarters_allowed": blocks_allowed},
         )
@@ -475,7 +475,7 @@ class BoxPushingEnv:
         # Increment steps
         new_steps = state.steps + 1
 
-        reward = 0
+        reward = 0.0
         done = False
 
         # Use jax.lax.switch instead of if-elif to handle traced arrays
@@ -495,7 +495,7 @@ class BoxPushingEnv:
         new_pos, new_grid, new_agent_has_box = action_result
 
         truncated = new_steps >= self.episode_length
-        reward = self._get_reward(state.grid, new_grid, state.number_of_boxes)
+        reward = self._get_reward(state.grid, new_grid, state.number_of_boxes).astype(jnp.float32)
         success = self._is_goal_reached(new_grid, state.number_of_boxes).astype(jnp.int32)
         if self.terminate_when_success:
             done = self._is_goal_reached(new_grid, state.number_of_boxes)
@@ -653,12 +653,12 @@ class BoxPushingEnv:
                 + jnp.sum(old_grid == GridStatesEnum.AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX)
             )
             diff = boxes_on_targets_new - boxes_on_targets_old
-            return diff
+            return diff.astype(jnp.float32)
         else:
             if self.negative_sparse:
-                return (boxes_on_targets_new == number_of_boxes).astype(jnp.int32) - 1
+                return (boxes_on_targets_new == number_of_boxes).astype(jnp.float32) - 1
             else:
-                return (boxes_on_targets_new == number_of_boxes).astype(jnp.int32)
+                return (boxes_on_targets_new == number_of_boxes).astype(jnp.float32)
 
     def _handle_pickup(self, state: BoxPushingState) -> Tuple[jax.Array, bool]:
         """Handle pickup action."""
@@ -860,8 +860,8 @@ class SymmetryFilter(Wrapper):
     def step(self, state: BoxPushingState, action: int) -> Tuple[BoxPushingState, float, bool, Dict[str, Any]]:
         new_state, reward, done, info = self._env.step(state, action)
         is_truncated = jnp.logical_or(info["truncated"], self.check_symmetry_crossing(state, new_state))
-        
-        new_info = {**info, "truncated":is_truncated}
+
+        new_info = {**info, "truncated": is_truncated}
 
         return new_state, reward, done, new_info
 
@@ -882,8 +882,8 @@ class QuarterFilter(Wrapper):
     def step(self, state: BoxPushingState, action: int) -> Tuple[BoxPushingState, float, bool, Dict[str, Any]]:
         new_state, reward, done, info = self._env.step(state, action)
         is_truncated = jnp.logical_or(info["truncated"], self.check_wrong_quarter_crossing(new_state))
-        
-        new_info = {**info, "truncated":is_truncated}
+
+        new_info = {**info, "truncated": is_truncated}
 
         return new_state, reward, done, new_info
 
@@ -912,9 +912,9 @@ def wrap_for_eval(env):
 if __name__ == "__main__":
     env = BoxPushingEnv(
         grid_size=4,
-        number_of_boxes_max=2,
-        number_of_boxes_min=2,
-        number_of_moving_boxes_max=1,
+        number_of_boxes_max=3,
+        number_of_boxes_min=3,
+        number_of_moving_boxes_max=3,
         level_generator="quarter",
         generator_special=False,
         dense_rewards=True,
