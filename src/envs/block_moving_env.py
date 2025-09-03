@@ -169,7 +169,7 @@ class DefaultLevelGenerator:
         self.number_of_moving_boxes_max = number_of_moving_boxes_max
 
     def place_agent(self, grid, agent_key):
-        agent_pos = random.randint(agent_key, (2,), 0, self.grid_size)
+        agent_pos = random.randint(agent_key, (2,), 0, grid.shape[0])
         current_cell = grid[agent_pos[0], agent_pos[1]]
 
         # TODO: This is ugly, maybe it can be refactored somehow ?
@@ -912,9 +912,9 @@ def wrap_for_eval(env):
 if __name__ == "__main__":
     env = BoxPushingEnv(
         grid_size=4,
-        number_of_boxes_max=2,
-        number_of_boxes_min=2,
-        number_of_moving_boxes_max=1,
+        number_of_boxes_max=3,
+        number_of_boxes_min=3,
+        number_of_moving_boxes_max=3,
         level_generator="quarter",
         generator_special=False,
         dense_rewards=True,
