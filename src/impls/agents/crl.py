@@ -64,7 +64,8 @@ class CRLAgent(flax.struct.PyTreeNode):
             # Move ensemble dimension to the end
             logits = logits.swapaxes(0, 2)
         elif self.config['energy_fn'] == 'cmd1_mrn':
-            g_potential = jnp.mean(psi, axis=-1)  # [E, B]
+           
+            g_potential = jnp.mean(psi, axis=-1)  # [E, B] or [B] depending on ensemble
             
             latent_dim = phi.shape[-1]
             half_dim = latent_dim // 2
@@ -72,19 +73,20 @@ class CRLAgent(flax.struct.PyTreeNode):
             phi_sym, phi_asym = phi[..., :half_dim], phi[..., half_dim:]
             psi_sym, psi_asym = psi[..., :half_dim], psi[..., half_dim:]
             
-            phi_sym_expanded = phi_sym[:, :, None, :]  # [E, B, 1, D/2]
-            psi_sym_expanded = psi_sym[:, None, :, :]  # [E, 1, B, D/2]
-            sym_dist = jnp.linalg.norm(phi_sym_expanded - psi_sym_expanded, axis=-1)  # [E, B, B]
+            # Pairwise MRN distances for contrastive learning
+            phi_sym_exp = phi_sym[:, :, None, :]  # [E, B, 1, D/2]
+            psi_sym_exp = psi_sym[:, None, :, :]  # [E, 1, B, D/2]
+            sym_dist = jnp.linalg.norm(phi_sym_exp - psi_sym_exp, axis=-1)  # [E, B, B]
             
-            def compute_asym_dist(phi_asym_i, psi_asym_j):
-                diff = phi_asym_i[None, :] - psi_asym_j[:, None, :]  # [B, B, D/2]
-                return jax.nn.relu(jnp.max(diff, axis=-1))  # [B, B]
-            
-            asym_dist = jax.vmap(compute_asym_dist)(phi_asym, psi_asym)  # [E, B, B]
+            phi_asym_exp = phi_asym[:, :, None, :]  # [E, B, 1, D/2]
+            psi_asym_exp = psi_asym[:, None, :, :]  # [E, 1, B, D/2]
+            asym_diff = phi_asym_exp - psi_asym_exp  # [E, B, B, D/2]
+            asym_dist = jax.nn.relu(jnp.max(asym_diff, axis=-1))  # [E, B, B]
             
             mrn_distance = sym_dist + asym_dist  # [E, B, B]
             logits = g_potential[:, :, None] - mrn_distance  # [E, B, B]
             logits = logits.swapaxes(0, 2)  # [B, B, E]
+                
         else:
             raise ValueError(f"Unknown energy function: {self.config['energy_fn']}")
         # logits.shape is (B, B, e) with one term for positive pair and (B - 1) terms for negative pairs in each row.
@@ -132,13 +134,16 @@ class CRLAgent(flax.struct.PyTreeNode):
         """Compute the actor loss (AWR or DDPG+BC)."""
         # Maximize log Q if actor_log_q is True (which is default).
         if self.config['actor_log_q']:
-
             def value_transform(x):
                 return jnp.log(jnp.maximum(x, 1e-6))
         else:
 
             def value_transform(x):
-                return x
+                if self.config.get('value_type') == 'mrn':
+                    return -x
+                else:
+                    return x
+              
 
         if self.config['actor_loss'] == 'awr':
             # AWR loss.
@@ -348,7 +353,7 @@ class CRLAgent(flax.struct.PyTreeNode):
                     hidden_dims=config['value_hidden_dims'],
                     latent_dim=config['latent_dim'],
                     layer_norm=config['layer_norm'],
-                    ensemble=True,  
+                    ensemble=True,
                     state_encoder=encoders.get('critic_state'),
                     goal_encoder=encoders.get('critic_goal'),
                     action_dim=action_dim,
@@ -358,7 +363,7 @@ class CRLAgent(flax.struct.PyTreeNode):
                     hidden_dims=config['value_hidden_dims'],
                     latent_dim=config['latent_dim'],
                     layer_norm=config['layer_norm'],
-                    ensemble=True, 
+                    ensemble=True,
                     state_encoder=encoders.get('critic_state'),
                     goal_encoder=encoders.get('critic_goal'),
                 )
