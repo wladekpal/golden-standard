@@ -22,7 +22,7 @@ class CRLAgent(flax.struct.PyTreeNode):
     network: Any
     config: Any = nonpytree_field()
 
-    def contrastive_loss(self, batch, grad_params, module_name='critic'):
+    def contrastive_loss(self, batch, grad_params, module_name='critic', key=None):
         """Compute the contrastive value loss for the Q or V function."""
         batch_size = batch['observations'].shape[0]
 
@@ -31,13 +31,24 @@ class CRLAgent(flax.struct.PyTreeNode):
         else:
             actions = None
 
-        v, phi, psi = self.network.select(module_name)(
-            batch['observations'],
-            batch['value_goals'],
-            actions=actions,
-            info=True,
-            params=grad_params,
-        )
+        # Only pass key parameter for MRN networks
+        if self.config.get('value_type') == 'mrn':
+            v, phi, psi = self.network.select(module_name)(
+                batch['observations'],
+                batch['value_goals'],
+                actions=actions,
+                info=True,
+                params=grad_params,
+                key=key,
+            )
+        else:
+            v, phi, psi = self.network.select(module_name)(
+                batch['observations'],
+                batch['value_goals'],
+                actions=actions,
+                info=True,
+                params=grad_params,
+            )
         if len(phi.shape) == 2:  # Non-ensemble.
             phi = phi[None, ...]
             psi = psi[None, ...]
@@ -52,6 +63,28 @@ class CRLAgent(flax.struct.PyTreeNode):
             logits = -jnp.sum((phi - psi) ** 2, axis=-1)
             # Move ensemble dimension to the end
             logits = logits.swapaxes(0, 2)
+        elif self.config['energy_fn'] == 'cmd1_mrn':
+            g_potential = jnp.mean(psi, axis=-1)  # [E, B]
+            
+            latent_dim = phi.shape[-1]
+            half_dim = latent_dim // 2
+            
+            phi_sym, phi_asym = phi[..., :half_dim], phi[..., half_dim:]
+            psi_sym, psi_asym = psi[..., :half_dim], psi[..., half_dim:]
+            
+            phi_sym_expanded = phi_sym[:, :, None, :]  # [E, B, 1, D/2]
+            psi_sym_expanded = psi_sym[:, None, :, :]  # [E, 1, B, D/2]
+            sym_dist = jnp.linalg.norm(phi_sym_expanded - psi_sym_expanded, axis=-1)  # [E, B, B]
+            
+            def compute_asym_dist(phi_asym_i, psi_asym_j):
+                diff = phi_asym_i[None, :] - psi_asym_j[:, None, :]  # [B, B, D/2]
+                return jax.nn.relu(jnp.max(diff, axis=-1))  # [B, B]
+            
+            asym_dist = jax.vmap(compute_asym_dist)(phi_asym, psi_asym)  # [E, B, B]
+            
+            mrn_distance = sym_dist + asym_dist  # [E, B, B]
+            logits = g_potential[:, :, None] - mrn_distance  # [E, B, B]
+            logits = logits.swapaxes(0, 2)  # [B, B, E]
         else:
             raise ValueError(f"Unknown energy function: {self.config['energy_fn']}")
         # logits.shape is (B, B, e) with one term for positive pair and (B - 1) terms for negative pairs in each row.
@@ -179,12 +212,14 @@ class CRLAgent(flax.struct.PyTreeNode):
         info = {}
         rng = rng if rng is not None else self.rng
 
-        critic_loss, critic_info = self.contrastive_loss(batch, grad_params, 'critic')
+        rng, key1 = jax.random.split(rng)
+        critic_loss, critic_info = self.contrastive_loss(batch, grad_params, 'critic', key1)
         for k, v in critic_info.items():
             info[f'critic/{k}'] = v
 
         if self.config['actor_loss'] == 'awr':
-            value_loss, value_info = self.contrastive_loss(batch, grad_params, 'value')
+            rng, key2 = jax.random.split(rng)
+            value_loss, value_info = self.contrastive_loss(batch, grad_params, 'value', key2)
             for k, v in value_info.items():
                 info[f'value/{k}'] = v
         else:
@@ -305,8 +340,6 @@ class CRLAgent(flax.struct.PyTreeNode):
                 )
                 
         elif value_type == 'mrn':
-            # MRN (Metric Residual Network) value functions
-            # Ensure latent_dim is even for MRN (symmetric/asymmetric split)
             if config['latent_dim'] % 2 != 0:
                 raise ValueError(f"For MRN value type, latent_dim must be even, got {config['latent_dim']}")
                 
@@ -315,7 +348,7 @@ class CRLAgent(flax.struct.PyTreeNode):
                     hidden_dims=config['value_hidden_dims'],
                     latent_dim=config['latent_dim'],
                     layer_norm=config['layer_norm'],
-                    ensemble=True,
+                    ensemble=True,  
                     state_encoder=encoders.get('critic_state'),
                     goal_encoder=encoders.get('critic_goal'),
                     action_dim=action_dim,
@@ -325,7 +358,7 @@ class CRLAgent(flax.struct.PyTreeNode):
                     hidden_dims=config['value_hidden_dims'],
                     latent_dim=config['latent_dim'],
                     layer_norm=config['layer_norm'],
-                    ensemble=True,
+                    ensemble=True, 
                     state_encoder=encoders.get('critic_state'),
                     goal_encoder=encoders.get('critic_goal'),
                 )

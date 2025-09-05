@@ -428,9 +428,8 @@ class GCMRNValue(nn.Module):
         if self.ensemble:
             mlp_module = ensemblize(mlp_module, 2)
         self.phi = mlp_module((*self.hidden_dims, self.latent_dim), activate_final=False, layer_norm=self.layer_norm)
-        self.psi = mlp_module((*self.hidden_dims, self.latent_dim), activate_final=False, layer_norm=self.layer_norm)
 
-    def __call__(self, observations, goals, actions=None, is_phi=False, info=False):
+    def __call__(self, observations, goals, actions=None, is_phi=False, info=False, key=None):
         """Return the MRN value function.
 
         Args:
@@ -439,6 +438,7 @@ class GCMRNValue(nn.Module):
             actions: Actions (optional, for critic function).
             is_phi: Whether the inputs are already encoded by phi.
             info: Whether to additionally return the representations phi_s and phi_g.
+            key: Random key for shuffling actions.
         """
         if is_phi:
             phi_s = observations
@@ -455,12 +455,18 @@ class GCMRNValue(nn.Module):
                 goals = self.encoder(goals)
             
             if actions is not None:
-                phi_inputs = jnp.concatenate([observations, actions], axis=-1)
+                phi_s_inputs = jnp.concatenate([observations, actions], axis=-1)
+                if key is not None:
+                    shuffled_actions = jax.random.permutation(key, actions, axis=0)
+                else:
+                    shuffled_actions = jnp.zeros_like(actions)  # For initialization
+                phi_g_inputs = jnp.concatenate([goals, shuffled_actions], axis=-1)
             else:
-                phi_inputs = observations
+                phi_s_inputs = observations
+                phi_g_inputs = goals
             
-            phi_s = self.phi(phi_inputs)
-            phi_g = self.psi(goals)  
+            phi_s = self.phi(phi_s_inputs)
+            phi_g = self.phi(phi_g_inputs)  
 
         sym_s = phi_s[..., : self.latent_dim // 2]
         sym_g = phi_g[..., : self.latent_dim // 2]
@@ -481,10 +487,10 @@ class GCDiscreteMRNValue(GCMRNValue):
 
     action_dim: int = None
 
-    def __call__(self, observations, goals, actions=None, is_phi=False, info=False):
+    def __call__(self, observations, goals, actions=None, is_phi=False, info=False, key=None):
         if actions is not None:
             actions = jnp.eye(self.action_dim)[actions]
-        return super().__call__(observations, goals, actions, is_phi, info)
+        return super().__call__(observations, goals, actions, is_phi, info, key)
 
 
 class GCIQEValue(nn.Module):

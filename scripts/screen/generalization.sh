@@ -66,7 +66,7 @@ do
         --exp.gamma 0.99 \
         --env.episode_length 100 \
         --exp.seed $seed \
-        --exp.project "test_crl_subgoal" \
+        --exp.project "test_crl_vs_quasi" \
         --exp.epochs 50 \
         --exp.gif_every 10 \
         --agent.alpha ${alpha} \
