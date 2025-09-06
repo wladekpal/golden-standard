@@ -70,20 +70,19 @@ class CRLAgent(flax.struct.PyTreeNode):
             latent_dim = phi.shape[-1]
             half_dim = latent_dim // 2
             
-            phi_sym, phi_asym = phi[..., :half_dim], phi[..., half_dim:]
-            psi_sym, psi_asym = psi[..., :half_dim], psi[..., half_dim:]
-            
-            # Pairwise MRN distances for contrastive learning
-            phi_sym_exp = phi_sym[:, :, None, :]  # [E, B, 1, D/2]
-            psi_sym_exp = psi_sym[:, None, :, :]  # [E, 1, B, D/2]
-            sym_dist = jnp.linalg.norm(phi_sym_exp - psi_sym_exp, axis=-1)  # [E, B, B]
+            phi_asym, phi_sym = phi[..., :half_dim], phi[..., half_dim:]
+            psi_asym, psi_sym = psi[..., :half_dim], psi[..., half_dim:]
             
             phi_asym_exp = phi_asym[:, :, None, :]  # [E, B, 1, D/2]
             psi_asym_exp = psi_asym[:, None, :, :]  # [E, 1, B, D/2]
             asym_diff = phi_asym_exp - psi_asym_exp  # [E, B, B, D/2]
-            asym_dist = jax.nn.relu(jnp.max(asym_diff, axis=-1))  # [E, B, B]
+            asym_dist = jnp.max(jax.nn.relu(asym_diff), axis=-1)  # [E, B, B] - Fixed: max(relu(...))
             
-            mrn_distance = sym_dist + asym_dist  # [E, B, B]
+            phi_sym_exp = phi_sym[:, :, None, :]  # [E, B, 1, D/2]
+            psi_sym_exp = psi_sym[:, None, :, :]  # [E, 1, B, D/2]
+            sym_dist = jnp.linalg.norm(phi_sym_exp - psi_sym_exp, axis=-1)  # [E, B, B]
+            
+            mrn_distance = asym_dist + sym_dist  # [E, B, B]
             logits = g_potential[:, :, None] - mrn_distance  # [E, B, B]
             logits = logits.swapaxes(0, 2)  # [B, B, E]
                 
@@ -139,10 +138,7 @@ class CRLAgent(flax.struct.PyTreeNode):
         else:
 
             def value_transform(x):
-                if self.config.get('value_type') == 'mrn':
-                    return -x
-                else:
-                    return x
+                return x  # Both bilinear and MRN networks now return Q-values directly
               
 
         if self.config['actor_loss'] == 'awr':

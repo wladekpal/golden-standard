@@ -468,13 +468,17 @@ class GCMRNValue(nn.Module):
             phi_s = self.phi(phi_s_inputs)
             phi_g = self.phi(phi_g_inputs)  
 
-        sym_s = phi_s[..., : self.latent_dim // 2]
-        sym_g = phi_g[..., : self.latent_dim // 2]
-        asym_s = phi_s[..., self.latent_dim // 2 :]
-        asym_g = phi_g[..., self.latent_dim // 2 :]
-        squared_dist = ((sym_s - sym_g) ** 2).sum(axis=-1)
-        quasi = jax.nn.relu((asym_s - asym_g).max(axis=-1))
-        v = jnp.sqrt(jnp.maximum(squared_dist, 1e-12)) + quasi
+        asym_s = phi_s[..., : self.latent_dim // 2]      # First half = asymmetric (max)
+        sym_s = phi_s[..., self.latent_dim // 2 :]       # Second half = symmetric (L2)
+        asym_g = phi_g[..., : self.latent_dim // 2]      # First half = asymmetric (max)  
+        sym_g = phi_g[..., self.latent_dim // 2 :]       # Second half = symmetric (L2)
+        
+        max_component = jnp.max(jax.nn.relu(asym_s - asym_g), axis=-1)  
+        l2_component = jnp.linalg.norm(sym_s - sym_g, axis=-1)         
+        
+        g_potential = jnp.mean(phi_g, axis=-1) 
+        v = g_potential - (max_component + l2_component)
+        
 
         if info:
             return v, phi_s, phi_g
