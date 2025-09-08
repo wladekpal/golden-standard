@@ -103,7 +103,7 @@ class BoxPushingConfig:
     episode_length: int = 100
     terminate_when_success: bool = False
     dense_rewards: bool = False
-    negative_sparse: bool = True
+    negative_sparse: bool = False
     level_generator: str = "default"
     generator_special: bool = False
 
