@@ -6,7 +6,7 @@ grid_size=$2
 number_of_boxes_min=1
 number_of_boxes_max=3
 
-exclude_dirs=( ".github" ".ruff_cache" "wandb" ".vscode" ".idea" "__pycache__" ".venv" "experiments" ".git" "notebooks" "runs" "notes")
+exclude_dirs=( ".github" ".ruff_cache" "wandb" ".vscode" ".idea" "__pycache__" ".venv" "experiments" ".git" "notebooks" "runs" "notes" ".pytest")
 
 # Experiment name
 exp_name="test_generalization_sc"
@@ -60,22 +60,23 @@ do
         CUDA_VISIBLE_DEVICES=$GPU_ID uv run --active src/train.py \
         env:box-pushing \
         --agent.agent_name gcdqn \
-        --exp.name dense_a_bit_harder_dqn_${moving_boxes_max}_grid_${grid_size}_range_${number_of_boxes_min}_${number_of_boxes_max}_bs_${batch_size} \
+        --exp.name sc2_dirty_mc_ep_200_dense_a_bit_harder_dqn_${moving_boxes_max}_grid_${grid_size}_range_${number_of_boxes_min}_${number_of_boxes_max}_bs_${batch_size} \
         --env.number_of_boxes_max ${number_of_boxes_max} \
         --env.number_of_boxes_min ${number_of_boxes_min} \
         --env.number_of_moving_boxes_max ${moving_boxes_max} \
         --env.grid_size ${grid_size} \
         --exp.gamma 0.99 \
-        --env.episode_length 100 \
+        --env.episode_length 200 \
         --exp.seed $seed \
-        --exp.project "gciql_env_goals" \
+        --exp.project "mc_dqn" \
         --exp.epochs 50 \
         --exp.gif_every 10 \
         --agent.alpha ${alpha} \
         --exp.max_replay_size 10000 \
         --exp.batch_size ${batch_size} \
         --env.dense_rewards \
-        --exp.use_env_goals \
+        --exp.use_future_and_random_goals \
+        --agent.use_discounted_mc_rewards \
         --exp.eval-different-box-numbers
         done
     done

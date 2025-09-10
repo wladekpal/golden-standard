@@ -6,7 +6,7 @@ grid_size=$2
 number_of_boxes_min=3
 number_of_boxes_max=7
 
-exclude_dirs=( ".github" ".ruff_cache" "wandb" ".vscode" ".idea" "__pycache__" ".venv" "experiments" ".git" "notebooks" "runs" "notes")
+exclude_dirs=( ".github" ".ruff_cache" "wandb" ".vscode" ".idea" "__pycache__" ".venv" "experiments" ".git" "notebooks" "runs" "notes" ".pytest")
 
 # Experiment name
 exp_name="test_generalization_sc"
@@ -53,12 +53,12 @@ moving_boxes_max=5
 
 for seed in 1 2 
 do
-    for target_entropy in -1.79 -1.38
+    for target_entropy in -1.38
     do
         CUDA_VISIBLE_DEVICES=$GPU_ID uv run --active src/train.py \
         env:box-pushing \
         --agent.agent_name crl_search \
-        --exp.name te_${target_entropy}_moving_boxes_${moving_boxes_max}_grid_${grid_size}_range_${number_of_boxes_min}_${number_of_boxes_max}_alpha_0.1 \
+        --exp.name crl_softmax_all_moveable__te_-1.38_moving_boxes_${moving_boxes_max}_grid_${grid_size}_range_${number_of_boxes_min}_${number_of_boxes_max}_alpha_0.1 \
         --env.number_of_boxes_max ${number_of_boxes_max} \
         --env.number_of_boxes_min ${number_of_boxes_min} \
         --env.number_of_moving_boxes_max ${moving_boxes_max} \
@@ -66,7 +66,7 @@ do
         --exp.gamma 0.99 \
         --env.episode_length 100 \
         --exp.seed $seed \
-        --exp.project "entropy_crl_search" \
+        --exp.project "crl_search_sanity" \
         --exp.epochs 50 \
         --exp.gif_every 10 \
         --agent.alpha 0.1  \

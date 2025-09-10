@@ -7,7 +7,7 @@ grid_size=$2
 exclude_dirs=( ".github" ".ruff_cache" "wandb" ".vscode" ".idea" "__pycache__" ".venv" "experiments" ".git" "notebooks" "runs" "notes" ".pytest")
 
 # Experiment name
-exp_name="stitch_iql_td_grid_${grid_size}"
+exp_name="many_boxes_crl_mc_grid_${grid_size}"
 
 # Create the main experiments directory if it doesn't exist
 mkdir -p ./experiments
@@ -50,31 +50,30 @@ echo "Running with grid_size: $grid_size, number_of_boxes_min: $number_of_boxes_
 
 for seed in 1 2
 do
-    for number_of_boxes in 2 3 4
+    for number_of_boxes in 3 1 
     do
-      for filtering in ""
+      for episode_length in 100 200 300
       do
         CUDA_VISIBLE_DEVICES=$GPU_ID uv run --active src/train.py \
         env:box-pushing \
-        --agent.agent_name gciql_search \
-        --exp.name r_0_1_continuing_bootstrap_all_${number_of_boxes}_grid_${grid_size}_ep_len_${episode_length}_filter_${filtering} \
+        --agent.agent_name crl_search \
+        --exp.name crl_softmax_all_moveable__te_-1.38_mc_boxes_${number_of_boxes}_grid_${grid_size}_ep_len_${episode_length} \
         --env.number_of_boxes_max ${number_of_boxes} \
         --env.number_of_boxes_min ${number_of_boxes} \
         --env.number_of_moving_boxes_max ${number_of_boxes} \
         --env.grid_size ${grid_size} \
         --exp.gamma 0.99 \
-        --env.episode_length 100 \
+        --env.episode_length ${episode_length} \
         --exp.seed ${seed} \
-        --exp.project "gciql_continuing" \
+        --exp.project "crl_search_sanity" \
         --exp.epochs 50 \
         --exp.gif_every 10 \
         --agent.alpha 0.1 \
         --agent.expectile 0.5  \
         --exp.max_replay_size 10000 \
         --exp.batch_size 256 \
-        --exp.use_future_and_random_goals \
-        --exp.eval_special \
-        --env.level_generator quarter 
+        --env.dense_rewards \
+        --exp.eval-different-box-numbers
         done
     done
 done

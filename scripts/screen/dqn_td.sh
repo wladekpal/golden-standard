@@ -50,14 +50,14 @@ echo "Running with grid_size: $grid_size, number_of_boxes_min: $number_of_boxes_
 
 for seed in 1 2
 do
-    for number_of_boxes in 3 1 
+    for number_of_boxes in 2 3 4
     do
-      for filtering in "quarter" ""
+      for filtering in "quarter"
       do
         CUDA_VISIBLE_DEVICES=$GPU_ID uv run --active src/train.py \
         env:box-pushing \
         --agent.agent_name gcdqn \
-        --exp.name td_boxes_${number_of_boxes}_grid_${grid_size}_ep_len_${episode_length}_filter_${filtering} \
+        --exp.name big_50_random_50_future_r_0_1_continuing_bootstrap_all_${number_of_boxes}_grid_${grid_size}_ep_len_${episode_length}_filter_${filtering} \
         --env.number_of_boxes_max ${number_of_boxes} \
         --env.number_of_boxes_min ${number_of_boxes} \
         --env.number_of_moving_boxes_max ${number_of_boxes} \
@@ -65,17 +65,16 @@ do
         --exp.gamma 0.99 \
         --env.episode_length 100 \
         --exp.seed ${seed} \
-        --exp.project "dqn_mc_vs_td_stitch" \
+        --exp.project "dqn_continuing" \
         --exp.epochs 50 \
         --exp.gif_every 10 \
         --agent.alpha 0.1 \
         --exp.max_replay_size 10000 \
         --exp.batch_size 256 \
-        --env.dense_rewards \
-        --exp.use_env_goals \
+        --exp.use_future_and_random_goals \
         --exp.eval_special \
         --env.level_generator quarter \
-        --exp.filtering ${filtering}
+        --exp.filtering ${filtering} 
         done
     done
 done

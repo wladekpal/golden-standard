@@ -6,7 +6,7 @@ grid_size=$2
 number_of_boxes_min=3
 number_of_boxes_max=7
 
-exclude_dirs=( ".github" ".ruff_cache" "wandb" ".vscode" ".idea" "__pycache__" ".venv" "experiments" ".git" "notebooks" "runs" "notes")
+exclude_dirs=( ".github" ".ruff_cache" "wandb" ".vscode" ".idea" "__pycache__" ".venv" "experiments" ".git" "notebooks" "runs" "notes" ".pytest")
 
 # Experiment name
 exp_name="test_generalization_sc"
