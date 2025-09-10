@@ -14,7 +14,7 @@ import jax.numpy as jnp
 from jax import random
 
 from impls.agents import create_agent
-from envs.block_moving_env import wrap_for_eval, wrap_for_training, TimeStep, remove_targets
+from envs.block_moving_env import BoxPushingEnv, wrap_for_eval, wrap_for_training, TimeStep, remove_targets
 from config import ROOT_DIR
 from impls.utils.checkpoints import save_agent
 from utils import log_gif, sample_actions_critic
@@ -57,7 +57,7 @@ def collect_data(agent, key, env, num_envs, episode_length, use_targets=False, c
             action=actions,
             goal=state.goal,
             reward=reward,
-            success=state.success,
+            success=new_state.success,
             done=done,
             truncated=info["truncated"],
             extras=state.extras,
@@ -112,21 +112,30 @@ def create_batch(
         future_state = future_state.replace(grid=remove_targets(future_state.grid))
 
     if use_env_goals:
-        value_goals = state.goal.reshape(state.goal.shape[0], -1)
-        actor_goals = state.goal.reshape(state.goal.shape[0], -1)
+        # value_goals = state.goal
+        # actor_goals = state.goal
+        # value_goals = jnp.roll(state.goal, shift=1, axis=(0))
+        # actor_goals = jnp.roll(state.goal, shift=1, axis=(0))
+        value_goals = jnp.roll(state.grid, shift=1, axis=(0))
+        actor_goals = jnp.roll(state.grid, shift=1, axis=(0))
     else:
-        value_goals = future_state.grid.reshape(future_state.grid.shape[0], -1)
-        actor_goals = future_state.grid.reshape(future_state.grid.shape[0], -1)
+        value_goals = future_state.grid
+        actor_goals = future_state.grid
+
+    # TODO: this should be use only with dense reward/relabeling
+    reward = jax.vmap(BoxPushingEnv.get_reward)(state.grid, next_state.grid, value_goals)
 
     # Create valid batch
     batch = {
         "observations": state.grid.reshape(state.grid.shape[0], -1),
         "next_observations": next_state.grid.reshape(next_state.grid.shape[0], -1),
         "actions": actions.squeeze(),
-        "rewards": state.reward.reshape(state.reward.shape[0], -1).squeeze(),
-        "masks": 1.0 - state.done.reshape(state.done.shape[0], -1).squeeze(),
-        "value_goals": value_goals,
-        "actor_goals": actor_goals,
+        "rewards": reward.reshape(reward.shape[0], -1).squeeze(),
+        # "rewards": state.reward.reshape(state.reward.shape[0], -1).squeeze(),
+        # "masks": 1.0 - state.done.reshape(state.done.shape[0], -1).squeeze(),
+        "masks": 1.0 - reward.reshape(reward.shape[0], -1).squeeze(),  # consider done if reward is 1
+        "value_goals": value_goals.reshape(value_goals.shape[0], -1),
+        "actor_goals": actor_goals.reshape(actor_goals.shape[0], -1),
     }
     return batch
 
@@ -150,7 +159,7 @@ def evaluate_agent_in_specific_env(agent, key, jitted_create_batch, config, name
         use_targets=config.exp.use_targets,
         critic_temp=critic_temp,
     )
-    timesteps = jax.tree_util.tree_map(lambda x: x.swapaxes(1, 0), timesteps)
+    timesteps = jax.tree_util.tree_map(lambda x: x.swapaxes(1, 0), timesteps)  # Returns N_envs x episode_length x ...
 
     valid_batch = jitted_create_batch(timesteps, batch_key)
 
@@ -159,13 +168,18 @@ def evaluate_agent_in_specific_env(agent, key, jitted_create_batch, config, name
 
     # Compile evaluation info
     # Only consider episodes that are done
-    truncated_mask = timesteps.truncated
+    # truncated_mask = timesteps.truncated
+    done_or_trunc = timesteps.done | timesteps.truncated  # bool, (N_envs, T)
+    # first-occurrence mask: True at the first time (per row) where done_or_trunc is True
+    truncated_mask = (jnp.cumsum(done_or_trunc.astype(jnp.int32), axis=1) == 1) & done_or_trunc
+
     eval_info_tmp = {
         f"{prefix}/mean_reward": timesteps.reward[truncated_mask].mean(),
         f"{prefix}/min_reward": timesteps.reward[truncated_mask].min(),
         f"{prefix}/max_reward": timesteps.reward[truncated_mask].max(),
         f"{prefix}/mean_success": timesteps.success[truncated_mask].mean(),
         f"{prefix}/mean_boxes_on_target": info["boxes_on_target"].mean(),
+        f"{prefix}/mean_ep_len": timesteps.steps[truncated_mask].mean(),
         f"{prefix}/total_loss": loss,
     }
     if config.agent.agent_name == "crl" or config.agent.agent_name == "crl_search":
