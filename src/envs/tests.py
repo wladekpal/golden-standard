@@ -119,6 +119,7 @@ def test_create_solved_state_transforms_targets_and_boxes_and_agent_cell1():
         goal=jnp.zeros_like(grid),
         reward=jnp.array(0),
         success=jnp.array(0),
+        extras={},
     )
 
     solved = create_solved_state(state)
@@ -161,6 +162,7 @@ def test_create_solved_state_transforms_targets_and_boxes_and_agent_cell2():
         goal=jnp.zeros_like(grid),
         reward=jnp.array(0),
         success=jnp.array(0),
+        extras={},
     )
 
     solved = create_solved_state(state)
@@ -203,6 +205,7 @@ def test_create_solved_state_transforms_targets_and_boxes_and_agent_cell3():
         goal=jnp.zeros_like(grid),
         reward=jnp.array(0),
         success=jnp.array(0),
+        extras={},
     )
 
     solved = create_solved_state(state)
@@ -245,6 +248,7 @@ def test_create_solved_state_transforms_targets_and_boxes_and_agent_cell4():
         goal=jnp.zeros_like(grid),
         reward=jnp.array(0),
         success=jnp.array(0),
+        extras={},
     )
 
     solved = create_solved_state(state)
