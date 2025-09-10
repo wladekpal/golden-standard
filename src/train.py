@@ -91,7 +91,13 @@ def get_single_pair_from_every_env(state, next_state, future_state, goal_index, 
 
 
 def create_batch(
-    timesteps, key, gamma, use_targets, use_env_goals, jitted_flatten_batch, use_discounted_mc_rewards=False
+    timesteps,
+    key,
+    gamma,
+    use_targets,
+    use_future_and_random_goals,
+    jitted_flatten_batch,
+    use_discounted_mc_rewards=False,
 ):
     batch_key, sampling_key = jax.random.split(key, 2)
     batch_keys = jax.random.split(batch_key, timesteps.grid.shape[0])
@@ -111,13 +117,21 @@ def create_batch(
         next_state = next_state.replace(grid=remove_targets(next_state.grid))
         future_state = future_state.replace(grid=remove_targets(future_state.grid))
 
-    if use_env_goals:
-        # value_goals = state.goal
-        # actor_goals = state.goal
-        # value_goals = jnp.roll(state.goal, shift=1, axis=(0))
-        # actor_goals = jnp.roll(state.goal, shift=1, axis=(0))
-        value_goals = jnp.roll(state.grid, shift=1, axis=(0))
-        actor_goals = jnp.roll(state.grid, shift=1, axis=(0))
+    if use_future_and_random_goals:
+        value_goals = jnp.concatenate(
+            [
+                jnp.roll(state.grid, shift=1, axis=(0))[: state.grid.shape[0] // 2],
+                future_state.grid[state.grid.shape[0] // 2 :],
+            ],
+            axis=0,
+        )
+        actor_goals = jnp.concatenate(
+            [
+                jnp.roll(state.grid, shift=1, axis=(0))[: state.grid.shape[0] // 2],
+                future_state.grid[state.grid.shape[0] // 2 :],
+            ],
+            axis=0,
+        )
     else:
         value_goals = future_state.grid
         actor_goals = future_state.grid
@@ -131,9 +145,7 @@ def create_batch(
         "next_observations": next_state.grid.reshape(next_state.grid.shape[0], -1),
         "actions": actions.squeeze(),
         "rewards": reward.reshape(reward.shape[0], -1).squeeze(),
-        # "rewards": state.reward.reshape(state.reward.shape[0], -1).squeeze(),
-        # "masks": 1.0 - state.done.reshape(state.done.shape[0], -1).squeeze(),
-        "masks": 1.0 - reward.reshape(reward.shape[0], -1).squeeze(),  # consider done if reward is 1
+        "masks": jnp.ones_like(reward.reshape(reward.shape[0], -1).squeeze()),  # Bootstrap always
         "value_goals": value_goals.reshape(value_goals.shape[0], -1),
         "actor_goals": actor_goals.reshape(actor_goals.shape[0], -1),
     }
@@ -142,7 +154,7 @@ def create_batch(
 
 def evaluate_agent_in_specific_env(agent, key, jitted_create_batch, config, name, create_gif=False, critic_temp=None):
     env_eval = create_env(config.env)
-    env_eval = wrap_for_eval(env_eval)
+    env_eval = wrap_for_eval(env_eval)  # Note: Wrap for eval is not using any quarter filtering
     env_eval.step = jax.jit(jax.vmap(env_eval.step))
     env_eval.reset = jax.jit(jax.vmap(env_eval.reset))
     prefix = f"eval{name}"
@@ -294,7 +306,7 @@ def train(config: Config):
         create_batch,
         gamma=config.exp.gamma,
         use_targets=config.exp.use_targets,
-        use_env_goals=config.exp.use_env_goals,
+        use_future_and_random_goals=config.exp.use_future_and_random_goals,
         jitted_flatten_batch=jitted_flatten_batch,
         use_discounted_mc_rewards=config.agent.use_discounted_mc_rewards,
     )
