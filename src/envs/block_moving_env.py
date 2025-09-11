@@ -864,35 +864,16 @@ class AutoResetWrapper(Wrapper):
     def __init__(self, env: BoxPushingEnv):
         super().__init__(env)
 
-    def reset_function(self, key):
-        state, info = self._env.reset(key)
-        extras_new = {**state.extras, "reset": jnp.bool_(False)}
-        state = state.replace(extras=extras_new)
-        return state, info
-
-    def reset(self, key):
-        state, info = self.reset_function(key)
-        return state, info
-
     def step(self, state: BoxPushingState, action: int) -> Tuple[BoxPushingState, float, bool, Dict[str, Any]]:
         state, reward, done, info = self._env.step(state, action)
         key_new, _ = jax.random.split(state.key, 2)
 
         def reset_fn(key):
-            reset_state, reset_info = self.reset_function(key)
-            return reset_state, jnp.array(0.0).astype(jnp.float32), False, reset_info
+            reset_state, reset_info = self._env.reset(key)
+            return reset_state
 
-        state, reward, done, info = jax.lax.cond(
-            state.extras["reset"], lambda: reset_fn(key_new), lambda: (state, reward, done, info)
-        )
-        reset = jnp.logical_or(info["truncated"], done)
-        extras_new = {**state.extras, "reset": reset}
-        state = state.replace(extras=extras_new)
+        state = jax.lax.cond(jnp.logical_or(info["truncated"], done), lambda: reset_fn(key_new), lambda: state)
         return state, reward, done, info
-
-    def get_dummy_timestep(self, key):
-        default_dummy_timestep = super().get_dummy_timestep(key)
-        return default_dummy_timestep.replace(extras={**default_dummy_timestep.extras, "reset": jnp.bool_(False)})
 
 
 class SymmetryFilter(Wrapper):
