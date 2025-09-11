@@ -134,6 +134,7 @@ class BoxPushingConfig:
     negative_sparse: bool = False
     level_generator: str = "default"
     generator_special: bool = False
+    quarter_size: int | None = None
 
 
 def calculate_number_of_boxes(grid: jax.Array):
@@ -443,6 +444,138 @@ class QuarterGenerator(DefaultLevelGenerator):
         return default_dummy_timestep.replace(extras={"quarters_allowed": jnp.zeros((4,), dtype=jnp.int8)})
 
 
+class VariableQuarterGenerator(DefaultLevelGenerator):
+    def __init__(
+        self,
+        grid_size,
+        number_of_boxes_min,
+        number_of_boxes_max,
+        number_of_moving_boxes_max,
+        quarter_size,
+        special=False,
+    ):
+        # This is mostly for convenience, without it there would have to be a lot of if statements
+
+        assert number_of_boxes_max <= quarter_size * quarter_size
+        assert number_of_boxes_max == number_of_boxes_max, "In this generator we assume all boxes always move"
+        assert number_of_boxes_min == number_of_boxes_max, (
+            "In this generator we assume there is only one possible number of boxes"
+        )
+        self.special = special
+        self.quarter_size = quarter_size
+
+        super().__init__(grid_size, number_of_boxes_min, number_of_boxes_max, number_of_moving_boxes_max)
+
+    def generate_box_quarter(self, number_of_boxes, key):
+        quarter = jnp.full(self.quarter_size * self.quarter_size, GridStatesEnum.EMPTY)
+        idxs = jnp.arange(self.quarter_size * self.quarter_size)
+
+        is_box = idxs < number_of_boxes
+
+        quarter = jnp.piecewise(idxs, [is_box], [GridStatesEnum.BOX, GridStatesEnum.EMPTY]).astype(jnp.int8)
+
+        quarter = jax.random.permutation(key, quarter)
+        quarter = quarter.reshape((self.quarter_size, self.quarter_size))
+
+        return quarter
+
+    def place_targets_in_slice(self, grid, number_of_targets, key):
+        available_indices = jnp.nonzero(grid == GridStatesEnum.EMPTY, size=grid.shape[0] * grid.shape[1], fill_value=-1)
+        available_indices = jnp.stack(available_indices, axis=1)
+        available_indices = jax.random.permutation(key, available_indices)
+
+        # This is ugly, but I don't see how to achieve the same without for loop
+        def f(carry, index):
+            _, current_num_targets = carry
+
+            new_carry = jax.lax.cond(
+                jnp.logical_and(current_num_targets > 0, index[0] >= 0),
+                lambda _grid, _curr_num_targets: (
+                    _grid.at[index[0], index[1]].set(GridStatesEnum.TARGET),
+                    _curr_num_targets - 1,
+                ),
+                lambda x, y: (x, y),
+                *carry,
+            )
+            return new_carry, None
+
+        final_carry, _ = jax.lax.scan(f, (grid, number_of_targets), xs=available_indices)
+
+        return final_carry[0]
+
+    def generate(self, key):
+        box_quarter_key, target_quarter_key, permutation_3_key, number_of_boxes_key, agent_key, state_key = (
+            jax.random.split(key, 6)
+        )
+
+        number_of_boxes = self.number_of_boxes_max
+
+        if self.special:
+            corners = jnp.array(
+                [
+                    [0, 3],
+                    [3, 0],
+                    [1, 2],
+                    [2, 1],
+                ]
+            )
+        else:
+            corners = jnp.array(
+                [
+                    [0, 1],
+                    [1, 0],
+                    [0, 2],
+                    [2, 0],
+                    [1, 3],
+                    [3, 1],
+                    [2, 3],
+                    [3, 2],
+                ]
+            )
+
+        corners = jax.random.choice(permutation_3_key, corners)
+        corners_left_upper = jnp.array(
+            [
+                [0, 0],
+                [0, self.grid_size - self.quarter_size],
+                [self.grid_size - self.quarter_size, 0],
+                [self.grid_size - self.quarter_size, self.grid_size - self.quarter_size],
+            ]
+        )
+
+        box_corner = corners_left_upper[corners[0]]
+        target_corner = corners_left_upper[corners[1]]
+
+        grid = jnp.full(self.grid_size * self.grid_size, GridStatesEnum.EMPTY).reshape(self.grid_size, self.grid_size)
+        box_slice = self.generate_box_quarter(self.number_of_boxes_max, box_quarter_key)
+
+        grid = jax.lax.dynamic_update_slice(grid, box_slice, box_corner)
+        target_slice = jax.lax.dynamic_slice(grid, target_corner, (self.quarter_size, self.quarter_size))
+        target_slice = self.place_targets_in_slice(target_slice, self.number_of_boxes_max, target_quarter_key)
+
+        grid = jax.lax.dynamic_update_slice(grid, target_slice, target_corner)
+
+        agent_pos, grid = self.place_agent(grid, agent_key)
+
+        state = BoxPushingState(
+            key=state_key,
+            grid=grid,
+            agent_pos=agent_pos,
+            agent_has_box=False,
+            steps=0,
+            number_of_boxes=number_of_boxes,
+            goal=jnp.zeros_like(grid),
+            reward=0.0,
+            success=0,
+            extras={},
+        )
+
+        goal = create_solved_state(state)
+        state = state.replace(goal=goal.grid)
+
+        return state
+
+
 class BoxPushingEnv:
     """JAX-based box pushing environment."""
 
@@ -459,6 +592,7 @@ class BoxPushingEnv:
         dense_rewards: bool = False,
         negative_sparse: bool = True,
         level_generator: str = "default",
+        quarter_size: int | None = None,
         **kwargs,
     ):
         logging.info(
@@ -473,6 +607,7 @@ class BoxPushingEnv:
         self.terminate_when_success = terminate_when_success
         self.dense_rewards = dense_rewards
         self.negative_sparse = negative_sparse
+        self.quarter_size = quarter_size or self.grid_size // 2
 
         if level_generator == "default":
             self.level_generator = DefaultLevelGenerator(
@@ -484,6 +619,15 @@ class BoxPushingEnv:
                 number_of_boxes_min,
                 number_of_boxes_max,
                 number_of_moving_boxes_max,
+                special=kwargs["generator_special"],
+            )
+        elif level_generator == "variable":
+            self.level_generator = VariableQuarterGenerator(
+                grid_size,
+                number_of_boxes_min,
+                number_of_boxes_max,
+                number_of_moving_boxes_max,
+                self.quarter_size,
                 special=kwargs["generator_special"],
             )
         else:
@@ -969,15 +1113,16 @@ def wrap_for_eval(env):
 
 if __name__ == "__main__":
     env = BoxPushingEnv(
-        grid_size=4,
-        number_of_boxes_max=1,
-        number_of_boxes_min=1,
-        number_of_moving_boxes_max=1,
-        level_generator="quarter",
-        generator_special=False,
+        grid_size=6,
+        number_of_boxes_max=4,
+        number_of_boxes_min=4,
+        number_of_moving_boxes_max=4,
+        level_generator="variable",
+        generator_special=True,
         dense_rewards=False,
         terminate_when_success=True,
         episode_length=10,
+        quarter_size=2,
     )
     env = AutoResetWrapper(env)
     key = jax.random.PRNGKey(0)
