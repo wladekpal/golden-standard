@@ -31,7 +31,7 @@ class ExpConfig:
     # Miscellaneous
     use_targets: bool = False
     gamma: float = 0.99
-    use_env_goals: bool = False  # noqa: E501 Whether to use environment goals, default - geometric sampling of future states
+    use_future_and_random_goals: bool = False  # noqa: E501 Whether to use environment goals, default - geometric sampling of future states
 
     # Evaluation settings
     eval_different_box_numbers: bool = False
@@ -46,9 +46,6 @@ class ExpConfig:
     num_gifs: int = 1
     save_dir: str | None = None
     gif_every: int = 10
-
-    # Rewards
-    use_discounted_mc_rewards: bool = False
 
 
 @dataclass

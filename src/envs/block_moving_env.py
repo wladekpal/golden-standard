@@ -48,33 +48,68 @@ class GridStatesEnum:
     BOX_ON_TARGET = jnp.int8(10)  # Box is on target
     AGENT_ON_BOX_CARRYING_BOX = jnp.int8(11)  # Agent is on box carrying a box
 
-    # TODO: make this error proof, so the mapping should be done with dict (no there is implicit assumption that there are consecutive ints from 0 on the left side)
-    @staticmethod
-    @jax.jit
-    def remove_targets(grid_state: jax.Array) -> jax.Array:
-        """Project grid states with targets to states without targets."""
-        # Create a mapping array for vectorized lookup
-        # Map each state to its corresponding no-target state
-        mapping_array = jnp.array(
-            [
-                GridStatesEnum.EMPTY,  # 0 EMPTY -> EMPTY 0
-                GridStatesEnum.BOX,  # 1 BOX -> BOX 1
-                GridStatesEnum.EMPTY,  # 2 TARGET -> EMPTY 0
-                GridStatesEnum.AGENT,  # 3 AGENT -> AGENT 3
-                GridStatesEnum.AGENT_CARRYING_BOX,  # 4 AGENT_CARRYING_BOX -> AGENT_CARRYING_BOX 4
-                GridStatesEnum.AGENT_ON_BOX,  # 5 AGENT_ON_BOX -> AGENT_ON_BOX 5
-                GridStatesEnum.AGENT,  # 6 AGENT_ON_TARGET -> AGENT 3
-                GridStatesEnum.AGENT_CARRYING_BOX,  # 7 AGENT_ON_TARGET_CARRYING_BOX -> AGENT_CARRYING_BOX 4
-                GridStatesEnum.AGENT_ON_BOX,  # 8 AGENT_ON_TARGET_WITH_BOX -> AGENT_ON_BOX 5
-                GridStatesEnum.AGENT_ON_BOX_CARRYING_BOX,  # 9 AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX -> AGENT_ON_BOX_CARRYING_BOX
-                GridStatesEnum.BOX,  # 10 BOX_ON_TARGET -> BOX
-                GridStatesEnum.AGENT_ON_BOX_CARRYING_BOX,  # 11 AGENT_ON_BOX_CARRYING_BOX -> AGENT_ON_BOX_CARRYING_BOX
-            ],
-            dtype=jnp.int8,
-        )
 
-        # Apply the mapping
-        return mapping_array[grid_state]
+REMOVE_TARGETS_DICT = {
+    int(GridStatesEnum.EMPTY): int(GridStatesEnum.EMPTY),
+    int(GridStatesEnum.BOX): int(GridStatesEnum.BOX),
+    int(GridStatesEnum.TARGET): int(GridStatesEnum.EMPTY),  # map TARGET -> EMPTY
+    int(GridStatesEnum.AGENT): int(GridStatesEnum.AGENT),
+    int(GridStatesEnum.AGENT_CARRYING_BOX): int(GridStatesEnum.AGENT_CARRYING_BOX),
+    int(GridStatesEnum.AGENT_ON_BOX): int(GridStatesEnum.AGENT_ON_BOX),
+    int(GridStatesEnum.AGENT_ON_TARGET): int(GridStatesEnum.AGENT),  # example
+    int(GridStatesEnum.AGENT_ON_TARGET_CARRYING_BOX): int(GridStatesEnum.AGENT_CARRYING_BOX),
+    int(GridStatesEnum.AGENT_ON_TARGET_WITH_BOX): int(GridStatesEnum.AGENT_ON_BOX),
+    int(GridStatesEnum.AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX): int(GridStatesEnum.AGENT_ON_BOX_CARRYING_BOX),
+    int(GridStatesEnum.BOX_ON_TARGET): int(GridStatesEnum.BOX),
+    int(GridStatesEnum.AGENT_ON_BOX_CARRYING_BOX): int(GridStatesEnum.AGENT_ON_BOX_CARRYING_BOX),
+}
+
+REMOVE_AGENT_DICT = {
+    int(GridStatesEnum.EMPTY): int(GridStatesEnum.EMPTY),
+    int(GridStatesEnum.BOX): int(GridStatesEnum.BOX),
+    int(GridStatesEnum.TARGET): int(GridStatesEnum.TARGET),
+    int(GridStatesEnum.AGENT): int(GridStatesEnum.EMPTY),  # agent standing on empty -> empty
+    int(GridStatesEnum.AGENT_CARRYING_BOX): int(GridStatesEnum.EMPTY),  # carried box not on grid -> empty
+    int(GridStatesEnum.AGENT_ON_BOX): int(GridStatesEnum.BOX),  # agent on box -> box remains
+    int(GridStatesEnum.AGENT_ON_TARGET): int(GridStatesEnum.TARGET),  # agent on target -> target remains
+    int(GridStatesEnum.AGENT_ON_TARGET_CARRYING_BOX): int(GridStatesEnum.TARGET),  # carrying box not on grid -> target
+    int(GridStatesEnum.AGENT_ON_TARGET_WITH_BOX): int(GridStatesEnum.BOX_ON_TARGET),  # box on target stays
+    int(GridStatesEnum.AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX): int(GridStatesEnum.BOX_ON_TARGET),  # noqa: E501 same: box on target stays
+    int(GridStatesEnum.BOX_ON_TARGET): int(GridStatesEnum.BOX_ON_TARGET),
+    int(GridStatesEnum.AGENT_ON_BOX_CARRYING_BOX): int(GridStatesEnum.BOX),  # noqa: E501 agent standing on a box (and also carrying one) -> box stays
+}
+
+ADD_AGENT_DICT = {
+    int(GridStatesEnum.EMPTY): int(GridStatesEnum.AGENT),  # empty -> agent
+    int(GridStatesEnum.BOX): int(GridStatesEnum.AGENT_ON_BOX),  # box -> agent on box
+    int(GridStatesEnum.TARGET): int(GridStatesEnum.AGENT_ON_TARGET),  # target -> agent on target
+    int(GridStatesEnum.BOX_ON_TARGET): int(GridStatesEnum.AGENT_ON_TARGET_WITH_BOX),  # noqa: E501 box on target -> agent on that box+target
+}
+
+EMPTY_VAL = int(GridStatesEnum.EMPTY)
+max_key = max(REMOVE_AGENT_DICT.keys())
+_REMOVE_AGENT_ARRAY = jnp.array([REMOVE_AGENT_DICT.get(i, EMPTY_VAL) for i in range(max_key + 1)], dtype=jnp.int8)
+_ADD_AGENT_ARRAY = jnp.array([ADD_AGENT_DICT.get(i, EMPTY_VAL) for i in range(max_key + 1)], dtype=jnp.int8)
+
+
+PICK_UP_DICT = {
+    int(GridStatesEnum.AGENT_ON_BOX): int(GridStatesEnum.AGENT_CARRYING_BOX),
+    int(GridStatesEnum.AGENT_ON_TARGET_WITH_BOX): int(GridStatesEnum.AGENT_ON_TARGET_CARRYING_BOX),
+}
+
+PUT_DOWN_DICT = {v: k for k, v in PICK_UP_DICT.items()}
+
+EMPTY_VAL = int(GridStatesEnum.EMPTY)
+max_key = max(REMOVE_TARGETS_DICT.keys())
+# array size must be max_key + 1 so that numeric enum values are usable as indices
+_MAPPING_ARRAY = jnp.array([REMOVE_TARGETS_DICT.get(i, EMPTY_VAL) for i in range(max_key + 1)], dtype=jnp.int8)
+
+
+@jax.jit
+def remove_targets(grid_state: jax.Array) -> jax.Array:
+    """Project grid states with targets to states without targets using a pre-built mapping array."""
+    # ensure integer indexing dtype
+    return _MAPPING_ARRAY[grid_state.astype(jnp.int8)]
 
 
 ACTIONS = {
@@ -96,7 +131,7 @@ class BoxPushingConfig:
     episode_length: int = 100
     terminate_when_success: bool = False
     dense_rewards: bool = False
-    negative_sparse: bool = True
+    negative_sparse: bool = False
     level_generator: str = "default"
     generator_special: bool = False
 
@@ -495,10 +530,11 @@ class BoxPushingEnv:
         new_pos, new_grid, new_agent_has_box = action_result
 
         truncated = new_steps >= self.episode_length
-        reward = self._get_reward(state.grid, new_grid, state.number_of_boxes).astype(jnp.float32)
-        success = self._is_goal_reached(new_grid, state.number_of_boxes).astype(jnp.int32)
+        # Checking if agent reaches the goal in next state (new_grid), if yes then success = 1
+        reward = BoxPushingEnv.get_reward(state.grid, new_grid, state.goal).astype(jnp.float32)
+        success = reward.astype(jnp.int32)
         if self.terminate_when_success:
-            done = self._is_goal_reached(new_grid, state.number_of_boxes)
+            done = success.astype(bool)
 
         new_state = BoxPushingState(
             key=state.key,
@@ -632,68 +668,67 @@ class BoxPushingEnv:
 
         return new_pos, new_grid, new_agent_has_box
 
-    def _is_goal_reached(self, grid: jax.Array, number_of_boxes: int) -> bool:
-        """Check if all boxes are in target cells."""
-        return (
-            jnp.sum(grid == GridStatesEnum.BOX_ON_TARGET) + jnp.sum(grid == GridStatesEnum.AGENT_ON_TARGET_WITH_BOX)
-            == number_of_boxes
-        )
-
-    def _get_reward(self, old_grid: jax.Array, new_grid: jax.Array, number_of_boxes: int) -> float:
-        """Get reward for the current state."""
-        boxes_on_targets_new = (
-            jnp.sum(new_grid == GridStatesEnum.BOX_ON_TARGET)
-            + jnp.sum(new_grid == GridStatesEnum.AGENT_ON_TARGET_WITH_BOX)
-            + jnp.sum(new_grid == GridStatesEnum.AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX)
-        )
-        if self.dense_rewards:
-            boxes_on_targets_old = (
-                jnp.sum(old_grid == GridStatesEnum.BOX_ON_TARGET)
-                + jnp.sum(old_grid == GridStatesEnum.AGENT_ON_TARGET_WITH_BOX)
-                + jnp.sum(old_grid == GridStatesEnum.AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX)
-            )
-            diff = boxes_on_targets_new - boxes_on_targets_old
-            return diff.astype(jnp.float32)
-        else:
-            if self.negative_sparse:
-                return (boxes_on_targets_new == number_of_boxes).astype(jnp.float32) - 1
-            else:
-                return (boxes_on_targets_new == number_of_boxes).astype(jnp.float32)
+    @staticmethod
+    @jax.jit
+    def get_reward(
+        old_grid: jax.Array,
+        new_grid: jax.Array,
+        goal_grid: jax.Array,
+    ) -> jax.Array:
+        solved = jnp.all(_REMOVE_AGENT_ARRAY[new_grid] == _REMOVE_AGENT_ARRAY[goal_grid]).astype(jnp.float32)
+        return solved
 
     def _handle_pickup(self, state: BoxPushingState) -> Tuple[jax.Array, bool]:
-        """Handle pickup action."""
+        """Handle pickup action using PICK_UP_DICT mapping (JAX-friendly)."""
 
         row, col = state.agent_pos[0], state.agent_pos[1]
         current_cell = state.grid[row, col]
 
+        # prepare jax arrays of keys and values from the mapping
+        keys = jnp.array(list(PICK_UP_DICT.keys()), dtype=state.grid.dtype)
+        vals = jnp.array(list(PICK_UP_DICT.values()), dtype=state.grid.dtype)
+
+        # boolean mask of which key (if any) matches current_cell
+        matches = keys == current_cell
+        any_match = jnp.any(matches)
+
         def pickup_valid():
-            new_grid = state.grid.at[row, col].set(GridStatesEnum.AGENT_CARRYING_BOX)
+            # index of the (first) matching key
+            idx = jnp.argmax(matches)
+            new_state_val = vals[idx]
+            new_grid = state.grid.at[row, col].set(new_state_val)
             return new_grid, True
 
         def pickup_invalid():
             return state.grid, state.agent_has_box
 
-        new_grid, new_agent_has_box = jax.lax.cond(
-            current_cell == GridStatesEnum.AGENT_ON_BOX, pickup_valid, pickup_invalid
-        )
+        new_grid, new_agent_has_box = jax.lax.cond(any_match, pickup_valid, pickup_invalid)
         return new_grid, new_agent_has_box
 
     def _handle_putdown(self, state: BoxPushingState) -> Tuple[jax.Array, bool]:
-        """Handle putdown action."""
+        """Handle putdown action using PUT_DOWN_DICT mapping (JAX-friendly)."""
 
         row, col = state.agent_pos[0], state.agent_pos[1]
         current_cell = state.grid[row, col]
 
+        # prepare jax arrays of keys and values from the mapping
+        keys = jnp.array(list(PUT_DOWN_DICT.keys()), dtype=state.grid.dtype)
+        vals = jnp.array(list(PUT_DOWN_DICT.values()), dtype=state.grid.dtype)
+
+        # boolean mask of which key (if any) matches current_cell
+        matches = keys == current_cell
+        any_match = jnp.any(matches)
+
         def putdown_valid():
-            new_grid = state.grid.at[row, col].set(GridStatesEnum.AGENT_ON_TARGET_WITH_BOX)
+            idx = jnp.argmax(matches)
+            new_state_val = vals[idx]
+            new_grid = state.grid.at[row, col].set(new_state_val)
             return new_grid, False
 
         def putdown_invalid():
             return state.grid, state.agent_has_box
 
-        new_grid, new_agent_has_box = jax.lax.cond(
-            current_cell == GridStatesEnum.AGENT_ON_TARGET_CARRYING_BOX, putdown_valid, putdown_invalid
-        )
+        new_grid, new_agent_has_box = jax.lax.cond(any_match, putdown_valid, putdown_invalid)
         return new_grid, new_agent_has_box
 
     def play_game(self, key: jax.Array):
@@ -702,6 +737,7 @@ class BoxPushingEnv:
         # Initialize the environment
         state, _ = self.reset(key)
         done = False
+        info = {}
         total_reward = 0
         reward = 0
 
@@ -713,7 +749,10 @@ class BoxPushingEnv:
         while True:
             # Display current state
             self._display_state(state)
+            no_targets = remove_targets(state.grid)
+            print(no_targets)
             print(f"Steps: {state.steps}, Return: {total_reward}, Reward: {reward}")
+            print(f"Info: {info}, Done: {done}")
 
             # Get user input
             action = None
@@ -825,16 +864,35 @@ class AutoResetWrapper(Wrapper):
     def __init__(self, env: BoxPushingEnv):
         super().__init__(env)
 
+    def reset_function(self, key):
+        state, info = self._env.reset(key)
+        extras_new = {**state.extras, "reset": jnp.bool_(False)}
+        state = state.replace(extras=extras_new)
+        return state, info
+
+    def reset(self, key):
+        state, info = self.reset_function(key)
+        return state, info
+
     def step(self, state: BoxPushingState, action: int) -> Tuple[BoxPushingState, float, bool, Dict[str, Any]]:
         state, reward, done, info = self._env.step(state, action)
         key_new, _ = jax.random.split(state.key, 2)
 
         def reset_fn(key):
-            reset_state, reset_info = self._env.reset(key)
-            return reset_state
+            reset_state, reset_info = self.reset_function(key)
+            return reset_state, jnp.array(0.0).astype(jnp.float32), False, reset_info
 
-        state = jax.lax.cond(jnp.logical_or(info["truncated"], done), lambda: reset_fn(key_new), lambda: state)
+        state, reward, done, info = jax.lax.cond(
+            state.extras["reset"], lambda: reset_fn(key_new), lambda: (state, reward, done, info)
+        )
+        reset = jnp.logical_or(info["truncated"], done)
+        extras_new = {**state.extras, "reset": reset}
+        state = state.replace(extras=extras_new)
         return state, reward, done, info
+
+    def get_dummy_timestep(self, key):
+        default_dummy_timestep = super().get_dummy_timestep(key)
+        return default_dummy_timestep.replace(extras={**default_dummy_timestep.extras, "reset": jnp.bool_(False)})
 
 
 class SymmetryFilter(Wrapper):
@@ -912,14 +970,14 @@ def wrap_for_eval(env):
 if __name__ == "__main__":
     env = BoxPushingEnv(
         grid_size=4,
-        number_of_boxes_max=3,
-        number_of_boxes_min=3,
-        number_of_moving_boxes_max=3,
+        number_of_boxes_max=1,
+        number_of_boxes_min=1,
+        number_of_moving_boxes_max=1,
         level_generator="quarter",
         generator_special=False,
-        dense_rewards=True,
+        dense_rewards=False,
         terminate_when_success=True,
-        episode_length=3,
+        episode_length=10,
     )
     env = AutoResetWrapper(env)
     key = jax.random.PRNGKey(0)

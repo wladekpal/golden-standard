@@ -51,16 +51,14 @@ echo "Running with grid_size: $grid_size, number_of_boxes_min: $number_of_boxes_
 
 moving_boxes_max=5
 
-for seed in 1 2 3
+for seed in 1 2 
 do
-    for alpha in 0.3 
+    for target_entropy in -1.38
     do
-      for bs in 128 32 256 
-      do
         CUDA_VISIBLE_DEVICES=$GPU_ID uv run --active src/train.py \
         env:box-pushing \
-        --agent.agent_name gciql \
-        --exp.name test2_jcb_default_actor_geom_qv_env_goals_${bs}_bs_moving_boxes_${moving_boxes_max}_grid_${grid_size}_range_${number_of_boxes_min}_${number_of_boxes_max}_alpha_${alpha}_expc_${expectile} \
+        --agent.agent_name crl_search \
+        --exp.name crl_softmax_all_moveable__te_-1.38_moving_boxes_${moving_boxes_max}_grid_${grid_size}_range_${number_of_boxes_min}_${number_of_boxes_max}_alpha_0.1 \
         --env.number_of_boxes_max ${number_of_boxes_max} \
         --env.number_of_boxes_min ${number_of_boxes_min} \
         --env.number_of_moving_boxes_max ${moving_boxes_max} \
@@ -68,14 +66,12 @@ do
         --exp.gamma 0.99 \
         --env.episode_length 100 \
         --exp.seed $seed \
-        --exp.project "gciql_env_goals" \
+        --exp.project "crl_search_sanity" \
         --exp.epochs 50 \
         --exp.gif_every 10 \
-        --agent.alpha ${alpha} \
+        --agent.alpha 0.1  \
         --exp.max_replay_size 10000 \
-        --agent.expectile 0.5  \
-        --agent.batch_size ${bs} \
+        --agent.target_entropy ${target_entropy} \
         --exp.eval-different-box-numbers
-        done
     done
 done
