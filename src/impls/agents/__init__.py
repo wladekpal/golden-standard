@@ -1,3 +1,4 @@
+from impls.agents.clearn_search import ClearnSearchAgent
 from impls.agents.crl import CRLAgent
 from impls.agents.crl_search import CRLSearchAgent
 from impls.agents.dqn import GCDQNAgent
@@ -85,6 +86,13 @@ def create_agent(config: ml_collections.FrozenConfigDict, example_batch: dict, s
         )
     elif config.agent_name == "gcdqn":
         agent = GCDQNAgent.create(
+            seed,
+            example_batch['observations'],
+            example_batch['actions'],
+            config,
+        )
+    elif config.agent_name == "clearn_search":
+        agent = ClearnSearchAgent.create(
             seed,
             example_batch['observations'],
             example_batch['actions'],

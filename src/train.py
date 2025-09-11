@@ -212,7 +212,7 @@ def evaluate_agent_in_specific_env(agent, key, jitted_create_batch, config, name
                 f"{prefix}/actor_loss": loss_info["actor/actor_loss"],
             }
         )
-    elif config.agent.agent_name == "gcdqn":
+    elif config.agent.agent_name == "gcdqn" or config.agent.agent_name == "clearn_search":
         eval_info_tmp.update(
             {
                 f"{prefix}/critic_loss": loss_info["critic/critic_loss"],
