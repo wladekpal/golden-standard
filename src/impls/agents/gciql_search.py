@@ -150,33 +150,37 @@ class GCIQLSearchAgent(flax.struct.PyTreeNode):
         seed=None,
         temperature=1.0,
     ):
-        """Greedy action selection for discrete DQN.
-
+        """
         Returns integer action indices. Continuous actions are not supported here.
         """
         if not self.config['discrete']:
-            raise NotImplementedError("GCDQNAgent.sample_actions supports only discrete action spaces.")
-
-        # Use critic to get Q-values (use first/ensemble as appropriate). Prefer the minimum head for conservative action,
-        # or average — here we average the two heads and pick argmax.
-        # q1, q2 = self.network.select('critic')(observations, goals)
-        all_actions = jnp.tile(jnp.arange(6), (observations.shape[0], 1))  # B x 6
-        qs = jax.lax.stop_gradient(jax.vmap(self.network.select('critic'), in_axes=(None, None, 1))(observations, goals, all_actions)) # 6 x 2 x B
-        qs = qs.mean(axis=1) # 6 x B
-        qs = qs.transpose(1, 0) # B x 6
+            raise NotImplementedError("ClearnSearchAgent.sample_actions supports only discrete action spaces.")
         
-        # Softmax actions
-        # dist = distrax.Categorical(logits=qs / jnp.maximum(1e-6, 1))
-        # actions = dist.sample(seed=seed)
+        if self.config['action_sampling'] in ['softmax', 'norm_softmax']:
+            # Use critic to get Q-values (use first/ensemble as appropriate). Prefer the minimum head for conservative action,
+            # or average — here we average the two heads and pick argmax.
+            all_actions = jnp.tile(jnp.arange(6), (observations.shape[0], 1))  # B x 6
+            qs = jax.lax.stop_gradient(jax.vmap(self.network.select('critic'), in_axes=(None, None, 1))(observations, goals, all_actions)) # 6 x 2 x B
+            qs = qs.mean(axis=1) # 6 x B
+            qs = qs.transpose(1, 0) # B x 6
 
-        greedy_actions = jnp.argmax(qs, axis=-1)  # B
-        # random actions
-        rng, rng_uniform = jax.random.split(seed)
-        random_actions = jax.random.randint(rng, greedy_actions.shape, 0, 6)
+            if self.config['action_sampling'] == 'norm_softmax':
+                qs = (qs - qs.mean(axis=1, keepdims=True)) / jnp.maximum(1e-6, qs.std(axis=1, keepdims=True))  # Normalize logits.
 
-        # ε-greedy: pick random with prob ε, else greedy
-        probs = jax.random.uniform(rng_uniform, greedy_actions.shape)
-        actions = jnp.where(probs < 0.1, random_actions, greedy_actions)
+            # Softmax actions
+            dist = distrax.Categorical(logits=qs / jnp.maximum(1e-6, 1))
+            actions = dist.sample(seed=seed)
+        elif self.config['action_sampling'] == 'epsilon_greedy':
+            greedy_actions = jnp.argmax(qs, axis=-1)  # B
+            # random actions
+            rng, rng_uniform = jax.random.split(seed)
+            random_actions = jax.random.randint(rng, greedy_actions.shape, 0, 6)
+
+            # ε-greedy: pick random with prob ε, else greedy
+            probs = jax.random.uniform(rng_uniform, greedy_actions.shape)
+            actions = jnp.where(probs < 0.1, random_actions, greedy_actions)
+        else:
+            raise ValueError(f"Unknown action sampling type {self.config['action_sampling']}")
 
         return actions
 
