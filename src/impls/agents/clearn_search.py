@@ -1,6 +1,7 @@
 import copy
 from typing import Any
 
+import distrax
 import flax
 import jax
 import jax.numpy as jnp
@@ -9,7 +10,7 @@ import optax
 
 from impls.utils.encoders import GCEncoder, encoder_modules
 from impls.utils.flax_utils import ModuleDict, TrainState, nonpytree_field
-from impls.utils.networks import GCActor, GCDiscreteActor, GCDiscreteCritic, GCValue
+from impls.utils.networks import GCActor, GCDiscreteActor, GCDiscreteCritic, GCValue, LogParam
 
 
 class ClearnSearchAgent(flax.struct.PyTreeNode):
@@ -22,7 +23,7 @@ class ClearnSearchAgent(flax.struct.PyTreeNode):
             batch['observations'], batch['next_observations'], batch['actions'], params=grad_params
         )
 
-        rolled_goals = jnp.roll(batch['value_goals'], shift=1, axis=0)
+        rolled_goals = jnp.roll(batch['next_observations'], shift=1, axis=0)
         # rolled_goals = batch['value_goals']
         future_values = self.network.select('critic')(
             batch['observations'], rolled_goals, batch['actions'], params=grad_params
@@ -42,7 +43,6 @@ class ClearnSearchAgent(flax.struct.PyTreeNode):
         critic_loss = -jnp.mean(
             (1 - gamma) * jax.nn.log_sigmoid(next_values)
             + jax.nn.log_sigmoid(-future_values)
-            # + gamma * jnp.mean(jnp.exp(w), keepdims=True) * jax.nn.log_sigmoid(future_values)
             + gamma * jnp.exp(w) * jax.nn.log_sigmoid(future_values)
         )
 
@@ -53,6 +53,7 @@ class ClearnSearchAgent(flax.struct.PyTreeNode):
             'q_mean': q.mean(),
             'q_max': q.max(),
             'q_min': q.min(),
+            'binary_accuracy': jnp.mean(next_values>0.5),
         }
 
 
@@ -112,19 +113,21 @@ class ClearnSearchAgent(flax.struct.PyTreeNode):
         qs = jax.lax.stop_gradient(jax.vmap(self.network.select('critic'), in_axes=(None, None, 1))(observations, goals, all_actions)) # 6 x 2 x B
         qs = qs.mean(axis=1) # 6 x B
         qs = qs.transpose(1, 0) # B x 6
-        
+
+        # qs = (qs - qs.mean(axis=1, keepdims=True)) / jnp.maximum(1e-6, qs.std(axis=1, keepdims=True))  # Normalize logits.
+
         # Softmax actions
-        # dist = distrax.Categorical(logits=qs / jnp.maximum(1e-6, 1))
-        # actions = dist.sample(seed=seed)
+        dist = distrax.Categorical(logits=qs / jnp.maximum(1e-6, 1))
+        actions = dist.sample(seed=seed)
 
-        greedy_actions = jnp.argmax(qs, axis=-1)  # B
-        # random actions
-        rng, rng_uniform = jax.random.split(seed)
-        random_actions = jax.random.randint(rng, greedy_actions.shape, 0, 6)
+        # greedy_actions = jnp.argmax(qs, axis=-1)  # B
+        # # random actions
+        # rng, rng_uniform = jax.random.split(seed)
+        # random_actions = jax.random.randint(rng, greedy_actions.shape, 0, 6)
 
-        # ε-greedy: pick random with prob ε, else greedy
-        probs = jax.random.uniform(rng_uniform, greedy_actions.shape)
-        actions = jnp.where(probs < 0.1, random_actions, greedy_actions)
+        # # ε-greedy: pick random with prob ε, else greedy
+        # probs = jax.random.uniform(rng_uniform, greedy_actions.shape)
+        # actions = jnp.where(probs < 0.1, random_actions, greedy_actions)
 
         return actions
 

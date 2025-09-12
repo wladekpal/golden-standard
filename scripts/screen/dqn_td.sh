@@ -52,12 +52,12 @@ for seed in 1 2
 do
     for number_of_boxes in 2 3 4
     do
-      for filtering in "quarter"
+      for filtering in ""
       do
         CUDA_VISIBLE_DEVICES=$GPU_ID uv run --active src/train.py \
         env:box-pushing \
         --agent.agent_name gcdqn \
-        --exp.name big_50_random_50_future_r_0_1_continuing_bootstrap_all_${number_of_boxes}_grid_${grid_size}_ep_len_${episode_length}_filter_${filtering} \
+        --exp.name softmax_normalized_after_merge_50_random_50_future_r_0_1_continuing_bootstrap_all_${number_of_boxes}_grid_${grid_size}_ep_len_${episode_length}_filter_${filtering} \
         --env.number_of_boxes_max ${number_of_boxes} \
         --env.number_of_boxes_min ${number_of_boxes} \
         --env.number_of_moving_boxes_max ${number_of_boxes} \
@@ -73,8 +73,7 @@ do
         --exp.batch_size 256 \
         --exp.use_future_and_random_goals \
         --exp.eval_special \
-        --env.level_generator quarter \
-        --exp.filtering ${filtering} 
+        --env.level_generator quarter 
         done
     done
 done

@@ -8,6 +8,7 @@ import jax
 import jax.numpy as jnp
 import distrax
 from impls.agents.crl import CRLAgent
+from impls.agents.crl_search import CRLSearchAgent
 
 
 def log_gif(original_env, episode_length, prefix_gif, timesteps):
@@ -45,7 +46,7 @@ def sample_actions_critic(
         jax.vmap(agent.network.select("critic"), in_axes=(None, None, 1))(observations, goals, all_actions)
     )  # 6 x 2 x B
     qs = qs.min(axis=1)  # 6 x B
-    if isinstance(agent, CRLAgent):
+    if isinstance(agent, CRLAgent) or isinstance(agent, CRLSearchAgent):
         qs = value_transform(qs)
     qs = qs.transpose(1, 0)  # B x 6
     qs = (qs - qs.mean(axis=1, keepdims=True)) / jnp.maximum(1e-6, qs.std(axis=1, keepdims=True))  # Normalize logits.

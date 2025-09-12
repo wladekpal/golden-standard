@@ -119,19 +119,20 @@ class GCDQNAgent(flax.struct.PyTreeNode):
         qs = jax.lax.stop_gradient(jax.vmap(self.network.select('critic'), in_axes=(None, None, 1))(observations, goals, all_actions)) # 6 x 2 x B
         qs = qs.mean(axis=1) # 6 x B
         qs = qs.transpose(1, 0) # B x 6
+        qs = (qs - qs.mean(axis=1, keepdims=True)) / jnp.maximum(1e-6, qs.std(axis=1, keepdims=True))  # Normalize logits.
         
         # Softmax actions
-        # dist = distrax.Categorical(logits=qs / jnp.maximum(1e-6, 1))
-        # actions = dist.sample(seed=seed)
+        dist = distrax.Categorical(logits=qs / jnp.maximum(1e-6, 1))
+        actions = dist.sample(seed=seed)
 
-        greedy_actions = jnp.argmax(qs, axis=-1)  # B
-        # random actions
-        rng, rng_uniform = jax.random.split(seed)
-        random_actions = jax.random.randint(rng, greedy_actions.shape, 0, 6)
+        # greedy_actions = jnp.argmax(qs, axis=-1)  # B
+        # # random actions
+        # rng, rng_uniform = jax.random.split(seed)
+        # random_actions = jax.random.randint(rng, greedy_actions.shape, 0, 6)
 
-        # ε-greedy: pick random with prob ε, else greedy
-        probs = jax.random.uniform(rng_uniform, greedy_actions.shape)
-        actions = jnp.where(probs < 0.1, random_actions, greedy_actions)
+        # # ε-greedy: pick random with prob ε, else greedy
+        # probs = jax.random.uniform(rng_uniform, greedy_actions.shape)
+        # actions = jnp.where(probs < 0.1, random_actions, greedy_actions)
 
         return actions
 

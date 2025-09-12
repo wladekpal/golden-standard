@@ -163,8 +163,10 @@ class CRLSearchAgent(flax.struct.PyTreeNode):
         qs = qs.min(axis=1) # 6 x B
         qs = value_transform(qs)
         qs = qs.transpose(1, 0) # B x 6
-        alpha = jax.lax.stop_gradient(self.network.select('alpha')(params=None))
-        dist = distrax.Categorical(logits=qs / jnp.maximum(1e-6, alpha))
+        # alpha = jax.lax.stop_gradient(self.network.select('alpha')(params=None))
+        qs = (qs - qs.mean(axis=1, keepdims=True)) / jnp.maximum(1e-6, qs.std(axis=1, keepdims=True))  # Normalize logits.
+        # dist = distrax.Categorical(logits=qs / jnp.maximum(1e-6, alpha))
+        dist = distrax.Categorical(logits=qs / jnp.maximum(1e-6, 1))
         actions = dist.sample(seed=seed)
         return actions
 
