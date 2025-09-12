@@ -555,7 +555,16 @@ class VariableQuarterGenerator(DefaultLevelGenerator):
 
         grid = jax.lax.dynamic_update_slice(grid, target_slice, target_corner)
 
-        agent_pos, grid = self.place_agent(grid, agent_key)
+        possible_agent_placements = jax.lax.dynamic_slice(grid, box_corner, (self.quarter_size, self.quarter_size))
+        agent_pos, updated_grid_slice = self.place_agent(possible_agent_placements, agent_key)
+        grid = jax.lax.dynamic_update_slice(grid, updated_grid_slice, box_corner)
+
+        agent_pos = agent_pos + box_corner
+
+        quarters_allowed = jnp.zeros((self.grid_size, self.grid_size), dtype=jnp.bool)
+        allowed_mask = jnp.ones((self.quarter_size, self.quarter_size), dtype=jnp.bool)
+        quarters_allowed = jax.lax.dynamic_update_slice(quarters_allowed, allowed_mask, box_corner)
+        quarters_allowed = jax.lax.dynamic_update_slice(quarters_allowed, allowed_mask, target_corner)
 
         state = BoxPushingState(
             key=state_key,
@@ -567,13 +576,19 @@ class VariableQuarterGenerator(DefaultLevelGenerator):
             goal=jnp.zeros_like(grid),
             reward=0.0,
             success=0,
-            extras={},
+            extras={"quarters_allowed": quarters_allowed},
         )
 
         goal = create_solved_state(state)
         state = state.replace(goal=goal.grid)
 
         return state
+
+    def get_dummy_timestep(self, key):
+        default_dummy_timestep = super().get_dummy_timestep(key)
+        return default_dummy_timestep.replace(
+            extras={"quarters_allowed": jnp.zeros((self.grid_size, self.grid_size), dtype=jnp.bool)}
+        )
 
 
 class BoxPushingEnv:
@@ -1075,11 +1090,10 @@ class QuarterFilter(Wrapper):
 
     def check_wrong_quarter_crossing(self, new_state: BoxPushingState):
         quarters_allowed = new_state.extras["quarters_allowed"]
-
+        print(quarters_allowed)
         agent_row, agent_col = new_state.agent_pos[0], new_state.agent_pos[1]
-        current_quarter = 2 * (agent_row >= new_state.grid.shape[0] // 2) + (agent_col >= new_state.grid.shape[1] // 2)
 
-        return jnp.logical_not(quarters_allowed[current_quarter])
+        return jnp.logical_not(quarters_allowed[agent_row, agent_col])
 
     def step(self, state: BoxPushingState, action: int) -> Tuple[BoxPushingState, float, bool, Dict[str, Any]]:
         new_state, reward, done, info = self._env.step(state, action)
@@ -1114,16 +1128,17 @@ def wrap_for_eval(env):
 if __name__ == "__main__":
     env = BoxPushingEnv(
         grid_size=6,
-        number_of_boxes_max=4,
-        number_of_boxes_min=4,
-        number_of_moving_boxes_max=4,
+        number_of_boxes_max=2,
+        number_of_boxes_min=2,
+        number_of_moving_boxes_max=2,
         level_generator="variable",
-        generator_special=True,
+        generator_special=False,
         dense_rewards=False,
         terminate_when_success=True,
         episode_length=10,
         quarter_size=2,
     )
+    env = QuarterFilter(env)
     env = AutoResetWrapper(env)
     key = jax.random.PRNGKey(0)
     env.play_game(key)
