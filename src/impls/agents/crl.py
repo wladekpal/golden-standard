@@ -31,15 +31,16 @@ class CRLAgent(flax.struct.PyTreeNode):
         else:
             actions = None
 
-        # Only pass key parameter for MRN networks
-        if self.config.get('value_type') == 'mrn':
+        # Handle MRN networks with shuffled actions
+        if self.config.get('value_type') == 'mrn' and actions is not None:
+            shuffled_actions = jax.random.permutation(key, actions, axis=0)
             v, phi, psi = self.network.select(module_name)(
                 batch['observations'],
                 batch['value_goals'],
                 actions=actions,
                 info=True,
                 params=grad_params,
-                key=key,
+                shuffled_actions=shuffled_actions,
             )
         else:
             v, phi, psi = self.network.select(module_name)(
@@ -65,8 +66,6 @@ class CRLAgent(flax.struct.PyTreeNode):
             logits = logits.swapaxes(0, 2)
         elif self.config['energy_fn'] == 'cmd1_mrn':
            
-            g_potential = jnp.mean(psi, axis=-1)  # [E, B] or [B] depending on ensemble
-            
             latent_dim = phi.shape[-1]
             half_dim = latent_dim // 2
             
@@ -76,14 +75,15 @@ class CRLAgent(flax.struct.PyTreeNode):
             phi_asym_exp = phi_asym[:, :, None, :]  # [E, B, 1, D/2]
             psi_asym_exp = psi_asym[:, None, :, :]  # [E, 1, B, D/2]
             asym_diff = phi_asym_exp - psi_asym_exp  # [E, B, B, D/2]
-            asym_dist = jnp.max(jax.nn.relu(asym_diff), axis=-1)  # [E, B, B] - Fixed: max(relu(...))
+            asym_dist = jnp.max(jax.nn.relu(asym_diff), axis=-1)  # [E, B, B]
             
             phi_sym_exp = phi_sym[:, :, None, :]  # [E, B, 1, D/2]
             psi_sym_exp = psi_sym[:, None, :, :]  # [E, 1, B, D/2]
-            sym_dist = jnp.linalg.norm(phi_sym_exp - psi_sym_exp, axis=-1)  # [E, B, B]
+            sym_diff = phi_sym_exp - psi_sym_exp  # [E, B, B, D/2]
+            sym_dist = jnp.sum(sym_diff ** 2, axis=-1)  # [E, B, B] 
             
             mrn_distance = asym_dist + sym_dist  # [E, B, B]
-            logits = g_potential[:, :, None] - mrn_distance  # [E, B, B]
+            logits = - mrn_distance  # [E, B, B]
             logits = logits.swapaxes(0, 2)  # [B, B, E]
                 
         else:
@@ -144,9 +144,16 @@ class CRLAgent(flax.struct.PyTreeNode):
         if self.config['actor_loss'] == 'awr':
             # AWR loss.
             v = value_transform(self.network.select('value')(batch['observations'], batch['actor_goals']))
-            q1, q2 = value_transform(
-                self.network.select('critic')(batch['observations'], batch['actor_goals'], batch['actions'])
-            )
+            # Handle MRN networks with shuffled actions
+            if self.config.get('value_type') == 'mrn':
+                shuffled_actions = jax.random.permutation(rng, batch['actions'], axis=0)
+                q1, q2 = value_transform(
+                    self.network.select('critic')(batch['observations'], batch['actor_goals'], batch['actions'], shuffled_actions=shuffled_actions)
+                )
+            else:
+                q1, q2 = value_transform(
+                    self.network.select('critic')(batch['observations'], batch['actor_goals'], batch['actions'])
+                )
             q = jnp.minimum(q1, q2)
             adv = q - v
 
@@ -181,9 +188,16 @@ class CRLAgent(flax.struct.PyTreeNode):
                 q_actions = jnp.clip(dist.mode(), -1, 1)
             else:
                 q_actions = jnp.clip(dist.sample(seed=rng), -1, 1)
-            q1, q2 = value_transform(
-                self.network.select('critic')(batch['observations'], batch['actor_goals'], q_actions)
-            )
+            # Handle MRN networks with shuffled actions
+            if self.config.get('value_type') == 'mrn':
+                shuffled_actions = jax.random.permutation(rng, q_actions, axis=0)
+                q1, q2 = value_transform(
+                    self.network.select('critic')(batch['observations'], batch['actor_goals'], q_actions, shuffled_actions=shuffled_actions)
+                )
+            else:
+                q1, q2 = value_transform(
+                    self.network.select('critic')(batch['observations'], batch['actor_goals'], q_actions)
+                )
             q = jnp.minimum(q1, q2)
 
             # Normalize Q values by the absolute mean to make the loss scale invariant.

@@ -57,6 +57,7 @@ class MLP(nn.Module):
                 x = self.activations(x)
                 if self.layer_norm:
                     x = nn.LayerNorm()(x)
+            
         return x
 
 
@@ -429,7 +430,7 @@ class GCMRNValue(nn.Module):
             mlp_module = ensemblize(mlp_module, 2)
         self.phi = mlp_module((*self.hidden_dims, self.latent_dim), activate_final=False, layer_norm=self.layer_norm)
 
-    def __call__(self, observations, goals, actions=None, is_phi=False, info=False, key=None):
+    def __call__(self, observations, goals, actions=None, is_phi=False, info=False, shuffled_actions=None):
         """Return the MRN value function.
 
         Args:
@@ -438,7 +439,7 @@ class GCMRNValue(nn.Module):
             actions: Actions (optional, for critic function).
             is_phi: Whether the inputs are already encoded by phi.
             info: Whether to additionally return the representations phi_s and phi_g.
-            key: Random key for shuffling actions.
+            shuffled_actions: Pre-shuffled actions (computed at loss level).
         """
         if is_phi:
             phi_s = observations
@@ -456,11 +457,11 @@ class GCMRNValue(nn.Module):
             
             if actions is not None:
                 phi_s_inputs = jnp.concatenate([observations, actions], axis=-1)
-                if key is not None:
-                    shuffled_actions = jax.random.permutation(key, actions, axis=0)
+                if shuffled_actions is not None:
+                    phi_g_inputs = jnp.concatenate([goals, shuffled_actions], axis=-1)
                 else:
-                    shuffled_actions = jnp.zeros_like(actions)  # For initialization
-                phi_g_inputs = jnp.concatenate([goals, shuffled_actions], axis=-1)
+                    # For initialization or when no shuffling needed
+                    phi_g_inputs = jnp.concatenate([goals, jnp.zeros_like(actions)], axis=-1)
             else:
                 phi_s_inputs = observations
                 phi_g_inputs = goals
@@ -474,11 +475,11 @@ class GCMRNValue(nn.Module):
         sym_g = phi_g[..., self.latent_dim // 2 :]       # Second half = symmetric (L2)
         
         max_component = jnp.max(jax.nn.relu(asym_s - asym_g), axis=-1)  
-        l2_component = jnp.linalg.norm(sym_s - sym_g, axis=-1)         
+        l2_component = jnp.sum((sym_s - sym_g)**2, axis=-1)         
         
-        g_potential = jnp.mean(phi_g, axis=-1) 
-        v = g_potential - (max_component + l2_component)
+        v =  (max_component + l2_component)
         
+            
 
         if info:
             return v, phi_s, phi_g
@@ -491,10 +492,12 @@ class GCDiscreteMRNValue(GCMRNValue):
 
     action_dim: int = None
 
-    def __call__(self, observations, goals, actions=None, is_phi=False, info=False, key=None):
+    def __call__(self, observations, goals, actions=None, is_phi=False, info=False, shuffled_actions=None):
         if actions is not None:
             actions = jnp.eye(self.action_dim)[actions]
-        return super().__call__(observations, goals, actions, is_phi, info, key)
+        if shuffled_actions is not None:
+            shuffled_actions = jnp.eye(self.action_dim)[shuffled_actions]
+        return super().__call__(observations, goals, actions, is_phi, info, shuffled_actions)
 
 
 class GCIQEValue(nn.Module):
