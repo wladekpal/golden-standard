@@ -14,13 +14,14 @@ from .block_moving_env import (
     BoxPushingState,
     create_solved_state,
     calculate_number_of_boxes,
+    remove_targets,
 )
 
 
 def test_remove_targets_mapping_all_values():
     """Ensure remove_targets maps every enum to the expected no-target state."""
     inp = jnp.arange(12, dtype=jnp.int8)  # values 0..11
-    out = GridStatesEnum.remove_targets(inp)
+    out = remove_targets(inp)
     expected = jnp.array([0, 1, 0, 3, 4, 5, 3, 4, 5, 11, 1, 11], dtype=jnp.int8)
     assert jnp.array_equal(out, expected), f"got {out}, expected {expected}"
 
@@ -118,6 +119,7 @@ def test_create_solved_state_transforms_targets_and_boxes_and_agent_cell1():
         goal=jnp.zeros_like(grid),
         reward=jnp.array(0),
         success=jnp.array(0),
+        extras={},
     )
 
     solved = create_solved_state(state)
@@ -160,6 +162,7 @@ def test_create_solved_state_transforms_targets_and_boxes_and_agent_cell2():
         goal=jnp.zeros_like(grid),
         reward=jnp.array(0),
         success=jnp.array(0),
+        extras={},
     )
 
     solved = create_solved_state(state)
@@ -202,6 +205,7 @@ def test_create_solved_state_transforms_targets_and_boxes_and_agent_cell3():
         goal=jnp.zeros_like(grid),
         reward=jnp.array(0),
         success=jnp.array(0),
+        extras={},
     )
 
     solved = create_solved_state(state)
@@ -244,6 +248,7 @@ def test_create_solved_state_transforms_targets_and_boxes_and_agent_cell4():
         goal=jnp.zeros_like(grid),
         reward=jnp.array(0),
         success=jnp.array(0),
+        extras={},
     )
 
     solved = create_solved_state(state)

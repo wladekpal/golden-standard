@@ -45,7 +45,10 @@ class GCIQLSearchAgent(flax.struct.PyTreeNode):
     def critic_loss(self, batch, grad_params):
         """Compute the IQL critic loss."""
         next_v = self.network.select('value')(batch['next_observations'], batch['value_goals'])
-        q = batch['rewards'] + self.config['discount'] * batch['masks'] * next_v
+        if self.config['use_discounted_mc_rewards']:
+            q = batch['rewards'] 
+        else:
+            q = batch['rewards'] + self.config['discount'] * batch['masks'] * next_v
 
         q1, q2 = self.network.select('critic')(
             batch['observations'], batch['value_goals'], batch['actions'], params=grad_params
@@ -147,14 +150,34 @@ class GCIQLSearchAgent(flax.struct.PyTreeNode):
         seed=None,
         temperature=1.0,
     ):
-        """Sample actions from the actor."""
+        """Greedy action selection for discrete DQN.
+
+        Returns integer action indices. Continuous actions are not supported here.
+        """
+        if not self.config['discrete']:
+            raise NotImplementedError("GCDQNAgent.sample_actions supports only discrete action spaces.")
+
+        # Use critic to get Q-values (use first/ensemble as appropriate). Prefer the minimum head for conservative action,
+        # or average — here we average the two heads and pick argmax.
+        # q1, q2 = self.network.select('critic')(observations, goals)
         all_actions = jnp.tile(jnp.arange(6), (observations.shape[0], 1))  # B x 6
         qs = jax.lax.stop_gradient(jax.vmap(self.network.select('critic'), in_axes=(None, None, 1))(observations, goals, all_actions)) # 6 x 2 x B
-        qs = qs.min(axis=1) # 6 x B
+        qs = qs.mean(axis=1) # 6 x B
         qs = qs.transpose(1, 0) # B x 6
-        alpha = jax.lax.stop_gradient(self.network.select('alpha')(params=None))
-        dist = distrax.Categorical(logits=qs / jnp.maximum(1e-6, alpha))
-        actions = dist.sample(seed=seed)
+        
+        # Softmax actions
+        # dist = distrax.Categorical(logits=qs / jnp.maximum(1e-6, 1))
+        # actions = dist.sample(seed=seed)
+
+        greedy_actions = jnp.argmax(qs, axis=-1)  # B
+        # random actions
+        rng, rng_uniform = jax.random.split(seed)
+        random_actions = jax.random.randint(rng, greedy_actions.shape, 0, 6)
+
+        # ε-greedy: pick random with prob ε, else greedy
+        probs = jax.random.uniform(rng_uniform, greedy_actions.shape)
+        actions = jnp.where(probs < 0.1, random_actions, greedy_actions)
+
         return actions
 
     @classmethod

@@ -6,7 +6,7 @@ grid_size=$2
 number_of_boxes_min=3
 number_of_boxes_max=7
 
-exclude_dirs=( ".github" ".ruff_cache" "wandb" ".vscode" ".idea" "__pycache__" ".venv" "experiments" ".git" "notebooks" "runs" "notes")
+exclude_dirs=( ".github" ".ruff_cache" "wandb" ".vscode" ".idea" "__pycache__" ".venv" "experiments" ".git" "notebooks" "runs" "notes" ".pytest")
 
 # Experiment name
 exp_name="test_generalization_sc"
@@ -53,12 +53,12 @@ moving_boxes_max=5
 
 for seed in 1 2 3
 do
-    for alpha in 0.1 
+    for bs in 128 32 256 
     do
         CUDA_VISIBLE_DEVICES=$GPU_ID uv run --active src/train.py \
         env:box-pushing \
         --agent.agent_name crl \
-        --exp.name moving_boxes_${moving_boxes_max}_grid_${grid_size}_range_${number_of_boxes_min}_${number_of_boxes_max}_alpha_${alpha} \
+        --exp.name fixed_${bs}_bs_moving_boxes_${moving_boxes_max}_grid_${grid_size}_range_${number_of_boxes_min}_${number_of_boxes_max}_alpha_${alpha} \
         --env.number_of_boxes_max ${number_of_boxes_max} \
         --env.number_of_boxes_min ${number_of_boxes_min} \
         --env.number_of_moving_boxes_max ${moving_boxes_max} \
@@ -66,11 +66,12 @@ do
         --exp.gamma 0.99 \
         --env.episode_length 100 \
         --exp.seed $seed \
-        --exp.project "test_crl_vs_quasi" \
+        --exp.project "test_crl_env" \
         --exp.epochs 50 \
         --exp.gif_every 10 \
-        --agent.alpha ${alpha} \
+        --agent.alpha 0.1 \
         --exp.max_replay_size 10000 \
+        --agent.batch_size ${bs} \
         --exp.eval-different-box-numbers
     done
 done

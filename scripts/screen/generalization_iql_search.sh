@@ -3,8 +3,8 @@
 GPU_ID=$1
 grid_size=$2
 
-number_of_boxes_min=3
-number_of_boxes_max=7
+number_of_boxes_min=1
+number_of_boxes_max=3
 
 exclude_dirs=( ".github" ".ruff_cache" "wandb" ".vscode" ".idea" "__pycache__" ".venv" "experiments" ".git" "notebooks" "runs" "notes" ".pytest")
 
@@ -49,18 +49,16 @@ echo "Current path: '$(pwd)'"
 
 echo "Running with grid_size: $grid_size, number_of_boxes_min: $number_of_boxes_min, number_of_boxes_max: $number_of_boxes_max"
 
-moving_boxes_max=5
+moving_boxes_max=3
 
-for seed in 1 2 3
+for seed in 1 2
 do
-    for alpha in 0.3 
+    for target_entropy in -1.38 -1.1 -0.7
     do
-      for bs in 128 32 256 
-      do
         CUDA_VISIBLE_DEVICES=$GPU_ID uv run --active src/train.py \
         env:box-pushing \
-        --agent.agent_name gciql \
-        --exp.name test2_jcb_default_actor_geom_qv_env_goals_${bs}_bs_moving_boxes_${moving_boxes_max}_grid_${grid_size}_range_${number_of_boxes_min}_${number_of_boxes_max}_alpha_${alpha}_expc_${expectile} \
+        --agent.agent_name gciql_search \
+        --exp.name a_bit_harder_search_te_${target_entropy}_moving_boxes_${moving_boxes_max}_grid_${grid_size}_range_${number_of_boxes_min}_${number_of_boxes_max}_alpha_0.3 \
         --env.number_of_boxes_max ${number_of_boxes_max} \
         --env.number_of_boxes_min ${number_of_boxes_min} \
         --env.number_of_moving_boxes_max ${moving_boxes_max} \
@@ -71,11 +69,10 @@ do
         --exp.project "gciql_env_goals" \
         --exp.epochs 50 \
         --exp.gif_every 10 \
-        --agent.alpha ${alpha} \
+        --agent.alpha  0.3  \
         --exp.max_replay_size 10000 \
         --agent.expectile 0.5  \
-        --agent.batch_size ${bs} \
+        --agent.target_entropy ${target_entropy} \
         --exp.eval-different-box-numbers
-        done
     done
 done
