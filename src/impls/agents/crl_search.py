@@ -27,13 +27,9 @@ class CRLSearchAgent(flax.struct.PyTreeNode):
     def contrastive_loss(self, batch, grad_params, module_name='critic'):
         """Compute the contrastive value loss for the Q or V function."""
         batch_size = batch['observations'].shape[0]
+        actions = batch['actions']
 
-        if module_name == 'critic':
-            actions = batch['actions']
-        else:
-            actions = None
-
-        v, phi, psi = self.network.select(module_name)(
+        q, phi, psi = self.network.select(module_name)(
             batch['observations'],
             batch['value_goals'],
             actions=actions,
@@ -59,56 +55,42 @@ class CRLSearchAgent(flax.struct.PyTreeNode):
         logits_pos = jnp.sum(logits * I) / jnp.sum(I)
         logits_neg = jnp.sum(logits * (1 - I)) / jnp.sum(1 - I)
 
-        return contrastive_loss, {
+        # Update target entropy
+        def value_transform(x):
+            return jnp.log(jnp.maximum(x, 1e-6))
+        
+        all_actions = jnp.tile(jnp.arange(6), (batch['observations'].shape[0], 1))  # B x 6
+        qs = jax.lax.stop_gradient(
+            jax.vmap(self.network.select("critic"), in_axes=(None, None, 1))(batch['observations'], jnp.roll(batch['next_observations'], shift=1, axis=0), all_actions)
+        )  # 6 x 2 x B
+        if len(qs.shape) == 2:  # Non-ensemble.
+            qs = qs[:, None, ...]
+        qs = qs.mean(axis=1)  # 6 x B
+        qs = qs.transpose(1, 0) # B x 6
+        qs = value_transform(qs)
+
+        alpha_temp = self.network.select('alpha_temp')(params=grad_params)
+        dist = distrax.Categorical(logits=qs / jnp.maximum(1e-6, alpha_temp))
+        entropy = dist.entropy()
+        alpha_temp_loss = ((entropy + self.config['target_entropy'])**2).mean()  
+
+        total_loss = contrastive_loss + alpha_temp_loss
+        return total_loss, {
             'contrastive_loss': contrastive_loss,
-            'v_mean': v.mean(),
-            'v_max': v.max(),
-            'v_min': v.min(),
+            'q_mean': q.mean(),
+            'q_max': q.max(),
+            'q_min': q.min(),
             'binary_accuracy': jnp.mean((logits > 0) == I),
             'categorical_accuracy': jnp.mean(correct),
             'logits_pos': logits_pos,
             'logits_neg': logits_neg,
             'logits': logits.mean(),
+            'entropy': entropy.mean(),
+            'alpha_temp': alpha_temp,
+            'entropy_std': dist.entropy().std(),
+            'alpha_temp_loss': alpha_temp_loss,
         }
 
-    def actor_loss(self, batch, grad_params, rng=None):
-        """Compute the actor loss (AWR or DDPG+BC)."""
-        # Maximize log Q if actor_log_q is True (which is default).
-
-        def value_transform(x):
-            return jnp.log(jnp.maximum(x, 1e-6))
-        all_actions = jnp.tile(jnp.arange(6), (batch['observations'].shape[0], 1))  # B x 6
-        qs = jax.lax.stop_gradient(jax.vmap(self.network.select('critic'), in_axes=(None, None, 1))(batch['observations'], batch['actor_goals'], all_actions)) # 6 x 2 x B
-        qs = qs.min(axis=1) # 6 x B
-        qs = value_transform(qs)
-        qs = qs.transpose(1, 0) # B x 6
-
-        alpha = self.network.select('alpha')(params=grad_params)
-        dist = distrax.Categorical(logits=qs / jnp.maximum(1e-6, alpha))
-        probs = dist.probs  # shape (B, 6)
-
-        log_probs = jnp.log(probs + 1e-8)
-        entropy = -(probs * log_probs).sum(axis=-1).mean()
-
-        log_probs_rb = dist.log_prob(batch['actions'])
-        entropy_rb = -log_probs_rb.mean()
-
-        alpha_loss = ((entropy + self.config['target_entropy']) ** 2).mean()  # Target entropy is a negative constant like -log(6)
-        actor_loss = 0
-        total_loss = actor_loss + alpha_loss
-
-        actor_info = {
-            'total_loss': total_loss,
-            'actor_loss': actor_loss,
-            'adv': 0,
-            'bc_log_prob': log_probs.mean(),
-            'alpha_loss': alpha_loss,
-            'alpha': alpha,
-            'entropy': entropy,
-            'entropy_rb_actions': entropy_rb,
-        }
-
-        return total_loss, actor_info
 
     @jax.jit
     def total_loss(self, batch, grad_params, rng=None):
@@ -120,19 +102,7 @@ class CRLSearchAgent(flax.struct.PyTreeNode):
         for k, v in critic_info.items():
             info[f'critic/{k}'] = v
 
-        if self.config['actor_loss'] == 'awr':
-            value_loss, value_info = self.contrastive_loss(batch, grad_params, 'value')
-            for k, v in value_info.items():
-                info[f'value/{k}'] = v
-        else:
-            value_loss = 0.0
-
-        rng, actor_rng = jax.random.split(rng)
-        actor_loss, actor_info = self.actor_loss(batch, grad_params, actor_rng)
-        for k, v in actor_info.items():
-            info[f'actor/{k}'] = v
-
-        loss = critic_loss + value_loss + actor_loss
+        loss = critic_loss 
         return loss, info
 
     @jax.jit
@@ -179,7 +149,8 @@ class CRLSearchAgent(flax.struct.PyTreeNode):
                 qs = (qs - qs.mean(axis=1, keepdims=True)) / jnp.maximum(1e-6, qs.std(axis=1, keepdims=True))  # Normalize logits.
 
             # Softmax actions
-            dist = distrax.Categorical(logits=qs / jnp.maximum(1e-6, 1))
+            alpha_temp = jax.lax.stop_gradient(self.network.select('alpha_temp')())
+            dist = distrax.Categorical(logits=qs / jnp.maximum(1e-6, alpha_temp))
             actions = dist.sample(seed=seed)
         elif self.config['action_sampling'] == 'epsilon_greedy':
             greedy_actions = jnp.argmax(qs, axis=-1)  # B
@@ -286,13 +257,13 @@ class CRLSearchAgent(flax.struct.PyTreeNode):
             )
 
         if config['target_entropy'] is None:
-            config['target_entropy'] = -config['target_entropy_multiplier'] * action_dim
-        alpha_def = LogParam()
+            config['target_entropy'] = -config['target_entropy_multiplier'] * action_dim/2
+        alpha_temp_def = LogParam()
 
         network_info = dict(
             critic=(critic_def, (ex_observations, ex_goals, ex_actions)),
             actor=(actor_def, (ex_observations, ex_goals)),
-            alpha=(alpha_def, ()),
+            alpha_temp=(alpha_temp_def, ()),
         )
         if config['actor_loss'] == 'awr':
             network_info.update(

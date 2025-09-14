@@ -9,7 +9,7 @@ import ml_collections
 import optax
 from impls.utils.encoders import GCEncoder, encoder_modules
 from impls.utils.flax_utils import ModuleDict, TrainState, nonpytree_field
-from impls.utils.networks import GCActor, GCDiscreteActor, GCDiscreteCritic, GCValue
+from impls.utils.networks import GCActor, GCDiscreteActor, GCDiscreteCritic, GCValue, LogParam
 
 
 class GCDQNAgent(flax.struct.PyTreeNode):
@@ -56,11 +56,33 @@ class GCDQNAgent(flax.struct.PyTreeNode):
         # MSE loss on both heads (keeps two-head training similar to your critic ensemble)
         critic_loss = ((q1_a - target) ** 2 + (q2_a - target) ** 2).mean()
 
-        return critic_loss, {
+        # Update target entropy
+        all_actions = jnp.tile(jnp.arange(6), (batch['observations'].shape[0], 1))  # B x 6
+        qs = jax.lax.stop_gradient(
+            jax.vmap(self.network.select("critic"), in_axes=(None, None, 1))(batch['observations'], jnp.roll(batch['next_observations'], shift=1, axis=0), all_actions)
+        )  # 6 x 2 x B
+        if len(qs.shape) == 2:  # Non-ensemble.
+            qs = qs[:, None, ...]
+        qs = qs.mean(axis=1)  # 6 x B
+        qs = qs.transpose(1, 0) # B x 6
+
+        alpha_temp = self.network.select('alpha_temp')(params=grad_params)
+        dist = distrax.Categorical(logits=qs / jnp.maximum(1e-6, alpha_temp))
+        entropy = dist.entropy()
+        alpha_temp_loss = ((entropy + self.config['target_entropy'])**2).mean()  # Target entropy is a negative constant like -log(6)
+
+        total_loss = critic_loss +  alpha_temp_loss
+
+        return total_loss, {
             'critic_loss': critic_loss,
             'q_mean': target.mean(),
             'q_max': target.max(),
             'q_min': target.min(),
+            'q.std': target.std(),
+            'entropy': entropy.mean(),
+            'alpha_temp': alpha_temp,
+            'entropy_std': dist.entropy().std(),
+            'alpha_temp_loss': alpha_temp_loss,
         }
 
     @jax.jit
@@ -124,7 +146,8 @@ class GCDQNAgent(flax.struct.PyTreeNode):
                 qs = (qs - qs.mean(axis=1, keepdims=True)) / jnp.maximum(1e-6, qs.std(axis=1, keepdims=True))  # Normalize logits.
 
             # Softmax actions
-            dist = distrax.Categorical(logits=qs / jnp.maximum(1e-6, 1))
+            alpha_temp = jax.lax.stop_gradient(self.network.select('alpha_temp')())
+            dist = distrax.Categorical(logits=qs / jnp.maximum(1e-6, alpha_temp))
             actions = dist.sample(seed=seed)
         elif self.config['action_sampling'] == 'epsilon_greedy':
             greedy_actions = jnp.argmax(qs, axis=-1)  # B
@@ -185,12 +208,17 @@ class GCDQNAgent(flax.struct.PyTreeNode):
             action_dim=action_dim,
             gc_encoder=None,
         )
+        
+        if config['target_entropy'] is None:
+            config['target_entropy'] = -config['target_entropy_multiplier'] * action_dim/2
+        alpha_temp_def = LogParam()
 
         network_info = dict(
             value=(value_def, (ex_observations, ex_goals)),
             critic=(critic_def, (ex_observations, ex_goals, ex_actions)),
             target_critic=(copy.deepcopy(critic_def), (ex_observations, ex_goals, ex_actions)),
             actor=(actor_def, (ex_observations, ex_goals)),
+            alpha_temp=(alpha_temp_def, ()),
         )
         networks = {k: v[0] for k, v in network_info.items()}
         network_args = {k: v[1] for k, v in network_info.items()}

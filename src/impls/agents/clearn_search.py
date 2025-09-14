@@ -24,13 +24,10 @@ class ClearnSearchAgent(flax.struct.PyTreeNode):
         )
 
         rolled_goals = jnp.roll(batch['next_observations'], shift=1, axis=0)
-        # rolled_goals = batch['value_goals']
         future_values = self.network.select('critic')(
             batch['observations'], rolled_goals, batch['actions'], params=grad_params
         )
 
-        # next_dist = self.network.select('actor')(batch['next_observations'], rolled_goals)
-        # next_actions, next_log_probs = next_dist.sample_and_log_prob(seed=rng)
         next_actions = self.sample_actions(batch['next_observations'], rolled_goals, rng)
 
         gamma = self.config['discount']
@@ -43,17 +40,38 @@ class ClearnSearchAgent(flax.struct.PyTreeNode):
         critic_loss = -jnp.mean(
             (1 - gamma) * jax.nn.log_sigmoid(next_values)
             + jax.nn.log_sigmoid(-future_values)
-            + gamma * jnp.exp(w) * jax.nn.log_sigmoid(future_values)
+            + gamma * jnp.mean(jnp.exp(w), axis=0, keepdims=True) / jnp.mean(jnp.exp(w)) * jax.nn.log_sigmoid(future_values)
         )
 
         q = future_values
 
-        return critic_loss, {
+        # Update target entropy
+        all_actions = jnp.tile(jnp.arange(6), (batch['observations'].shape[0], 1))  # B x 6
+        qs = jax.lax.stop_gradient(
+            jax.vmap(self.network.select("critic"), in_axes=(None, None, 1))(batch['observations'], jnp.roll(batch['next_observations'], shift=1, axis=0), all_actions)
+        )  # 6 x 2 x B
+        if len(qs.shape) == 2:  # Non-ensemble.
+            qs = qs[:, None, ...]
+        qs = qs.mean(axis=1)  # 6 x B
+        qs = qs.transpose(1, 0) # B x 6
+
+        alpha_temp = self.network.select('alpha_temp')(params=grad_params)
+        dist = distrax.Categorical(logits=qs / jnp.maximum(1e-6, alpha_temp))
+        entropy = dist.entropy()
+        alpha_temp_loss = ((entropy + self.config['target_entropy'])**2).mean()  
+
+        total_loss = critic_loss +  alpha_temp_loss
+        return total_loss, {
             'critic_loss': critic_loss,
             'q_mean': q.mean(),
             'q_max': q.max(),
             'q_min': q.min(),
-            'binary_accuracy': jnp.mean(next_values>0.5),
+            'q.std': q.std(),
+            'binary_accuracy': jnp.mean(jax.nn.sigmoid(next_values)>0.5),
+            'entropy': entropy.mean(),
+            'alpha_temp': alpha_temp,
+            'entropy_std': dist.entropy().std(),
+            'alpha_temp_loss': alpha_temp_loss,
         }
 
 
@@ -117,7 +135,8 @@ class ClearnSearchAgent(flax.struct.PyTreeNode):
                 qs = (qs - qs.mean(axis=1, keepdims=True)) / jnp.maximum(1e-6, qs.std(axis=1, keepdims=True))  # Normalize logits.
 
             # Softmax actions
-            dist = distrax.Categorical(logits=qs / jnp.maximum(1e-6, 1))
+            alpha_temp = jax.lax.stop_gradient(self.network.select('alpha_temp')())
+            dist = distrax.Categorical(logits=qs / jnp.maximum(1e-6, alpha_temp))
             actions = dist.sample(seed=seed)
         elif self.config['action_sampling'] == 'epsilon_greedy':
             greedy_actions = jnp.argmax(qs, axis=-1)  # B
@@ -204,6 +223,10 @@ class ClearnSearchAgent(flax.struct.PyTreeNode):
                 gc_encoder=encoders.get('actor'),
             )
 
+        if config['target_entropy'] is None:
+            config['target_entropy'] = -config['target_entropy_multiplier'] * action_dim/2
+        alpha_temp_def = LogParam()
+
         network_info = dict(
             value=(value_def, (ex_observations, ex_goals)),
             target_value=(copy.deepcopy(value_def), (ex_observations, ex_goals)),
@@ -212,6 +235,7 @@ class ClearnSearchAgent(flax.struct.PyTreeNode):
         network_info.update(
             critic=(critic_def, (ex_observations, ex_goals, ex_actions)),
             target_critic=(copy.deepcopy(critic_def), (ex_observations, ex_goals, ex_actions)),
+            alpha_temp=(alpha_temp_def, ()),
         )
         networks = {k: v[0] for k, v in network_info.items()}
         network_args = {k: v[1] for k, v in network_info.items()}
