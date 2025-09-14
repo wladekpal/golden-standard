@@ -138,15 +138,15 @@ class CRLAgent(flax.struct.PyTreeNode):
         else:
 
             def value_transform(x):
-                return x  # Both bilinear and MRN networks now return Q-values directly
-              
+                return x  
 
         if self.config['actor_loss'] == 'awr':
             # AWR loss.
             v = value_transform(self.network.select('value')(batch['observations'], batch['actor_goals']))
             # Handle MRN networks with shuffled actions
             if self.config.get('value_type') == 'mrn':
-                shuffled_actions = jax.random.permutation(rng, batch['actions'], axis=0)
+                rng, shuffle_key = jax.random.split(rng)
+                shuffled_actions = jax.random.permutation(shuffle_key, batch['actions'], axis=0)
                 q1, q2 = value_transform(
                     self.network.select('critic')(batch['observations'], batch['actor_goals'], batch['actions'], shuffled_actions=shuffled_actions)
                 )
@@ -190,7 +190,8 @@ class CRLAgent(flax.struct.PyTreeNode):
                 q_actions = jnp.clip(dist.sample(seed=rng), -1, 1)
             # Handle MRN networks with shuffled actions
             if self.config.get('value_type') == 'mrn':
-                shuffled_actions = jax.random.permutation(rng, q_actions, axis=0)
+                rng, shuffle_key = jax.random.split(rng)
+                shuffled_actions = jax.random.permutation(shuffle_key, q_actions, axis=0)
                 q1, q2 = value_transform(
                     self.network.select('critic')(batch['observations'], batch['actor_goals'], q_actions, shuffled_actions=shuffled_actions)
                 )
