@@ -413,9 +413,13 @@ class VariableQuarterGenerator(DefaultLevelGenerator):
         agent_pos = agent_pos + box_corner
 
         fields_allowed = jnp.zeros((self.grid_size, self.grid_size), dtype=jnp.bool)
-        allowed_mask = jnp.ones((self.quarter_size, self.quarter_size), dtype=jnp.bool)
-        fields_allowed = jax.lax.dynamic_update_slice(fields_allowed, allowed_mask, box_corner)
-        fields_allowed = jax.lax.dynamic_update_slice(fields_allowed, allowed_mask, target_corner)
+
+        up = jnp.minimum(box_corner[0], target_corner[0])
+        down = jnp.maximum(box_corner[0], target_corner[0]) + self.quarter_size
+        left = jnp.minimum(box_corner[1], target_corner[1])
+        right = jnp.maximum(box_corner[1], target_corner[1]) + self.quarter_size
+
+        fields_allowed = fields_allowed.at[up:down, left:right].set(1)
 
         state = BoxPushingState(
             key=state_key,
@@ -970,15 +974,15 @@ def wrap_for_eval(env):
 if __name__ == "__main__":
     env = BoxPushingEnv(
         grid_size=6,
-        number_of_boxes_max=2,
-        number_of_boxes_min=2,
-        number_of_moving_boxes_max=2,
+        number_of_boxes_max=1,
+        number_of_boxes_min=1,
+        number_of_moving_boxes_max=1,
         level_generator="variable",
         generator_special=False,
         dense_rewards=False,
         terminate_when_success=True,
         episode_length=10,
-        quarter_size=2,
+        quarter_size=4,
     )
     env = QuarterFilter(env)
     env = AutoResetWrapper(env)
