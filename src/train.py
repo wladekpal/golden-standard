@@ -200,7 +200,6 @@ def evaluate_agent_in_specific_env(agent, key, jitted_create_batch, config, name
                 f"{prefix}/contrastive_loss": loss_info["critic/contrastive_loss"],
                 f"{prefix}/cat_acc": loss_info["critic/categorical_accuracy"],
                 f"{prefix}/v_mean": loss_info["critic/v_mean"],
-                f"{prefix}/actor_loss": loss_info["actor/actor_loss"],
             }
         )
     elif config.agent.agent_name == "gciql" or config.agent.agent_name == "gciql_search":
@@ -219,6 +218,16 @@ def evaluate_agent_in_specific_env(agent, key, jitted_create_batch, config, name
                 f"{prefix}/q_mean": loss_info["critic/q_mean"],
                 f"{prefix}/q_min": loss_info["critic/q_min"],
                 f"{prefix}/q_max": loss_info["critic/q_max"],
+            }
+        )
+    elif config.agent.agent_name == "clearn_search":
+        eval_info_tmp.update(
+            {
+                f"{prefix}/critic_loss": loss_info["critic/critic_loss"],
+                f"{prefix}/q_mean": loss_info["critic/q_mean"],
+                f"{prefix}/q_min": loss_info["critic/q_min"],
+                f"{prefix}/q_max": loss_info["critic/q_max"],
+                f"{prefix}/binary_accuracy": loss_info["critic/binary_accuracy"],
             }
         )
     else:
