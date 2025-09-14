@@ -412,14 +412,15 @@ class VariableQuarterGenerator(DefaultLevelGenerator):
 
         agent_pos = agent_pos + box_corner
 
-        fields_allowed = jnp.zeros((self.grid_size, self.grid_size), dtype=jnp.bool)
-
         up = jnp.minimum(box_corner[0], target_corner[0])
         down = jnp.maximum(box_corner[0], target_corner[0]) + self.quarter_size
         left = jnp.minimum(box_corner[1], target_corner[1])
         right = jnp.maximum(box_corner[1], target_corner[1]) + self.quarter_size
 
-        fields_allowed = fields_allowed.at[up:down, left:right].set(1)
+        coords = jnp.indices((self.grid_size, self.grid_size))
+        fields_allowed = jnp.logical_and(
+            jnp.logical_and(coords[0] < down, coords[0] >= up), jnp.logical_and(coords[1] < right, coords[1] >= left)
+        )
 
         state = BoxPushingState(
             key=state_key,
@@ -982,7 +983,7 @@ if __name__ == "__main__":
         dense_rewards=False,
         terminate_when_success=True,
         episode_length=10,
-        quarter_size=4,
+        quarter_size=1,
     )
     env = QuarterFilter(env)
     env = AutoResetWrapper(env)
