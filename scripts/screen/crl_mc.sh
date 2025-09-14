@@ -57,7 +57,7 @@ do
         CUDA_VISIBLE_DEVICES=$GPU_ID uv run --active src/train.py \
         env:box-pushing \
         --agent.agent_name crl_search \
-        --exp.name norm_collection_evaluation_crl_softmax_all_moveable_no_target_entropy_mc_boxes_${number_of_boxes}_grid_${grid_size}_ep_len_${episode_length}_no_filtering \
+        --exp.name crl_te_1.38_${number_of_boxes}_grid_${grid_size}_ep_len_${episode_length}_no_filtering \
         --env.number_of_boxes_max ${number_of_boxes} \
         --env.number_of_boxes_min ${number_of_boxes} \
         --env.number_of_moving_boxes_max ${number_of_boxes} \
@@ -65,7 +65,7 @@ do
         --exp.gamma 0.99 \
         --env.episode_length ${episode_length} \
         --exp.seed ${seed} \
-        --exp.project "crl_infinite_horizon" \
+        --exp.project "action_sampling_comparison" \
         --exp.epochs 50 \
         --exp.gif_every 10 \
         --agent.alpha 0.1 \

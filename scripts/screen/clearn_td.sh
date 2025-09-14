@@ -57,7 +57,7 @@ do
         CUDA_VISIBLE_DEVICES=$GPU_ID uv run --active src/train.py \
         env:box-pushing \
         --agent.agent_name clearn_search \
-        --exp.name softmax_policy_${number_of_boxes}_grid_${grid_size}_ep_len_${episode_length}_filter_${filtering} \
+        --exp.name clearn_te_1.38_w_self_normalized_${number_of_boxes}_grid_${grid_size}_ep_len_${episode_length}_filter_${filtering} \
         --env.number_of_boxes_max ${number_of_boxes} \
         --env.number_of_boxes_min ${number_of_boxes} \
         --env.number_of_moving_boxes_max ${number_of_boxes} \
@@ -65,14 +65,15 @@ do
         --exp.gamma 0.99 \
         --env.episode_length 100 \
         --exp.seed ${seed} \
-        --exp.project "clear_search_tests" \
+        --exp.project "action_sampling_comparison" \
         --exp.epochs 50 \
         --exp.gif_every 10 \
         --agent.alpha 0.1 \
         --exp.max_replay_size 10000 \
         --exp.batch_size 256 \
         --exp.eval_special \
-        --env.level_generator quarter 
+        --env.level_generator quarter \
+        --agent.action_sampling "softmax"
         done
     done
 done
