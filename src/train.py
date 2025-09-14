@@ -199,7 +199,6 @@ def evaluate_agent_in_specific_env(agent, key, jitted_create_batch, config, name
             {
                 f"{prefix}/contrastive_loss": loss_info["critic/contrastive_loss"],
                 f"{prefix}/cat_acc": loss_info["critic/categorical_accuracy"],
-                f"{prefix}/v_mean": loss_info["critic/v_mean"],
             }
         )
     elif config.agent.agent_name == "gciql" or config.agent.agent_name == "gciql_search":

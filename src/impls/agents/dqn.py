@@ -138,12 +138,9 @@ class GCDQNAgent(flax.struct.PyTreeNode):
         qs = qs.mean(axis=1) # 6 x B
         qs = qs.transpose(1, 0) # B x 6
 
-        if self.config['action_sampling'] in ['softmax', 'norm_softmax']:
+        if self.config['action_sampling'] == 'softmax':
             # Use critic to get Q-values (use first/ensemble as appropriate). Prefer the minimum head for conservative action,
             # or average — here we average the two heads and pick argmax.
-
-            if self.config['action_sampling'] == 'norm_softmax':
-                qs = (qs - qs.mean(axis=1, keepdims=True)) / jnp.maximum(1e-6, qs.std(axis=1, keepdims=True))  # Normalize logits.
 
             # Softmax actions
             alpha_temp = jax.lax.stop_gradient(self.network.select('alpha_temp')())
