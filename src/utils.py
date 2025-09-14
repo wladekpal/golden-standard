@@ -45,11 +45,14 @@ def sample_actions_critic(
     qs = jax.lax.stop_gradient(
         jax.vmap(agent.network.select("critic"), in_axes=(None, None, 1))(observations, goals, all_actions)
     )  # 6 x 2 x B
+
+    if len(qs.shape) == 2:  # Non-ensemble.
+        qs = qs[:, None, ...]
+
     qs = qs.min(axis=1)  # 6 x B
+    qs = qs.transpose(1, 0)  # B x 6
     if isinstance(agent, CRLAgent) or isinstance(agent, CRLSearchAgent):
         qs = value_transform(qs)
-    qs = qs.transpose(1, 0)  # B x 6
-    qs = (qs - qs.mean(axis=1, keepdims=True)) / jnp.maximum(1e-6, qs.std(axis=1, keepdims=True))  # Normalize logits.
     dist = distrax.Categorical(logits=qs / jnp.maximum(1e-6, temperature))
     actions = dist.sample(seed=seed)
     return actions
