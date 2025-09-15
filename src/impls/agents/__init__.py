@@ -32,6 +32,11 @@ default_config = ml_collections.FrozenConfigDict(
             latent_dim=64, 
             value_type='bilinear',  # Value function type ('bilinear' or 'mrn').
             layer_norm=True,  # Whether to use layer normalization.
+            # MRN encoder hyperparameters
+            sa_encoder_hidden_dims=(128,),  # Hidden dimensions for state-action encoder.
+            gs_encoder_hidden_dims=(128,),  # Hidden dimensions for goal-state encoder.
+            sa_encoder_output_dim=128,  # Output dimension for state-action encoder.
+            gs_encoder_output_dim=128,  # Output dimension for goal-state encoder.
             discount=0.99,  # Discount factor.
             contrastive_loss = 'binary',
             energy_fn = 'dot',

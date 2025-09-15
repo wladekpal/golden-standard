@@ -31,25 +31,13 @@ class CRLAgent(flax.struct.PyTreeNode):
         else:
             actions = None
 
-        # Handle MRN networks with shuffled actions
-        if self.config.get('value_type') == 'mrn' and actions is not None:
-            shuffled_actions = jax.random.permutation(key, actions, axis=0)
-            v, phi, psi = self.network.select(module_name)(
-                batch['observations'],
-                batch['value_goals'],
-                actions=actions,
-                info=True,
-                params=grad_params,
-                shuffled_actions=shuffled_actions,
-            )
-        else:
-            v, phi, psi = self.network.select(module_name)(
-                batch['observations'],
-                batch['value_goals'],
-                actions=actions,
-                info=True,
-                params=grad_params,
-            )
+        v, phi, psi = self.network.select(module_name)(
+            batch['observations'],
+            batch['value_goals'],
+            actions=actions,
+            info=True,
+            params=grad_params,
+        )
         if len(phi.shape) == 2:  # Non-ensemble.
             phi = phi[None, ...]
             psi = psi[None, ...]
@@ -134,26 +122,24 @@ class CRLAgent(flax.struct.PyTreeNode):
         # Maximize log Q if actor_log_q is True (which is default).
         if self.config['actor_log_q']:
             def value_transform(x):
-                return jnp.log(jnp.maximum(x, 1e-6))
+                if self.config.get('value_type') == 'mrn':
+                    return -jnp.log(jnp.maximum(x, 1e-6))
+                else:
+                    return jnp.log(jnp.maximum(x, 1e-6))
+                    
         else:
-
             def value_transform(x):
-                return x  
+                if self.config.get('value_type') == 'mrn':
+                    return -x
+                else:
+                    return x  
 
         if self.config['actor_loss'] == 'awr':
             # AWR loss.
             v = value_transform(self.network.select('value')(batch['observations'], batch['actor_goals']))
-            # Handle MRN networks with shuffled actions
-            if self.config.get('value_type') == 'mrn':
-                rng, shuffle_key = jax.random.split(rng)
-                shuffled_actions = jax.random.permutation(shuffle_key, batch['actions'], axis=0)
-                q1, q2 = value_transform(
-                    self.network.select('critic')(batch['observations'], batch['actor_goals'], batch['actions'], shuffled_actions=shuffled_actions)
-                )
-            else:
-                q1, q2 = value_transform(
-                    self.network.select('critic')(batch['observations'], batch['actor_goals'], batch['actions'])
-                )
+            q1, q2 = value_transform(
+                self.network.select('critic')(batch['observations'], batch['actor_goals'], batch['actions'])
+            )
             q = jnp.minimum(q1, q2)
             adv = q - v
 
@@ -188,17 +174,9 @@ class CRLAgent(flax.struct.PyTreeNode):
                 q_actions = jnp.clip(dist.mode(), -1, 1)
             else:
                 q_actions = jnp.clip(dist.sample(seed=rng), -1, 1)
-            # Handle MRN networks with shuffled actions
-            if self.config.get('value_type') == 'mrn':
-                rng, shuffle_key = jax.random.split(rng)
-                shuffled_actions = jax.random.permutation(shuffle_key, q_actions, axis=0)
-                q1, q2 = value_transform(
-                    self.network.select('critic')(batch['observations'], batch['actor_goals'], q_actions, shuffled_actions=shuffled_actions)
-                )
-            else:
-                q1, q2 = value_transform(
-                    self.network.select('critic')(batch['observations'], batch['actor_goals'], q_actions)
-                )
+            q1, q2 = value_transform(
+                self.network.select('critic')(batch['observations'], batch['actor_goals'], q_actions)
+            )
             q = jnp.minimum(q1, q2)
 
             # Normalize Q values by the absolute mean to make the loss scale invariant.
@@ -358,6 +336,19 @@ class CRLAgent(flax.struct.PyTreeNode):
         elif value_type == 'mrn':
             if config['latent_dim'] % 2 != 0:
                 raise ValueError(f"For MRN value type, latent_dim must be even, got {config['latent_dim']}")
+            
+            # Create SA and GS encoders for MRN
+            from impls.utils.networks import SAEncoder, GSEncoder
+            sa_encoder = SAEncoder(
+                output_dim=config['sa_encoder_output_dim'],
+                hidden_dims=config['sa_encoder_hidden_dims'],
+                layer_norm=config['layer_norm']
+            )
+            gs_encoder = GSEncoder(
+                output_dim=config['gs_encoder_output_dim'],
+                hidden_dims=config['gs_encoder_hidden_dims'],
+                layer_norm=config['layer_norm']
+            )
                 
             if config['discrete']:
                 critic_def = GCDiscreteMRNValue(
@@ -365,8 +356,8 @@ class CRLAgent(flax.struct.PyTreeNode):
                     latent_dim=config['latent_dim'],
                     layer_norm=config['layer_norm'],
                     ensemble=True,
-                    state_encoder=encoders.get('critic_state'),
-                    goal_encoder=encoders.get('critic_goal'),
+                    sa_encoder=sa_encoder,
+                    gs_encoder=gs_encoder,
                     action_dim=action_dim,
                 )
             else:
@@ -375,8 +366,8 @@ class CRLAgent(flax.struct.PyTreeNode):
                     latent_dim=config['latent_dim'],
                     layer_norm=config['layer_norm'],
                     ensemble=True,
-                    state_encoder=encoders.get('critic_state'),
-                    goal_encoder=encoders.get('critic_goal'),
+                    sa_encoder=sa_encoder,
+                    gs_encoder=gs_encoder,
                 )
 
             if config['actor_loss'] == 'awr':
@@ -386,8 +377,7 @@ class CRLAgent(flax.struct.PyTreeNode):
                     latent_dim=config['latent_dim'],
                     layer_norm=config['layer_norm'],
                     ensemble=False,
-                    state_encoder=encoders.get('value_state'),
-                    goal_encoder=encoders.get('value_goal'),
+                    encoder=encoders.get('value_state'),  
                 )
         else:
             raise ValueError(f"Unsupported value_type: {value_type}. Supported types: 'bilinear', 'mrn'")
@@ -438,6 +428,11 @@ def get_config():
             latent_dim=64,  # Latent dimension for value function.
             value_type='bilinear',  # Value function type ('bilinear' or 'mrn').
             layer_norm=True,  # Whether to use layer normalization.
+            # MRN encoder hyperparameters
+            sa_encoder_hidden_dims=(128,),  # Hidden dimensions for state-action encoder.
+            gs_encoder_hidden_dims=(128,),  # Hidden dimensions for goal-state encoder.
+            sa_encoder_output_dim=128,  # Output dimension for state-action encoder.
+            gs_encoder_output_dim=128,  # Output dimension for goal-state encoder.
             discount=0.99,  # Discount factor.
             actor_loss='awr',  # Actor loss type ('awr' or 'ddpgbc').
             alpha=0.1,  # Temperature in AWR or BC coefficient in DDPG+BC.

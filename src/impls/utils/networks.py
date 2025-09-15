@@ -32,6 +32,32 @@ class Identity(nn.Module):
         return x
 
 
+class SAEncoder(nn.Module):
+    """State-action encoder that takes state and action and outputs a fixed-size vector."""
+    
+    output_dim: int
+    hidden_dims: Sequence[int] = (128,)
+    layer_norm: bool = True
+    
+    @nn.compact
+    def __call__(self, state, action):
+        inputs = jnp.concatenate([state, action], axis=-1)
+        return MLP((*self.hidden_dims, self.output_dim), activate_final=False, layer_norm=self.layer_norm)(inputs)
+
+
+class GSEncoder(nn.Module):
+    """Goal-state encoder that takes goal and state and outputs a fixed-size vector."""
+    
+    output_dim: int
+    hidden_dims: Sequence[int] = (128,)
+    layer_norm: bool = True
+    
+    @nn.compact
+    def __call__(self, goal, state):
+        inputs = jnp.concatenate([goal, state], axis=-1)
+        return MLP((*self.hidden_dims, self.output_dim), activate_final=False, layer_norm=self.layer_norm)(inputs)
+
+
 class MLP(nn.Module):
     """Multi-layer perceptron.
 
@@ -410,19 +436,19 @@ class GCMRNValue(nn.Module):
         hidden_dims: Hidden layer dimensions.
         latent_dim: Latent dimension.
         layer_norm: Whether to apply layer normalization.
-        encoder: Optional state/goal encoder.
         ensemble: Whether to ensemble the value function.
-        state_encoder: Optional state encoder.
-        goal_encoder: Optional goal encoder.
+        encoder: Optional state/goal encoder (used when actions=None).
+        sa_encoder: State-action encoder (required when actions provided).
+        gs_encoder: Goal-state encoder (required when actions provided).
     """
 
     hidden_dims: Sequence[int]
     latent_dim: int
     layer_norm: bool = True
-    encoder: nn.Module = None
     ensemble: bool = False
-    state_encoder: nn.Module = None
-    goal_encoder: nn.Module = None
+    encoder: nn.Module = None
+    sa_encoder: nn.Module = None
+    gs_encoder: nn.Module = None
 
     def setup(self):
         mlp_module = MLP
@@ -430,7 +456,7 @@ class GCMRNValue(nn.Module):
             mlp_module = ensemblize(mlp_module, 2)
         self.phi = mlp_module((*self.hidden_dims, self.latent_dim), activate_final=False, layer_norm=self.layer_norm)
 
-    def __call__(self, observations, goals, actions=None, is_phi=False, info=False, shuffled_actions=None):
+    def __call__(self, observations, goals, actions=None, is_phi=False, info=False):
         """Return the MRN value function.
 
         Args:
@@ -439,47 +465,34 @@ class GCMRNValue(nn.Module):
             actions: Actions (optional, for critic function).
             is_phi: Whether the inputs are already encoded by phi.
             info: Whether to additionally return the representations phi_s and phi_g.
-            shuffled_actions: Pre-shuffled actions (computed at loss level).
         """
         if is_phi:
             phi_s = observations
             phi_g = goals
         else:
-            if self.state_encoder is not None:
-                observations = self.state_encoder(observations)
-            elif self.encoder is not None:
-                observations = self.encoder(observations)
-            
-            if self.goal_encoder is not None:
-                goals = self.goal_encoder(goals)
-            elif self.encoder is not None:
-                goals = self.encoder(goals)
-            
             if actions is not None:
-                phi_s_inputs = jnp.concatenate([observations, actions], axis=-1)
-                if shuffled_actions is not None:
-                    phi_g_inputs = jnp.concatenate([goals, shuffled_actions], axis=-1)
-                else:
-                    # For initialization or when no shuffling needed
-                    phi_g_inputs = jnp.concatenate([goals, jnp.zeros_like(actions)], axis=-1)
+                # Use sa_encoder and gs_encoder when actions are provided
+                phi_s_inputs = self.sa_encoder(observations, actions)
+                phi_g_inputs = self.gs_encoder(goals, observations)
             else:
+                # Original logic for value function (no actions)
+                if self.encoder is not None:
+                    observations = self.encoder(observations)
+                    goals = self.encoder(goals)
                 phi_s_inputs = observations
                 phi_g_inputs = goals
             
             phi_s = self.phi(phi_s_inputs)
             phi_g = self.phi(phi_g_inputs)  
 
-        asym_s = phi_s[..., : self.latent_dim // 2]      # First half = asymmetric (max)
-        sym_s = phi_s[..., self.latent_dim // 2 :]       # Second half = symmetric (L2)
-        asym_g = phi_g[..., : self.latent_dim // 2]      # First half = asymmetric (max)  
-        sym_g = phi_g[..., self.latent_dim // 2 :]       # Second half = symmetric (L2)
+        sym_s = phi_s[..., : self.latent_dim // 2]       # First half = symmetric (L2)
+        sym_g = phi_g[..., : self.latent_dim // 2]       # First half = symmetric (L2)
+        asym_s = phi_s[..., self.latent_dim // 2 :]      # Second half = asymmetric (max)
+        asym_g = phi_g[..., self.latent_dim // 2 :]      # Second half = asymmetric (max)
         
-        max_component = jnp.max(jax.nn.relu(asym_s - asym_g), axis=-1)  
-        l2_component = jnp.sum((sym_s - sym_g)**2, axis=-1)         
-        
-        v =  (max_component + l2_component)
-        
-            
+        squared_dist = ((sym_s - sym_g) ** 2).sum(axis=-1)
+        quasi = jax.nn.relu((asym_s - asym_g).max(axis=-1))
+        v = jnp.sqrt(jnp.maximum(squared_dist, 1e-12)) + quasi
 
         if info:
             return v, phi_s, phi_g
@@ -492,12 +505,10 @@ class GCDiscreteMRNValue(GCMRNValue):
 
     action_dim: int = None
 
-    def __call__(self, observations, goals, actions=None, is_phi=False, info=False, shuffled_actions=None):
+    def __call__(self, observations, goals, actions=None, is_phi=False, info=False):
         if actions is not None:
             actions = jnp.eye(self.action_dim)[actions]
-        if shuffled_actions is not None:
-            shuffled_actions = jnp.eye(self.action_dim)[shuffled_actions]
-        return super().__call__(observations, goals, actions, is_phi, info, shuffled_actions)
+        return super().__call__(observations, goals, actions, is_phi, info)
 
 
 class GCIQEValue(nn.Module):
