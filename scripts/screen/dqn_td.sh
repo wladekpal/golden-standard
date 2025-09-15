@@ -3,13 +3,11 @@
 GPU_ID=$1
 grid_size=$2
 
-number_of_boxes_min=3
-number_of_boxes_max=7
 
 exclude_dirs=( ".github" ".ruff_cache" "wandb" ".vscode" ".idea" "__pycache__" ".venv" "experiments" ".git" "notebooks" "runs" "notes" ".pytest")
 
 # Experiment name
-exp_name="test_generalization_sc"
+exp_name="stich_dqn_td_grid_${grid_size}"
 
 # Create the main experiments directory if it doesn't exist
 mkdir -p ./experiments
@@ -49,33 +47,33 @@ echo "Current path: '$(pwd)'"
 
 echo "Running with grid_size: $grid_size, number_of_boxes_min: $number_of_boxes_min, number_of_boxes_max: $number_of_boxes_max"
 
-moving_boxes_max=5
 
-for seed in 1 2 3
+for seed in 1 2
 do
-    for alpha in 0.3 
+    for number_of_boxes in 4 2 3
     do
-      for bs in 128 32 256 
+      for filtering in ""
       do
         CUDA_VISIBLE_DEVICES=$GPU_ID uv run --active src/train.py \
         env:box-pushing \
-        --agent.agent_name gciql \
-        --exp.name test2_jcb_default_actor_geom_qv_env_goals_${bs}_bs_moving_boxes_${moving_boxes_max}_grid_${grid_size}_range_${number_of_boxes_min}_${number_of_boxes_max}_alpha_${alpha}_expc_${expectile} \
-        --env.number_of_boxes_max ${number_of_boxes_max} \
-        --env.number_of_boxes_min ${number_of_boxes_min} \
-        --env.number_of_moving_boxes_max ${moving_boxes_max} \
+        --agent.agent_name gcdqn \
+        --exp.name dqn_1.38_${number_of_boxes}_grid_${grid_size}_ep_len_${episode_length}_filter_${filtering} \
+        --env.number_of_boxes_max ${number_of_boxes} \
+        --env.number_of_boxes_min ${number_of_boxes} \
+        --env.number_of_moving_boxes_max ${number_of_boxes} \
         --env.grid_size ${grid_size} \
         --exp.gamma 0.99 \
         --env.episode_length 100 \
-        --exp.seed $seed \
-        --exp.project "gciql_env_goals" \
+        --exp.seed ${seed} \
+        --exp.project "action_sampling_comparison" \
         --exp.epochs 50 \
         --exp.gif_every 10 \
-        --agent.alpha ${alpha} \
+        --agent.alpha 0.1 \
         --exp.max_replay_size 10000 \
-        --agent.expectile 0.5  \
-        --agent.batch_size ${bs} \
-        --exp.eval-different-box-numbers
+        --exp.batch_size 256 \
+        --exp.use_future_and_random_goals \
+        --exp.eval_special \
+        --env.level_generator quarter 
         done
     done
 done

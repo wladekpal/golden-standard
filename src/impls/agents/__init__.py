@@ -1,3 +1,4 @@
+from impls.agents.clearn_search import ClearnSearchAgent
 from impls.agents.crl import CRLAgent
 from impls.agents.crl_search import CRLSearchAgent
 from impls.agents.dqn import GCDQNAgent
@@ -47,7 +48,9 @@ default_config = ml_collections.FrozenConfigDict(
             # Dataset hyperparameters.
             use_next_obs=False, #TODO: This is not used anymore, we should remove it 
             target_entropy_multiplier=0.5,  # Multiplier for the target entropy (used in SAC-like agents).
-            target_entropy=-1.79  # Default target entropy for SAC-like agents (-ln(6))
+            target_entropy=-1.38,  # Default target entropy for SAC-like agents (-ln(6))
+            use_discounted_mc_rewards=False,  # Whether to use discounted Monte Carlo rewards.
+            action_sampling='softmax',
         )
     )
 
@@ -85,6 +88,13 @@ def create_agent(config: ml_collections.FrozenConfigDict, example_batch: dict, s
         )
     elif config.agent_name == "gcdqn":
         agent = GCDQNAgent.create(
+            seed,
+            example_batch['observations'],
+            example_batch['actions'],
+            config,
+        )
+    elif config.agent_name == "clearn_search":
+        agent = ClearnSearchAgent.create(
             seed,
             example_batch['observations'],
             example_batch['actions'],

@@ -14,7 +14,7 @@ import jax.numpy as jnp
 from jax import random
 
 from impls.agents import create_agent
-from envs.block_moving_env import wrap_for_eval, wrap_for_training, TimeStep, GridStatesEnum
+from envs.block_moving_env import BoxPushingEnv, wrap_for_eval, wrap_for_training, TimeStep, remove_targets
 from config import ROOT_DIR
 from impls.utils.checkpoints import save_agent
 from utils import log_gif, sample_actions_critic
@@ -30,9 +30,7 @@ def collect_data(agent, key, env, num_envs, episode_length, use_targets=False, c
         state_agent = jax.lax.cond(
             use_targets,
             lambda: state.replace(),
-            lambda: state.replace(
-                grid=GridStatesEnum.remove_targets(state.grid), goal=GridStatesEnum.remove_targets(state.goal)
-            ),
+            lambda: state.replace(grid=remove_targets(state.grid), goal=remove_targets(state.goal)),
         )
 
         if critic_temp is None:
@@ -59,7 +57,7 @@ def collect_data(agent, key, env, num_envs, episode_length, use_targets=False, c
             action=actions,
             goal=state.goal,
             reward=reward,
-            success=state.success,
+            success=new_state.success,
             done=done,
             truncated=info["truncated"],
             extras=state.extras,
@@ -93,7 +91,13 @@ def get_single_pair_from_every_env(state, next_state, future_state, goal_index, 
 
 
 def create_batch(
-    timesteps, key, gamma, use_targets, use_env_goals, jitted_flatten_batch, use_discounted_mc_rewards=False
+    timesteps,
+    key,
+    gamma,
+    use_targets,
+    use_future_and_random_goals,
+    jitted_flatten_batch,
+    use_discounted_mc_rewards=False,
 ):
     batch_key, sampling_key = jax.random.split(key, 2)
     batch_keys = jax.random.split(batch_key, timesteps.grid.shape[0])
@@ -109,35 +113,48 @@ def create_batch(
         sampling_key,
     )
     if not use_targets:
-        state = state.replace(
-            grid=GridStatesEnum.remove_targets(state.grid), goal=GridStatesEnum.remove_targets(state.goal)
-        )
-        next_state = next_state.replace(grid=GridStatesEnum.remove_targets(next_state.grid))
-        future_state = future_state.replace(grid=GridStatesEnum.remove_targets(future_state.grid))
+        state = state.replace(grid=remove_targets(state.grid), goal=remove_targets(state.goal))
+        next_state = next_state.replace(grid=remove_targets(next_state.grid))
+        future_state = future_state.replace(grid=remove_targets(future_state.grid))
 
-    if use_env_goals:
-        value_goals = state.goal.reshape(state.goal.shape[0], -1)
-        actor_goals = state.goal.reshape(state.goal.shape[0], -1)
+    if use_future_and_random_goals:
+        value_goals = jnp.concatenate(
+            [
+                jnp.roll(state.grid, shift=1, axis=(0))[: state.grid.shape[0] // 2],
+                future_state.grid[state.grid.shape[0] // 2 :],
+            ],
+            axis=0,
+        )
+        actor_goals = jnp.concatenate(
+            [
+                jnp.roll(state.grid, shift=1, axis=(0))[: state.grid.shape[0] // 2],
+                future_state.grid[state.grid.shape[0] // 2 :],
+            ],
+            axis=0,
+        )
     else:
-        value_goals = future_state.grid.reshape(future_state.grid.shape[0], -1)
-        actor_goals = future_state.grid.reshape(future_state.grid.shape[0], -1)
+        value_goals = future_state.grid
+        actor_goals = future_state.grid
+
+    # TODO: this should be use only with dense reward/relabeling
+    reward = jax.vmap(BoxPushingEnv.get_reward)(state.grid, next_state.grid, value_goals)
 
     # Create valid batch
     batch = {
         "observations": state.grid.reshape(state.grid.shape[0], -1),
         "next_observations": next_state.grid.reshape(next_state.grid.shape[0], -1),
         "actions": actions.squeeze(),
-        "rewards": state.reward.reshape(state.reward.shape[0], -1).squeeze(),
-        "masks": 1.0 - state.done.reshape(state.done.shape[0], -1).squeeze(),
-        "value_goals": value_goals,
-        "actor_goals": actor_goals,
+        "rewards": reward.reshape(reward.shape[0], -1).squeeze(),
+        "masks": jnp.ones_like(reward.reshape(reward.shape[0], -1).squeeze()),  # Bootstrap always
+        "value_goals": value_goals.reshape(value_goals.shape[0], -1),
+        "actor_goals": actor_goals.reshape(actor_goals.shape[0], -1),
     }
     return batch
 
 
 def evaluate_agent_in_specific_env(agent, key, jitted_create_batch, config, name, create_gif=False, critic_temp=None):
     env_eval = create_env(config.env)
-    env_eval = wrap_for_eval(env_eval)
+    env_eval = wrap_for_eval(env_eval)  # Note: Wrap for eval is not using any quarter filtering
     env_eval.step = jax.jit(jax.vmap(env_eval.step))
     env_eval.reset = jax.jit(jax.vmap(env_eval.reset))
     prefix = f"eval{name}"
@@ -154,7 +171,7 @@ def evaluate_agent_in_specific_env(agent, key, jitted_create_batch, config, name
         use_targets=config.exp.use_targets,
         critic_temp=critic_temp,
     )
-    timesteps = jax.tree_util.tree_map(lambda x: x.swapaxes(1, 0), timesteps)
+    timesteps = jax.tree_util.tree_map(lambda x: x.swapaxes(1, 0), timesteps)  # Returns N_envs x episode_length x ...
 
     valid_batch = jitted_create_batch(timesteps, batch_key)
 
@@ -163,13 +180,18 @@ def evaluate_agent_in_specific_env(agent, key, jitted_create_batch, config, name
 
     # Compile evaluation info
     # Only consider episodes that are done
-    truncated_mask = timesteps.truncated
+    # truncated_mask = timesteps.truncated
+    done_or_trunc = timesteps.done | timesteps.truncated  # bool, (N_envs, T)
+    # first-occurrence mask: True at the first time (per row) where done_or_trunc is True
+    truncated_mask = (jnp.cumsum(done_or_trunc.astype(jnp.int32), axis=1) == 1) & done_or_trunc
+
     eval_info_tmp = {
         f"{prefix}/mean_reward": timesteps.reward[truncated_mask].mean(),
         f"{prefix}/min_reward": timesteps.reward[truncated_mask].min(),
         f"{prefix}/max_reward": timesteps.reward[truncated_mask].max(),
         f"{prefix}/mean_success": timesteps.success[truncated_mask].mean(),
         f"{prefix}/mean_boxes_on_target": info["boxes_on_target"].mean(),
+        f"{prefix}/mean_ep_len": timesteps.steps[truncated_mask].mean(),
         f"{prefix}/total_loss": loss,
     }
     if config.agent.agent_name == "crl" or config.agent.agent_name == "crl_search":
@@ -177,8 +199,6 @@ def evaluate_agent_in_specific_env(agent, key, jitted_create_batch, config, name
             {
                 f"{prefix}/contrastive_loss": loss_info["critic/contrastive_loss"],
                 f"{prefix}/cat_acc": loss_info["critic/categorical_accuracy"],
-                f"{prefix}/v_mean": loss_info["critic/v_mean"],
-                f"{prefix}/actor_loss": loss_info["actor/actor_loss"],
             }
         )
     elif config.agent.agent_name == "gciql" or config.agent.agent_name == "gciql_search":
@@ -197,6 +217,16 @@ def evaluate_agent_in_specific_env(agent, key, jitted_create_batch, config, name
                 f"{prefix}/q_mean": loss_info["critic/q_mean"],
                 f"{prefix}/q_min": loss_info["critic/q_min"],
                 f"{prefix}/q_max": loss_info["critic/q_max"],
+            }
+        )
+    elif config.agent.agent_name == "clearn_search":
+        eval_info_tmp.update(
+            {
+                f"{prefix}/critic_loss": loss_info["critic/critic_loss"],
+                f"{prefix}/q_mean": loss_info["critic/q_mean"],
+                f"{prefix}/q_min": loss_info["critic/q_min"],
+                f"{prefix}/q_max": loss_info["critic/q_max"],
+                f"{prefix}/binary_accuracy": loss_info["critic/binary_accuracy"],
             }
         )
     else:
@@ -284,8 +314,9 @@ def train(config: Config):
         create_batch,
         gamma=config.exp.gamma,
         use_targets=config.exp.use_targets,
-        use_env_goals=config.exp.use_env_goals,
+        use_future_and_random_goals=config.exp.use_future_and_random_goals,
         jitted_flatten_batch=jitted_flatten_batch,
+        use_discounted_mc_rewards=config.agent.use_discounted_mc_rewards,
     )
 
     # Create replay buffer and agent
@@ -314,15 +345,12 @@ def train(config: Config):
     }
     agent = create_agent(config.agent, example_batch, config.exp.seed)
 
-    # Training functions
     @jax.jit
     def update_step(carry, _):
         buffer_state, agent, key = carry
         key, batch_key = jax.random.split(key, 2)
         buffer_state, transitions = replay_buffer.sample(buffer_state)
-        batch = jitted_create_batch(
-            transitions, batch_key, use_discounted_mc_rewards=config.exp.use_discounted_mc_rewards
-        )
+        batch = jitted_create_batch(transitions, batch_key)
         agent, update_info = agent.update(batch)
         return (buffer_state, agent, key), update_info
 
