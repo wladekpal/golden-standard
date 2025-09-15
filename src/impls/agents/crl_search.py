@@ -9,7 +9,7 @@ import distrax
 import flax.linen as nn
 from impls.utils.encoders import GCEncoder, encoder_modules
 from impls.utils.flax_utils import ModuleDict, TrainState, nonpytree_field
-from impls.utils.networks import GCActor, GCBilinearValue, GCDiscreteActor, GCDiscreteBilinearCritic, LogParam
+from impls.utils.networks import GCActor, GCBilinearValue, GCDiscreteActor, GCDiscreteBilinearCritic, GCMRNValue, GCDiscreteMRNValue, LogParam
 
 
 
@@ -43,8 +43,36 @@ class CRLSearchAgent(flax.struct.PyTreeNode):
         if len(phi.shape) == 2:  # Non-ensemble.
             phi = phi[None, ...]
             psi = psi[None, ...]
-        logits = jnp.einsum('eik,ejk->ije', phi, psi) / jnp.sqrt(phi.shape[-1])
+
+        # Phi and psi have shape [Ensemble, Batch, Embedding]
+        if self.config['energy_fn'] == 'dot':
+            logits = jnp.einsum('eik,ejk->ije', phi, psi) / jnp.sqrt(phi.shape[-1])
+        elif self.config['energy_fn'] == 'cmd1_mrn':
+           
+            latent_dim = phi.shape[-1]
+            half_dim = latent_dim // 2
+            
+            phi_asym, phi_sym = phi[..., :half_dim], phi[..., half_dim:]
+            psi_asym, psi_sym = psi[..., :half_dim], psi[..., half_dim:]
+            
+            phi_asym_exp = phi_asym[:, :, None, :]  # [E, B, 1, D/2]
+            psi_asym_exp = psi_asym[:, None, :, :]  # [E, 1, B, D/2]
+            asym_diff = phi_asym_exp - psi_asym_exp  # [E, B, B, D/2]
+            asym_dist = jnp.max(jax.nn.relu(asym_diff), axis=-1)  # [E, B, B]
+            
+            phi_sym_exp = phi_sym[:, :, None, :]  # [E, B, 1, D/2]
+            psi_sym_exp = psi_sym[:, None, :, :]  # [E, 1, B, D/2]
+            sym_diff = phi_sym_exp - psi_sym_exp  # [E, B, B, D/2]
+            sym_dist = jnp.sum(sym_diff ** 2, axis=-1)  # [E, B, B] 
+            
+            mrn_distance = asym_dist + sym_dist  # [E, B, B]
+            logits = - mrn_distance  # [E, B, B]
+            logits = logits.swapaxes(0, 2)  # [B, B, E]
+                
+        else:
+            raise ValueError(f"Unknown energy function: {self.config['energy_fn']}")
         # logits.shape is (B, B, e) with one term for positive pair and (B - 1) terms for negative pairs in each row.
+
         I = jnp.eye(batch_size)
         contrastive_loss = jax.vmap(
             lambda _logits: optax.sigmoid_binary_cross_entropy(logits=_logits, labels=I),
@@ -54,7 +82,7 @@ class CRLSearchAgent(flax.struct.PyTreeNode):
         contrastive_loss = jnp.mean(contrastive_loss)
 
         # Compute additional statistics.
-        logits = jnp.mean(logits, axis=-1) # (B, B)
+        logits = jnp.mean(logits, axis=-1)
         correct = jnp.argmax(logits, axis=1) == jnp.argmax(I, axis=1)
         logits_pos = jnp.sum(logits * I) / jnp.sum(I)
         logits_neg = jnp.sum(logits * (1 - I)) / jnp.sum(1 - I)
@@ -74,9 +102,19 @@ class CRLSearchAgent(flax.struct.PyTreeNode):
     def actor_loss(self, batch, grad_params, rng=None):
         """Compute the actor loss (AWR or DDPG+BC)."""
         # Maximize log Q if actor_log_q is True (which is default).
-
-        def value_transform(x):
-            return jnp.log(jnp.maximum(x, 1e-6))
+        if self.config['actor_log_q']:
+            def value_transform(x):
+                if self.config.get('value_type') == 'mrn':
+                    return -jnp.log(jnp.maximum(x, 1e-6))
+                else:
+                    return jnp.log(jnp.maximum(x, 1e-6))
+                    
+        else:
+            def value_transform(x):
+                if self.config.get('value_type') == 'mrn':
+                    return -x
+                else:
+                    return x
         all_actions = jnp.tile(jnp.arange(6), (batch['observations'].shape[0], 1))  # B x 6
         qs = jax.lax.stop_gradient(jax.vmap(self.network.select('critic'), in_axes=(None, None, 1))(batch['observations'], batch['actor_goals'], all_actions)) # 6 x 2 x B
         qs = qs.min(axis=1) # 6 x B
@@ -156,8 +194,18 @@ class CRLSearchAgent(flax.struct.PyTreeNode):
         temperature=1.0,
     ):
         """Sample actions from the actor."""
-        def value_transform(x):
-            return jnp.log(jnp.maximum(x, 1e-6))
+        if self.config['actor_log_q']:
+            def value_transform(x):
+                if self.config.get('value_type') == 'mrn':
+                    return -jnp.log(jnp.maximum(x, 1e-6))
+                else:
+                    return jnp.log(jnp.maximum(x, 1e-6))
+        else:
+            def value_transform(x):
+                if self.config.get('value_type') == 'mrn':
+                    return -x
+                else:
+                    return x
         all_actions = jnp.tile(jnp.arange(6), (observations.shape[0], 1))  # B x 6
         qs = jax.lax.stop_gradient(jax.vmap(self.network.select('critic'), in_axes=(None, None, 1))(observations, goals, all_actions)) # 6 x 2 x B
         qs = qs.min(axis=1) # 6 x B
@@ -208,40 +256,93 @@ class CRLSearchAgent(flax.struct.PyTreeNode):
                 encoders['value_state'] = encoder_module()
                 encoders['value_goal'] = encoder_module()
 
-        # Define value and actor networks.
-        if config['discrete']:
-            critic_def = GCDiscreteBilinearCritic(
-                hidden_dims=config['value_hidden_dims'],
-                latent_dim=config['latent_dim'],
-                layer_norm=config['layer_norm'],
-                ensemble=True,
-                value_exp=True,
-                state_encoder=encoders.get('critic_state'),
-                goal_encoder=encoders.get('critic_goal'),
-                action_dim=action_dim,
+        # Define value and actor networks based on value_type configuration.
+        value_type = config.get('value_type', 'bilinear')  # Default to bilinear for backward compatibility
+        
+        if value_type == 'bilinear':
+            # Original bilinear value functions
+            if config['discrete']:
+                critic_def = GCDiscreteBilinearCritic(
+                    hidden_dims=config['value_hidden_dims'],
+                    latent_dim=config['latent_dim'],
+                    layer_norm=config['layer_norm'],
+                    ensemble=True,
+                    value_exp=True,
+                    state_encoder=encoders.get('critic_state'),
+                    goal_encoder=encoders.get('critic_goal'),
+                    action_dim=action_dim,
+                )
+            else:
+                critic_def = GCBilinearValue(
+                    hidden_dims=config['value_hidden_dims'],
+                    latent_dim=config['latent_dim'],
+                    layer_norm=config['layer_norm'],
+                    ensemble=True,
+                    value_exp=True,
+                    state_encoder=encoders.get('critic_state'),
+                    goal_encoder=encoders.get('critic_goal'),
+                )
+            
+            if config['actor_loss'] == 'awr':
+                # AWR requires a separate V network to compute advantages (Q - V).
+                value_def = GCBilinearValue(
+                    hidden_dims=config['value_hidden_dims'],
+                    latent_dim=config['latent_dim'],
+                    layer_norm=config['layer_norm'],
+                    ensemble=False,
+                    value_exp=True,
+                    state_encoder=encoders.get('value_state'),
+                    goal_encoder=encoders.get('value_goal'),
+                )
+                
+        elif value_type == 'mrn':
+            if config['latent_dim'] % 2 != 0:
+                raise ValueError(f"For MRN value type, latent_dim must be even, got {config['latent_dim']}")
+            
+            # Create SA and GS encoders for MRN
+            from impls.utils.networks import SAEncoder, GSEncoder
+            sa_encoder = SAEncoder(
+                output_dim=config['sa_encoder_output_dim'],
+                hidden_dims=config['sa_encoder_hidden_dims'],
+                layer_norm=config['layer_norm']
             )
-        else:
-            critic_def = GCBilinearValue(
-                hidden_dims=config['value_hidden_dims'],
-                latent_dim=config['latent_dim'],
-                layer_norm=config['layer_norm'],
-                ensemble=True,
-                value_exp=True,
-                state_encoder=encoders.get('critic_state'),
-                goal_encoder=encoders.get('critic_goal'),
+            gs_encoder = GSEncoder(
+                output_dim=config['gs_encoder_output_dim'],
+                hidden_dims=config['gs_encoder_hidden_dims'],
+                layer_norm=config['layer_norm']
             )
+                
+            if config['discrete']:
+                critic_def = GCDiscreteMRNValue(
+                    hidden_dims=config['value_hidden_dims'],
+                    latent_dim=config['latent_dim'],
+                    layer_norm=config['layer_norm'],
+                    ensemble=True,
+                    sa_encoder=sa_encoder,
+                    gs_encoder=gs_encoder,
+                    action_dim=action_dim,
+                )
+            else:
+                critic_def = GCMRNValue(
+                    hidden_dims=config['value_hidden_dims'],
+                    latent_dim=config['latent_dim'],
+                    layer_norm=config['layer_norm'],
+                    ensemble=True,
+                    sa_encoder=sa_encoder,
+                    gs_encoder=gs_encoder,
+                )
 
-        if config['actor_loss'] == 'awr':
-            # AWR requires a separate V network to compute advantages (Q - V).
-            value_def = GCBilinearValue(
-                hidden_dims=config['value_hidden_dims'],
-                latent_dim=config['latent_dim'],
-                layer_norm=config['layer_norm'],
-                ensemble=False,
-                value_exp=True,
-                state_encoder=encoders.get('value_state'),
-                goal_encoder=encoders.get('value_goal'),
-            )
+            if config['actor_loss'] == 'awr':
+                # AWR requires a separate V network to compute advantages (Q - V).
+                value_def = GCMRNValue(
+                    hidden_dims=config['value_hidden_dims'],
+                    latent_dim=config['latent_dim'],
+                    layer_norm=config['layer_norm'],
+                    ensemble=False,
+                    encoder=encoders.get('value_state'),  
+                )
+        else:
+            raise ValueError(f"Unsupported value_type: {value_type}. Supported types: 'bilinear', 'mrn'")
 
         if config['discrete']:
             actor_def = GCDiscreteActor(
@@ -291,8 +392,14 @@ def get_config():
             batch_size=256,  # Batch size.
             actor_hidden_dims=(256, 256),  # Actor network hidden dimensions.
             value_hidden_dims=(256, 256),  # Value network hidden dimensions.
-            latent_dim=64, 
+            latent_dim=64,  # Latent dimension for value function.
+            value_type='bilinear',  # Value function type ('bilinear' or 'mrn').
             layer_norm=True,  # Whether to use layer normalization.
+            # MRN encoder hyperparameters
+            sa_encoder_hidden_dims=(128,),  # Hidden dimensions for state-action encoder.
+            gs_encoder_hidden_dims=(128,),  # Hidden dimensions for goal-state encoder.
+            sa_encoder_output_dim=128,  # Output dimension for state-action encoder.
+            gs_encoder_output_dim=128,  # Output dimension for goal-state encoder.
             discount=0.99,  # Discount factor.
             actor_loss='awr',  # Actor loss type ('awr' or 'ddpgbc').
             alpha=0.1,  # Temperature in AWR or BC coefficient in DDPG+BC.
@@ -300,6 +407,8 @@ def get_config():
             const_std=True,  # Whether to use constant standard deviation for the actor.
             discrete=True,  # Whether the action space is discrete.
             encoder=ml_collections.config_dict.placeholder(str),  # Visual encoder name (None, 'impala_small', etc.).
+            # Contrastive learning hyperparameters
+            energy_fn='dot',  # Energy function type ('dot', 'l2', 'cmd1_mrn').
             # Dataset hyperparameters.
             dataset_class='GCDataset',  # Dataset class name.
             value_p_curgoal=0.0,  # Probability of using the current state as the value goal.
