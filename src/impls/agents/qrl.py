@@ -234,6 +234,7 @@ class QRLAgent(flax.struct.PyTreeNode):
                 latent_dim=config['latent_dim'],
                 layer_norm=config['layer_norm'],
                 encoder=encoders.get('value'),
+                net_arch=config['net_arch'],
             )
         elif config['quasimetric_type'] == 'iqe':
             value_def = GCIQEValue(
@@ -242,6 +243,7 @@ class QRLAgent(flax.struct.PyTreeNode):
                 dim_per_component=8,
                 layer_norm=config['layer_norm'],
                 encoder=encoders.get('value'),
+                net_arch=config['net_arch'],
             )
         else:
             raise ValueError(f'Unsupported quasimetric type: {config["quasimetric_type"]}')
@@ -258,6 +260,7 @@ class QRLAgent(flax.struct.PyTreeNode):
                 hidden_dims=config['actor_hidden_dims'],
                 action_dim=action_dim,
                 gc_encoder=encoders.get('actor'),
+                net_arch=config['net_arch'],
             )
         else:
             actor_def = GCActor(
@@ -266,6 +269,7 @@ class QRLAgent(flax.struct.PyTreeNode):
                 state_dependent_std=False,
                 const_std=config['const_std'],
                 gc_encoder=encoders.get('actor'),
+                net_arch=config['net_arch'],
             )
 
         # Define the dual lambda variable.

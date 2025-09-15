@@ -197,6 +197,7 @@ class ClearnSearchAgent(flax.struct.PyTreeNode):
                 ensemble=True,
                 gc_encoder=encoders.get('critic'),
                 action_dim=action_dim,
+                net_arch=config['net_arch'],
             )
         else:
             critic_def = GCValue(
@@ -204,12 +205,14 @@ class ClearnSearchAgent(flax.struct.PyTreeNode):
                 layer_norm=config['layer_norm'],
                 ensemble=True,
                 gc_encoder=encoders.get('critic'),
+                net_arch=config['net_arch'],
             )
         if config['discrete']:
             actor_def = GCDiscreteActor(
                 hidden_dims=config['actor_hidden_dims'],
                 action_dim=action_dim,
                 gc_encoder=encoders.get('actor'),
+                net_arch=config['net_arch'],
             )
         else:
             actor_def = GCActor(
@@ -218,6 +221,7 @@ class ClearnSearchAgent(flax.struct.PyTreeNode):
                 state_dependent_std=False,
                 const_std=config['const_std'],
                 gc_encoder=encoders.get('actor'),
+                net_arch=config['net_arch'],
             )
 
         if config['target_entropy'] is None:

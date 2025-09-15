@@ -214,6 +214,7 @@ class CRLSearchAgent(flax.struct.PyTreeNode):
                 state_encoder=encoders.get('critic_state'),
                 goal_encoder=encoders.get('critic_goal'),
                 action_dim=action_dim,
+                net_arch=config['net_arch'],
             )
         else:
             critic_def = GCBilinearValue(
@@ -224,6 +225,7 @@ class CRLSearchAgent(flax.struct.PyTreeNode):
                 value_exp=True,
                 state_encoder=encoders.get('critic_state'),
                 goal_encoder=encoders.get('critic_goal'),
+                net_arch=config['net_arch'],
             )
 
         if config['actor_loss'] == 'awr':
@@ -236,6 +238,7 @@ class CRLSearchAgent(flax.struct.PyTreeNode):
                 value_exp=True,
                 state_encoder=encoders.get('value_state'),
                 goal_encoder=encoders.get('value_goal'),
+                net_arch=config['net_arch'],
             )
 
         if config['discrete']:
@@ -243,6 +246,7 @@ class CRLSearchAgent(flax.struct.PyTreeNode):
                 hidden_dims=config['actor_hidden_dims'],
                 action_dim=action_dim,
                 gc_encoder=encoders.get('actor'),
+                net_arch=config['net_arch'],
             )
         else:
             actor_def = GCActor(
@@ -251,6 +255,7 @@ class CRLSearchAgent(flax.struct.PyTreeNode):
                 state_dependent_std=False,
                 const_std=config['const_std'],
                 gc_encoder=encoders.get('actor'),
+                net_arch=config['net_arch'],
             )
 
         if config['target_entropy'] is None:

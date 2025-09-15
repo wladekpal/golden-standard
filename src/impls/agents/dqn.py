@@ -191,6 +191,7 @@ class GCDQNAgent(flax.struct.PyTreeNode):
             ensemble=True,
             gc_encoder=encoders.get('critic'),
             action_dim=action_dim,
+            net_arch=config['net_arch'],
         )
 
         # Keep dummy value/actor defs to minimize code changes (they won't be used in training).
@@ -199,11 +200,13 @@ class GCDQNAgent(flax.struct.PyTreeNode):
             layer_norm=config['layer_norm'],
             ensemble=False,
             gc_encoder=None,
+            net_arch=config['net_arch'],
         )
         actor_def = GCDiscreteActor(
             hidden_dims=config['actor_hidden_dims'],
             action_dim=action_dim,
             gc_encoder=None,
+            net_arch=config['net_arch'],
         )
         
         if config['target_entropy'] is None:
