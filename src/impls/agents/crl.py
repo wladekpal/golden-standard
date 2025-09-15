@@ -387,6 +387,7 @@ class CRLAgent(flax.struct.PyTreeNode):
                 hidden_dims=config['actor_hidden_dims'],
                 action_dim=action_dim,
                 gc_encoder=encoders.get('actor'),
+                net_arch=config['net_arch'],
             )
         else:
             actor_def = GCActor(
@@ -395,6 +396,7 @@ class CRLAgent(flax.struct.PyTreeNode):
                 state_dependent_std=False,
                 const_std=config['const_std'],
                 gc_encoder=encoders.get('actor'),
+                net_arch=config['net_arch'],
             )
 
         network_info = dict(

@@ -9,7 +9,7 @@ import distrax
 import flax.linen as nn
 from impls.utils.encoders import GCEncoder, encoder_modules
 from impls.utils.flax_utils import ModuleDict, TrainState, nonpytree_field
-from impls.utils.networks import GCActor, GCBilinearValue, GCDiscreteActor, GCDiscreteBilinearCritic, LogParam
+from impls.utils.networks import GCActor, GCDiscreteActor, GCMRNValue, GCDiscreteMRNValue, LogParam
 
 
 
@@ -39,7 +39,28 @@ class CRLSearchAgent(flax.struct.PyTreeNode):
         if len(phi.shape) == 2:  # Non-ensemble.
             phi = phi[None, ...]
             psi = psi[None, ...]
-        logits = jnp.einsum('eik,ejk->ije', phi, psi) / jnp.sqrt(phi.shape[-1])
+
+        # MRN contrastive loss using cmd1_mrn energy function
+        latent_dim = phi.shape[-1]
+        half_dim = latent_dim // 2
+        
+        phi_asym, phi_sym = phi[..., :half_dim], phi[..., half_dim:]
+        psi_asym, psi_sym = psi[..., :half_dim], psi[..., half_dim:]
+        
+        phi_asym_exp = phi_asym[:, :, None, :]  # [E, B, 1, D/2]
+        psi_asym_exp = psi_asym[:, None, :, :]  # [E, 1, B, D/2]
+        asym_diff = phi_asym_exp - psi_asym_exp  # [E, B, B, D/2]
+        asym_dist = jnp.max(jax.nn.relu(asym_diff), axis=-1)  # [E, B, B]
+        
+        phi_sym_exp = phi_sym[:, :, None, :]  # [E, B, 1, D/2]
+        psi_sym_exp = psi_sym[:, None, :, :]  # [E, 1, B, D/2]
+        sym_diff = phi_sym_exp - psi_sym_exp  # [E, B, B, D/2]
+        sym_dist = jnp.sum(sym_diff ** 2, axis=-1)  # [E, B, B] 
+        
+        mrn_distance = asym_dist + sym_dist  # [E, B, B]
+        logits = - mrn_distance  # [E, B, B]
+        logits = logits.swapaxes(0, 2)  # [B, B, E]
+        
         # logits.shape is (B, B, e) with one term for positive pair and (B - 1) terms for negative pairs in each row.
         I = jnp.eye(batch_size)
         contrastive_loss = jax.vmap(
@@ -57,7 +78,7 @@ class CRLSearchAgent(flax.struct.PyTreeNode):
 
         # Update target entropy
         def value_transform(x):
-            return jnp.log(jnp.maximum(x, 1e-6))
+            return -jnp.log(jnp.maximum(x, 1e-6))
         
         all_actions = jnp.tile(jnp.arange(6), (batch['observations'].shape[0], 1))  # B x 6
         qs = jax.lax.stop_gradient(
@@ -132,7 +153,7 @@ class CRLSearchAgent(flax.struct.PyTreeNode):
             raise NotImplementedError("ClearnSearchAgent.sample_actions supports only discrete action spaces.")
         
         def value_transform(x):
-            return jnp.log(jnp.maximum(x, 1e-6))
+            return -jnp.log(jnp.maximum(x, 1e-6))
         
 
         all_actions = jnp.tile(jnp.arange(6), (observations.shape[0], 1))  # B x 6
@@ -203,42 +224,51 @@ class CRLSearchAgent(flax.struct.PyTreeNode):
                 encoders['value_state'] = encoder_module()
                 encoders['value_goal'] = encoder_module()
 
-        # Define value and actor networks.
+        # Define MRN networks only
+        if config['latent_dim'] % 2 != 0:
+            raise ValueError(f"For MRN value type, latent_dim must be even, got {config['latent_dim']}")
+        
+        # Create SA and GS encoders for MRN
+        from impls.utils.networks import SAEncoder, GSEncoder
+        sa_encoder = SAEncoder(
+            output_dim=config['sa_encoder_output_dim'],
+            hidden_dims=config['sa_encoder_hidden_dims'],
+            layer_norm=config['layer_norm']
+        )
+        gs_encoder = GSEncoder(
+            output_dim=config['gs_encoder_output_dim'],
+            hidden_dims=config['gs_encoder_hidden_dims'],
+            layer_norm=config['layer_norm']
+        )
+            
         if config['discrete']:
-            critic_def = GCDiscreteBilinearCritic(
+            critic_def = GCDiscreteMRNValue(
                 hidden_dims=config['value_hidden_dims'],
                 latent_dim=config['latent_dim'],
                 layer_norm=config['layer_norm'],
                 ensemble=True,
-                value_exp=True,
-                state_encoder=encoders.get('critic_state'),
-                goal_encoder=encoders.get('critic_goal'),
+                sa_encoder=sa_encoder,
+                gs_encoder=gs_encoder,
                 action_dim=action_dim,
-                net_arch=config['net_arch'],
             )
         else:
-            critic_def = GCBilinearValue(
+            critic_def = GCMRNValue(
                 hidden_dims=config['value_hidden_dims'],
                 latent_dim=config['latent_dim'],
                 layer_norm=config['layer_norm'],
                 ensemble=True,
-                value_exp=True,
-                state_encoder=encoders.get('critic_state'),
-                goal_encoder=encoders.get('critic_goal'),
-                net_arch=config['net_arch'],
+                sa_encoder=sa_encoder,
+                gs_encoder=gs_encoder,
             )
 
         if config['actor_loss'] == 'awr':
             # AWR requires a separate V network to compute advantages (Q - V).
-            value_def = GCBilinearValue(
+            value_def = GCMRNValue(
                 hidden_dims=config['value_hidden_dims'],
                 latent_dim=config['latent_dim'],
                 layer_norm=config['layer_norm'],
                 ensemble=False,
-                value_exp=True,
-                state_encoder=encoders.get('value_state'),
-                goal_encoder=encoders.get('value_goal'),
-                net_arch=config['net_arch'],
+                encoder=encoders.get('value_state'),  
             )
 
         if config['discrete']:
@@ -286,13 +316,18 @@ def get_config():
     config = ml_collections.FrozenConfigDict(
         dict(
             # Agent hyperparameters.
-            agent_name='crl_search',  # Agent name.
+            agent_name='crl_mrn_search',  # Agent name.
             lr=3e-4,  # Learning rate.
             batch_size=256,  # Batch size.
             actor_hidden_dims=(256, 256),  # Actor network hidden dimensions.
             value_hidden_dims=(256, 256),  # Value network hidden dimensions.
-            latent_dim=64, 
+            latent_dim=64,  # Latent dimension for value function.
             layer_norm=True,  # Whether to use layer normalization.
+            # MRN encoder hyperparameters
+            sa_encoder_hidden_dims=(128,),  # Hidden dimensions for state-action encoder.
+            gs_encoder_hidden_dims=(128,),  # Hidden dimensions for goal-state encoder.
+            sa_encoder_output_dim=128,  # Output dimension for state-action encoder.
+            gs_encoder_output_dim=128,  # Output dimension for goal-state encoder.
             discount=0.99,  # Discount factor.
             actor_loss='awr',  # Actor loss type ('awr' or 'ddpgbc').
             alpha=0.1,  # Temperature in AWR or BC coefficient in DDPG+BC.
@@ -315,6 +350,7 @@ def get_config():
             frame_stack=ml_collections.config_dict.placeholder(int),  # Number of frames to stack.
             target_entropy_multiplier=0.5,  # Multiplier for the target entropy (used in SAC-like agents), when target_entropy not set
             target_entropy=-jnp.log(6),  # Target entropy (None for automatic tuning).
+            action_sampling='softmax',  # Action sampling method ('softmax' or 'epsilon_greedy').
         )
     )
     return config
