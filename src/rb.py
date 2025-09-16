@@ -205,14 +205,19 @@ def segment_ids_per_row(x: jnp.ndarray) -> jnp.ndarray:
 
 
 def relabel_based_on_goal(transition, goal_to_relabel):
-    grid = transition.grids  # (seq_len, grid_size, grid_size)
+    grid = transition.grid  # (seq_len, grid_size, grid_size)
 
     # We roll states, because we want the future state to be equal to goal
-    next_grid = jnp.roll(grid, -1)
-    rewards = BoxPushingEnv.get_reward(next_grid, next_grid, goal_to_relabel.unsqueeze(0))
+    next_grid = jnp.roll(grid, -1, axis=0)
+
+    next_grid = jax.vmap(remove_targets, in_axes=(0))(next_grid)
+    goal_to_relabel = remove_targets(goal_to_relabel)
+
+    reward_fn = jax.vmap(BoxPushingEnv.get_reward, in_axes=(0, 0, None))
+    rewards = reward_fn(next_grid, next_grid, goal_to_relabel)
 
     # Just to make sure we set reward at start state to 0 (because of roll)
-    rewards = rewards[-1].set(0)
+    rewards = rewards.at[-1].set(0)
     rewards = rewards.astype(jnp.float32)
 
     return rewards
