@@ -215,9 +215,7 @@ def relabel_based_on_goal(transition, goal_to_relabel):
     rewards = rewards[-1].set(0)
     rewards = rewards.astype(jnp.float32)
 
-    new_transitions = transition.replace(value_goals=goal_to_relabel, rewards=rewards)
-
-    return new_transitions
+    return rewards
 
 
 @jax.jit
@@ -230,7 +228,6 @@ def get_single_pair_from_every_env(state, next_state, future_state, goal_index, 
     """Sample two random indices and concatenate the results."""
 
     def single_batch_fn(key):
-        print(state.grid.shape)
         random_indices = jax.random.randint(key, (1,), minval=0, maxval=state.grid.shape[0])
         state_single = extract_at_indices(state, random_indices)  # (batch_size, grid_size, grid_size)
         next_state_single = extract_at_indices(next_state, random_indices)  # (batch_size, grid_size, grid_size)
@@ -246,12 +243,6 @@ def flatten_batch(gamma, get_mc_discounted_rewards, use_targets, transition, rol
     # Because it's vmaped transition.obs.shape is of shape (episode_len, obs_dim)
 
     sample_key_1, sample_key_2, key_3 = jax.random.split(sample_key, 3)
-
-    if get_mc_discounted_rewards:
-        rewards = transition.reward
-        steps = transition.steps
-        discounted_rewards = get_discounted_rewards(steps.squeeze(), rewards.squeeze(), gamma)
-        transition = transition.replace(reward=discounted_rewards)
 
     seq_len = transition.grid.shape[0]
     arrangement = jnp.arange(seq_len)
@@ -320,7 +311,15 @@ def flatten_batch(gamma, get_mc_discounted_rewards, use_targets, transition, rol
     value_goals = goals
     actor_goals = goals
 
-    reward = BoxPushingEnv.get_reward(state.grid, next_state.grid, value_goals)
+    if get_mc_discounted_rewards:
+        relabeled_rewards = relabel_based_on_goal(transition, value_goals)
+        steps = transition.steps
+        discounted_rewards = get_discounted_rewards(steps.squeeze(), relabeled_rewards.squeeze(), gamma)
+        # It is important that this is sample_key_2 - the same used in get_single_pair_from_every_env
+        random_indices = jax.random.randint(sample_key_2, (1,), minval=0, maxval=state.grid.shape[0])
+        reward = extract_at_indices(discounted_rewards, random_indices)
+    else:
+        reward = BoxPushingEnv.get_reward(state.grid, next_state.grid, value_goals)
 
     return state, actions, next_state, value_goals, actor_goals, reward
 
