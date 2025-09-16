@@ -21,7 +21,7 @@ def log_gif(original_env, episode_length, prefix_gif, timesteps):
     anim = animation.FuncAnimation(fig, animate, frames=episode_length, interval=80, repeat=False)
 
     # Save as GIF
-    gif_path = "/tmp/block_moving_epoch.gif"
+    gif_path = "block_moving_epoch.gif"
     anim.save(gif_path, writer="pillow")
     plt.close()
 

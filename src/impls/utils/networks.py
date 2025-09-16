@@ -32,6 +32,32 @@ class Identity(nn.Module):
         return x
 
 
+class SAEncoder(nn.Module):
+    """State-action encoder that takes state and action and outputs a fixed-size vector."""
+    
+    output_dim: int
+    hidden_dims: Sequence[int] = (128,)
+    layer_norm: bool = True
+    
+    @nn.compact
+    def __call__(self, state, action):
+        inputs = jnp.concatenate([state, action], axis=-1)
+        return MLP((*self.hidden_dims, self.output_dim), activate_final=False, layer_norm=self.layer_norm)(inputs)
+
+
+class GSEncoder(nn.Module):
+    """Goal-state encoder that takes goal and state and outputs a fixed-size vector."""
+    
+    output_dim: int
+    hidden_dims: Sequence[int] = (128,)
+    layer_norm: bool = True
+    
+    @nn.compact
+    def __call__(self, goal, state):
+        inputs = jnp.concatenate([goal, state], axis=-1)
+        return MLP((*self.hidden_dims, self.output_dim), activate_final=False, layer_norm=self.layer_norm)(inputs)
+
+
 class MLP(nn.Module):
     """Multi-layer perceptron.
 
@@ -57,6 +83,7 @@ class MLP(nn.Module):
                 x = self.activations(x)
                 if self.layer_norm:
                     x = nn.LayerNorm()(x)
+            
         return x
 
 lecun_unfirom = nn.initializers.variance_scaling(1/3, "fan_in", "uniform")
@@ -472,25 +499,33 @@ class GCMRNValue(nn.Module):
         hidden_dims: Hidden layer dimensions.
         latent_dim: Latent dimension.
         layer_norm: Whether to apply layer normalization.
-        encoder: Optional state/goal encoder.
+        ensemble: Whether to ensemble the value function.
+        encoder: Optional state/goal encoder (used when actions=None).
+        sa_encoder: State-action encoder (required when actions provided).
+        gs_encoder: Goal-state encoder (required when actions provided).
     """
 
     hidden_dims: Sequence[int]
     latent_dim: int
     layer_norm: bool = True
+    ensemble: bool = False
     encoder: nn.Module = None
-    net_arch: str = 'mlp'
+    sa_encoder: nn.Module = None
+    gs_encoder: nn.Module = None
 
     def setup(self):
-        net = create_network(self.net_arch)
-        self.phi = net((*self.hidden_dims, self.latent_dim), activate_final=False, layer_norm=self.layer_norm)
+        mlp_module = MLP
+        if self.ensemble:
+            mlp_module = ensemblize(mlp_module, 2)
+        self.phi = mlp_module((*self.hidden_dims, self.latent_dim), activate_final=False, layer_norm=self.layer_norm)
 
-    def __call__(self, observations, goals, is_phi=False, info=False):
+    def __call__(self, observations, goals, actions=None, is_phi=False, info=False):
         """Return the MRN value function.
 
         Args:
             observations: Observations.
             goals: Goals.
+            actions: Actions (optional, for critic function).
             is_phi: Whether the inputs are already encoded by phi.
             info: Whether to additionally return the representations phi_s and phi_g.
         """
@@ -498,16 +533,26 @@ class GCMRNValue(nn.Module):
             phi_s = observations
             phi_g = goals
         else:
-            if self.encoder is not None:
-                observations = self.encoder(observations)
-                goals = self.encoder(goals)
-            phi_s = self.phi(observations)
-            phi_g = self.phi(goals)
+            if actions is not None:
+                # Use sa_encoder and gs_encoder when actions are provided
+                phi_s_inputs = self.sa_encoder(observations, actions)
+                phi_g_inputs = self.gs_encoder(goals, observations)
+            else:
+                # Original logic for value function (no actions)
+                if self.encoder is not None:
+                    observations = self.encoder(observations)
+                    goals = self.encoder(goals)
+                phi_s_inputs = observations
+                phi_g_inputs = goals
+            
+            phi_s = self.phi(phi_s_inputs)
+            phi_g = self.phi(phi_g_inputs)  
 
-        sym_s = phi_s[..., : self.latent_dim // 2]
-        sym_g = phi_g[..., : self.latent_dim // 2]
-        asym_s = phi_s[..., self.latent_dim // 2 :]
-        asym_g = phi_g[..., self.latent_dim // 2 :]
+        sym_s = phi_s[..., : self.latent_dim // 2]       # First half = symmetric (L2)
+        sym_g = phi_g[..., : self.latent_dim // 2]       # First half = symmetric (L2)
+        asym_s = phi_s[..., self.latent_dim // 2 :]      # Second half = asymmetric (max)
+        asym_g = phi_g[..., self.latent_dim // 2 :]      # Second half = asymmetric (max)
+        
         squared_dist = ((sym_s - sym_g) ** 2).sum(axis=-1)
         quasi = jax.nn.relu((asym_s - asym_g).max(axis=-1))
         v = jnp.sqrt(jnp.maximum(squared_dist, 1e-12)) + quasi
@@ -516,6 +561,17 @@ class GCMRNValue(nn.Module):
             return v, phi_s, phi_g
         else:
             return v
+
+
+class GCDiscreteMRNValue(GCMRNValue):
+    """Goal-conditioned MRN value function for discrete actions."""
+
+    action_dim: int = None
+
+    def __call__(self, observations, goals, actions=None, is_phi=False, info=False):
+        if actions is not None:
+            actions = jnp.eye(self.action_dim)[actions]
+        return super().__call__(observations, goals, actions, is_phi, info)
 
 
 class GCIQEValue(nn.Module):

@@ -1,6 +1,7 @@
 from impls.agents.clearn_search import ClearnSearchAgent
 from impls.agents.crl import CRLAgent
 from impls.agents.crl_search import CRLSearchAgent
+from impls.agents.crl_mrn_search import CRLSearchAgent as CRLMRNSearchAgent
 from impls.agents.dqn import GCDQNAgent
 from impls.agents.gcbc import GCBCAgent
 from impls.agents.gciql import GCIQLAgent
@@ -13,6 +14,8 @@ import ml_collections
 
 agents = dict(
     crl=CRLAgent,
+    crl_search=CRLSearchAgent,
+    crl_mrn_search=CRLMRNSearchAgent,
     gcbc=GCBCAgent,
     gciql=GCIQLAgent,
     gcivl=GCIVLAgent,
@@ -23,7 +26,7 @@ agents = dict(
 
 
 default_config = ml_collections.FrozenConfigDict(
-        dict(
+    dict(
             # Agent hyperparameters.
             agent_name='crl',  # Agent name.
             lr=3e-4,  # Learning rate.
@@ -33,6 +36,11 @@ default_config = ml_collections.FrozenConfigDict(
             latent_dim=64,
             net_arch='mlp',
             layer_norm=True,  # Whether to use layer normalization.
+            # MRN encoder hyperparameters
+            sa_encoder_hidden_dims=(128,),  # Hidden dimensions for state-action encoder.
+            gs_encoder_hidden_dims=(128,),  # Hidden dimensions for goal-state encoder.
+            sa_encoder_output_dim=128,  # Output dimension for state-action encoder.
+            gs_encoder_output_dim=128,  # Output dimension for goal-state encoder.
             discount=0.99,  # Discount factor.
             contrastive_loss = 'binary',
             energy_fn = 'dot',
@@ -66,6 +74,14 @@ def create_agent(config: ml_collections.FrozenConfigDict, example_batch: dict, s
         )
     elif config.agent_name == "crl_search":
         agent = CRLSearchAgent.create(
+            seed,
+            example_batch['observations'],
+            example_batch['actions'],
+            config,
+            example_batch['value_goals'],
+        )
+    elif config.agent_name == "crl_mrn_search":
+        agent = CRLMRNSearchAgent.create(
             seed,
             example_batch['observations'],
             example_batch['actions'],

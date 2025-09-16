@@ -194,7 +194,7 @@ def evaluate_agent_in_specific_env(agent, key, jitted_create_batch, config, name
         f"{prefix}/mean_ep_len": timesteps.steps[truncated_mask].mean(),
         f"{prefix}/total_loss": loss,
     }
-    if config.agent.agent_name == "crl" or config.agent.agent_name == "crl_search":
+    if config.agent.agent_name == "crl" or config.agent.agent_name == "crl_search" or config.agent.agent_name == "crl_mrn_search":
         eval_info_tmp.update(
             {
                 f"{prefix}/contrastive_loss": loss_info["critic/contrastive_loss"],
