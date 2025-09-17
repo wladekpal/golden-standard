@@ -243,10 +243,12 @@ def evaluate_agent(agent, key, jitted_create_batch, epoch, config):
 
 def train(config: Config):
     # Create dirs, init wandb
+    wandb_config = copy.deepcopy(config)
+    wandb_config.agent = dict(wandb_config.agent)
     wandb.init(
         project=config.exp.project,
         name=config.exp.name,
-        config=config,
+        config=wandb_config,
         entity=config.exp.entity,
         mode=config.exp.mode,
     )

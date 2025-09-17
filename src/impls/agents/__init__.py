@@ -51,6 +51,7 @@ default_config = ml_collections.FrozenConfigDict(
             target_entropy=-1.38,  # Default target entropy for SAC-like agents (-ln(6))
             use_discounted_mc_rewards=False,  # Whether to use discounted Monte Carlo rewards.
             action_sampling='softmax',
+            is_td=False,
         )
     )
 

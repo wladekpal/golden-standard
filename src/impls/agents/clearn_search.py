@@ -19,31 +19,41 @@ class ClearnSearchAgent(flax.struct.PyTreeNode):
     config: Any = nonpytree_field()
 
     def critic_loss(self, batch, grad_params, rng=None):
-        next_values = self.network.select('critic')(
-            batch['observations'], batch['next_observations'], batch['actions'], params=grad_params
-        )
+        gamma = self.config['discount']
 
         rolled_goals = jnp.roll(batch['next_observations'], shift=1, axis=0)
-        future_values = self.network.select('critic')(
+        random_values = self.network.select('critic')(
             batch['observations'], rolled_goals, batch['actions'], params=grad_params
         )
+        obj_neg = jax.nn.log_sigmoid(-random_values)
+        
+        if self.config['is_td']:
+            next_values = self.network.select('critic')(
+               batch['observations'], batch['next_observations'], batch['actions'], params=grad_params
+            )
+            obj_pos = jax.nn.log_sigmoid(next_values)
 
-        next_actions = self.sample_actions(batch['next_observations'], rolled_goals, rng)
+            next_actions = self.sample_actions(batch['next_observations'], rolled_goals, rng)
+            w = self.network.select('target_critic')(
+                batch['next_observations'], rolled_goals, next_actions,
+            )
+            w = jax.lax.stop_gradient(w)
+            w = jnp.clip(w, min=-10, max=20)
+            obj_c = jnp.min(jnp.exp(w), axis=0, keepdims=True) / jnp.mean(jnp.exp(w)) * jax.nn.log_sigmoid(random_values)
 
-        gamma = self.config['discount']
-        w = self.network.select('target_critic')(
-            batch['next_observations'], rolled_goals, next_actions,
-        )
-        w = jax.lax.stop_gradient(w)
-        w = jnp.clip(w, min=-10, max=20)
+            critic_loss = -jnp.mean(
+                (1 - gamma) * obj_pos
+                + obj_neg
+                + gamma * obj_c
+            )
+        else:
+            future_values = self.network.select('critic')(
+                batch['observations'], batch['value_goals'], batch['actions'], params=grad_params
+            )
+            obj_pos = jax.nn.log_sigmoid(future_values)
+            critic_loss = -jnp.mean(obj_pos + obj_neg)
 
-        critic_loss = -jnp.mean(
-            (1 - gamma) * jax.nn.log_sigmoid(next_values)
-            + jax.nn.log_sigmoid(-future_values)
-            + gamma * jnp.mean(jnp.exp(w), axis=0, keepdims=True) / jnp.mean(jnp.exp(w)) * jax.nn.log_sigmoid(future_values)
-        )
-
-        q = future_values
+        q = random_values
 
         # Update target entropy
         all_actions = jnp.tile(jnp.arange(6), (batch['observations'].shape[0], 1))  # B x 6
@@ -67,7 +77,6 @@ class ClearnSearchAgent(flax.struct.PyTreeNode):
             'q_max': q.max(),
             'q_min': q.min(),
             'q.std': q.std(),
-            'binary_accuracy': jnp.mean(jax.nn.sigmoid(next_values)>0.5),
             'entropy': entropy.mean(),
             'alpha_temp': alpha_temp,
             'entropy_std': dist.entropy().std(),
