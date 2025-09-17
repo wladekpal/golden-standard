@@ -7,6 +7,7 @@ import ml_collections
 import optax
 import distrax
 import flax.linen as nn
+from functools import partial
 from impls.utils.encoders import GCEncoder, encoder_modules
 from impls.utils.flax_utils import ModuleDict, TrainState, nonpytree_field
 from impls.utils.networks import GCActor, GCBilinearValue, GCDiscreteActor, GCDiscreteBilinearCritic, LogParam
@@ -117,13 +118,13 @@ class CRLSearchAgent(flax.struct.PyTreeNode):
 
         return self.replace(network=new_network, rng=new_rng), info
 
-    @jax.jit
+    @partial(jax.jit, static_argnames=("evaluation",))
     def sample_actions(
         self,
         observations,
         goals=None,
         seed=None,
-        temperature=1.0,
+        evaluation=False,
     ):
         """
         Returns integer action indices. Continuous actions are not supported here.
@@ -140,6 +141,12 @@ class CRLSearchAgent(flax.struct.PyTreeNode):
         qs = qs.mean(axis=1) # 6 x B
         qs = value_transform(qs)
         qs = qs.transpose(1, 0) # B x 6
+
+        if evaluation:
+            actions = jnp.argmax(qs, axis=-1)
+            return actions
+
+        
         
         if self.config['action_sampling'] == 'softmax':
             # Use critic to get Q-values (use first/ensemble as appropriate). Prefer the minimum head for conservative action,

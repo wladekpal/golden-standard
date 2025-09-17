@@ -17,11 +17,11 @@ from impls.agents import create_agent
 from envs.block_moving_env import BoxPushingEnv, wrap_for_eval, wrap_for_training, TimeStep, remove_targets
 from config import ROOT_DIR
 from impls.utils.checkpoints import save_agent
-from utils import log_gif, sample_actions_critic
+from utils import log_gif
 
 
 @functools.partial(jax.jit, static_argnums=(2, 3, 4, 5, 6))
-def collect_data(agent, key, env, num_envs, episode_length, use_targets=False, critic_temp=None):
+def collect_data(agent, key, env, num_envs, episode_length, use_targets=False, evaluation=False):
     def step_fn(carry, step_num):
         state, info, key = carry
         key, sample_key = jax.random.split(key)
@@ -33,18 +33,12 @@ def collect_data(agent, key, env, num_envs, episode_length, use_targets=False, c
             lambda: state.replace(grid=remove_targets(state.grid), goal=remove_targets(state.goal)),
         )
 
-        if critic_temp is None:
-            actions = agent.sample_actions(
-                state_agent.grid.reshape(num_envs, -1), state_agent.goal.reshape(num_envs, -1), seed=sample_key
-            )
-        else:
-            actions = sample_actions_critic(
-                agent,
-                state_agent.grid.reshape(num_envs, -1),
-                state_agent.goal.reshape(num_envs, -1),
-                seed=sample_key,
-                temperature=critic_temp,
-            )
+        actions = agent.sample_actions(
+            state_agent.grid.reshape(num_envs, -1),
+            state_agent.goal.reshape(num_envs, -1),
+            seed=sample_key,
+            evaluation=evaluation,
+        )
 
         new_state, reward, done, info = env.step(state, actions)
         timestep = TimeStep(
@@ -169,7 +163,7 @@ def evaluate_agent_in_specific_env(agent, key, jitted_create_batch, config, name
         config.exp.num_envs,
         config.env.episode_length,
         use_targets=config.exp.use_targets,
-        critic_temp=critic_temp,
+        evaluation=True,
     )
     timesteps = jax.tree_util.tree_map(lambda x: x.swapaxes(1, 0), timesteps)  # Returns N_envs x episode_length x ...
 
@@ -226,7 +220,6 @@ def evaluate_agent_in_specific_env(agent, key, jitted_create_batch, config, name
                 f"{prefix}/q_mean": loss_info["critic/q_mean"],
                 f"{prefix}/q_min": loss_info["critic/q_min"],
                 f"{prefix}/q_max": loss_info["critic/q_max"],
-                f"{prefix}/binary_accuracy": loss_info["critic/binary_accuracy"],
             }
         )
     else:
