@@ -321,7 +321,7 @@ def flatten_batch(gamma, get_mc_discounted_rewards, use_targets, transition, rol
         steps = transition.steps
         discounted_rewards = get_discounted_rewards(steps.squeeze(), relabeled_rewards.squeeze(), gamma)
         # It is important that this is sample_key_2 - the same used in get_single_pair_from_every_env
-        random_indices = jax.random.randint(sample_key_2, (1,), minval=0, maxval=state.grid.shape[0])
+        random_indices = jax.random.randint(sample_key_2, (1,), minval=0, maxval=states.grid.shape[0])
         reward = extract_at_indices(discounted_rewards, random_indices)
     else:
         reward = BoxPushingEnv.get_reward(state.grid, next_state.grid, value_goals)
