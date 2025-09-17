@@ -3,6 +3,8 @@ import flax.struct
 import jax
 from jax import flatten_util
 import jax.numpy as jnp
+from envs import BoxPushingEnv
+from envs.block_moving_env import remove_targets
 
 
 @flax.struct.dataclass
@@ -202,15 +204,50 @@ def segment_ids_per_row(x: jnp.ndarray) -> jnp.ndarray:
     return jnp.cumsum(resets, axis=-1)
 
 
+def relabel_based_on_goal(transition, goal_to_relabel):
+    grid = transition.grid  # (seq_len, grid_size, grid_size)
+
+    # We roll states, because we want the future state to be equal to goal
+    next_grid = jnp.roll(grid, -1, axis=0)
+
+    next_grid = jax.vmap(remove_targets, in_axes=(0))(next_grid)
+    goal_to_relabel = remove_targets(goal_to_relabel)
+
+    reward_fn = jax.vmap(BoxPushingEnv.get_reward, in_axes=(0, 0, None))
+    rewards = reward_fn(next_grid, next_grid, goal_to_relabel)
+
+    # Just to make sure we set reward at start state to 0 (because of roll)
+    rewards = rewards.at[-1].set(0)
+    rewards = rewards.astype(jnp.float32)
+
+    return rewards
+
+
+@jax.jit
+def extract_at_indices(data, indices):
+    return jax.tree_util.tree_map(lambda x: x[indices], data)
+
+
+@functools.partial(jax.jit)
+def get_single_pair_from_every_env(state, next_state, future_state, goal_index, key):
+    """Sample two random indices and concatenate the results."""
+
+    def single_batch_fn(key):
+        random_indices = jax.random.randint(key, (1,), minval=0, maxval=state.grid.shape[0])
+        state_single = extract_at_indices(state, random_indices)  # (batch_size, grid_size, grid_size)
+        next_state_single = extract_at_indices(next_state, random_indices)  # (batch_size, grid_size, grid_size)
+        future_state_single = extract_at_indices(future_state, random_indices)
+        goal_index_single = extract_at_indices(goal_index, random_indices)
+        return state_single, state_single.action, next_state_single, future_state_single, goal_index_single
+
+    return single_batch_fn(key)
+
+
 # TODO: will need to adjust it later for minigrid envs (if we would like to use them)
-def flatten_batch(gamma, get_mc_discounted_rewards, transition, sample_key):
+def flatten_batch(gamma, get_mc_discounted_rewards, use_targets, transition, rolled_grids, rolling_mask, sample_key):
     # Because it's vmaped transition.obs.shape is of shape (episode_len, obs_dim)
 
-    if get_mc_discounted_rewards:
-        rewards = transition.reward
-        steps = transition.steps
-        discounted_rewards = get_discounted_rewards(steps.squeeze(), rewards.squeeze(), gamma)
-        transition = transition.replace(reward=discounted_rewards)
+    sample_key_1, sample_key_2, key_3 = jax.random.split(sample_key, 3)
 
     seq_len = transition.grid.shape[0]
     arrangement = jnp.arange(seq_len)
@@ -242,18 +279,54 @@ def flatten_batch(gamma, get_mc_discounted_rewards, transition, sample_key):
 
     # To make sure, that we take future states only from single trajectory, when no future states, take the same state
     new_probs = probs * jnp.diag(jnp.ones(probs.shape[0] - 1), k=1) + jnp.eye(seq_len) * 1e-5
-    goal_index_next_state = jax.random.categorical(sample_key, jnp.log(new_probs))
+    goal_index_next_state = jax.random.categorical(sample_key_1, jnp.log(new_probs))
     next_state = jax.tree_util.tree_map(
         lambda x: jnp.take(x, goal_index_next_state[:-1], axis=0), transition
     )  # the last goal_index cannot be considered as there is no future.
 
-    goal_index = jax.random.categorical(sample_key, jnp.log(probs))
+    goal_index = jax.random.categorical(sample_key_1, jnp.log(probs))
     future_state = jax.tree_util.tree_map(
         lambda x: jnp.take(x, goal_index[:-1], axis=0), transition
     )  # the last goal_index cannot be considered as there is no future.
     states = jax.tree_util.tree_map(lambda x: x[:-1], transition)  # all states but the last one are considered
 
-    return states, next_state, future_state, goal_index
+    state, actions, next_state, future_state, goal_index = get_single_pair_from_every_env(
+        states,
+        next_state,
+        future_state,
+        goal_index,
+        sample_key_2,
+    )
+
+    if not use_targets:
+        state = state.replace(grid=remove_targets(state.grid), goal=remove_targets(state.goal))
+        next_state = next_state.replace(grid=remove_targets(next_state.grid))
+        future_state = future_state.replace(grid=remove_targets(future_state.grid))
+
+    random_indices = jax.random.randint(key_3, (1,), minval=0, maxval=rolled_grids.shape[0])
+    rolled_grids = extract_at_indices(rolled_grids, random_indices)
+
+    goals = jax.lax.cond(
+        rolling_mask,
+        lambda x: rolled_grids,
+        lambda x: future_state.grid,
+        None,
+    )
+
+    value_goals = goals
+    actor_goals = goals
+
+    if get_mc_discounted_rewards:
+        relabeled_rewards = relabel_based_on_goal(transition, value_goals)
+        steps = transition.steps
+        discounted_rewards = get_discounted_rewards(steps.squeeze(), relabeled_rewards.squeeze(), gamma)
+        # It is important that this is sample_key_2 - the same used in get_single_pair_from_every_env
+        random_indices = jax.random.randint(sample_key_2, (1,), minval=0, maxval=states.grid.shape[0])
+        reward = extract_at_indices(discounted_rewards, random_indices)
+    else:
+        reward = BoxPushingEnv.get_reward(state.grid, next_state.grid, value_goals)
+
+    return state, actions, next_state, value_goals, actor_goals, reward
 
 
 # Computes cumulative discounted returns for each time step until the end of its trajectory

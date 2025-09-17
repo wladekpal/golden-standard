@@ -14,7 +14,7 @@ import jax.numpy as jnp
 from jax import random
 
 from impls.agents import create_agent
-from envs.block_moving_env import BoxPushingEnv, wrap_for_eval, wrap_for_training, TimeStep, remove_targets
+from envs.block_moving_env import wrap_for_eval, wrap_for_training, TimeStep, remove_targets
 from config import ROOT_DIR
 from impls.utils.checkpoints import save_agent
 from utils import log_gif, sample_actions_critic
@@ -70,26 +70,6 @@ def collect_data(agent, key, env, num_envs, episode_length, use_targets=False, c
     return timestep, info, timesteps_all
 
 
-@jax.jit
-def extract_at_indices(data, indices):
-    return jax.tree_util.tree_map(lambda x: x[jnp.arange(x.shape[0]), indices], data)
-
-
-@functools.partial(jax.jit)
-def get_single_pair_from_every_env(state, next_state, future_state, goal_index, key):
-    """Sample two random indices and concatenate the results."""
-
-    def single_batch_fn(key):
-        random_indices = jax.random.randint(key, (state.grid.shape[0],), minval=0, maxval=state.grid.shape[1])
-        state_single = extract_at_indices(state, random_indices)  # (batch_size, grid_size, grid_size)
-        next_state_single = extract_at_indices(next_state, random_indices)  # (batch_size, grid_size, grid_size)
-        future_state_single = extract_at_indices(future_state, random_indices)
-        goal_index_single = extract_at_indices(goal_index, random_indices)
-        return state_single, state_single.action, next_state_single, future_state_single, goal_index_single
-
-    return single_batch_fn(key)
-
-
 def create_batch(
     timesteps,
     key,
@@ -101,43 +81,16 @@ def create_batch(
 ):
     batch_key, sampling_key = jax.random.split(key, 2)
     batch_keys = jax.random.split(batch_key, timesteps.grid.shape[0])
-    state, next_state, future_state, goal_index = jitted_flatten_batch(
-        gamma, use_discounted_mc_rewards, timesteps, batch_keys
-    )
-
-    state, actions, next_state, future_state, goal_index = get_single_pair_from_every_env(
-        state,
-        next_state,
-        future_state,
-        goal_index,
-        sampling_key,
-    )
-    if not use_targets:
-        state = state.replace(grid=remove_targets(state.grid), goal=remove_targets(state.goal))
-        next_state = next_state.replace(grid=remove_targets(next_state.grid))
-        future_state = future_state.replace(grid=remove_targets(future_state.grid))
-
+    rolled_grids = jnp.roll(timesteps.grid, shift=1, axis=0)
     if use_future_and_random_goals:
-        value_goals = jnp.concatenate(
-            [
-                jnp.roll(state.grid, shift=1, axis=(0))[: state.grid.shape[0] // 2],
-                future_state.grid[state.grid.shape[0] // 2 :],
-            ],
-            axis=0,
-        )
-        actor_goals = jnp.concatenate(
-            [
-                jnp.roll(state.grid, shift=1, axis=(0))[: state.grid.shape[0] // 2],
-                future_state.grid[state.grid.shape[0] // 2 :],
-            ],
-            axis=0,
-        )
+        batch_half = timesteps.grid.shape[0] // 2
+        rolling_mask = jnp.concatenate([jnp.ones(batch_half), jnp.zeros(timesteps.grid.shape[0] - batch_half)])
     else:
-        value_goals = future_state.grid
-        actor_goals = future_state.grid
+        rolling_mask = jnp.zeros(timesteps.grid.shape[0])
 
-    # TODO: this should be use only with dense reward/relabeling
-    reward = jax.vmap(BoxPushingEnv.get_reward)(state.grid, next_state.grid, value_goals)
+    state, actions, next_state, value_goals, actor_goals, reward = jitted_flatten_batch(
+        gamma, use_discounted_mc_rewards, use_targets, timesteps, rolled_grids, rolling_mask, batch_keys
+    )
 
     # Create valid batch
     batch = {
@@ -309,7 +262,9 @@ def train(config: Config):
     key = random.PRNGKey(config.exp.seed)
     env.step = jax.jit(jax.vmap(env.step))
     env.reset = jax.jit(jax.vmap(env.reset))
-    jitted_flatten_batch = jax.jit(jax.vmap(flatten_batch, in_axes=(None, None, 0, 0)), static_argnums=(0, 1))
+    jitted_flatten_batch = jax.jit(
+        jax.vmap(flatten_batch, in_axes=(None, None, None, 0, 0, 0, 0)), static_argnums=(0, 1, 2)
+    )
     jitted_create_batch = functools.partial(
         create_batch,
         gamma=config.exp.gamma,
