@@ -37,4 +37,5 @@ line-length = 120
 exclude = [
     "src/impls/",
     "notebooks/",
+    "*.ipynb",
 ]
