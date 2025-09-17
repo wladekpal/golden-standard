@@ -146,7 +146,7 @@ def create_batch(
     return batch
 
 
-def evaluate_agent_in_specific_env(agent, key, jitted_create_batch, config, name, create_gif=False, critic_temp=None):
+def evaluate_agent_in_specific_env(agent, key, jitted_create_batch, config, name, create_gif=False, evaluation=True):
     env_eval = create_env(config.env)
     env_eval = wrap_for_eval(env_eval)  # Note: Wrap for eval is not using any quarter filtering
     env_eval.step = jax.jit(jax.vmap(env_eval.step))
@@ -163,7 +163,7 @@ def evaluate_agent_in_specific_env(agent, key, jitted_create_batch, config, name
         config.exp.num_envs,
         config.env.episode_length,
         use_targets=config.exp.use_targets,
-        evaluation=True,
+        evaluation=evaluation,
     )
     timesteps = jax.tree_util.tree_map(lambda x: x.swapaxes(1, 0), timesteps)  # Returns N_envs x episode_length x ...
 
@@ -260,7 +260,7 @@ def evaluate_agent(agent, key, jitted_create_batch, epoch, config):
 
     for eval_config, eval_name_suff in zip(eval_configs, eval_names_suff):
         eval_info_tmp, loss_info = evaluate_agent_in_specific_env(
-            agent, key, jitted_create_batch, eval_config, eval_name_suff, create_gif=create_gif
+            agent, key, jitted_create_batch, eval_config, eval_name_suff, create_gif=create_gif, evaluation=True
         )
         eval_info.update(eval_info_tmp)
         if eval_name_suff == "":
@@ -274,7 +274,7 @@ def evaluate_agent(agent, key, jitted_create_batch, epoch, config):
             eval_config,
             eval_name_suff + "soft_q",
             create_gif=create_gif,
-            critic_temp=1.0,
+            evaluation=False,
         )
         eval_info.update(eval_info_tmp)
 
