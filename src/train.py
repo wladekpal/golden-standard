@@ -226,7 +226,6 @@ def evaluate_agent_in_specific_env(agent, key, jitted_create_batch, config, name
                 f"{prefix}/q_mean": loss_info["critic/q_mean"],
                 f"{prefix}/q_min": loss_info["critic/q_min"],
                 f"{prefix}/q_max": loss_info["critic/q_max"],
-                f"{prefix}/binary_accuracy": loss_info["critic/binary_accuracy"],
             }
         )
     else:
