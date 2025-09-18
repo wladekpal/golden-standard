@@ -54,7 +54,6 @@ def aggregate_data_from_wandb(
 
     data = {possible_name: [] for possible_name in possible_names}
     epochs = {possible_name: [] for possible_name in possible_names}
-    seeds = {possible_name: [] for possible_name in possible_names}
 
 
     for run, history in zip(runs, all_histories):
@@ -84,7 +83,7 @@ def aggregate_data_from_wandb(
         if return_last_step:
             final_group_data = np.array([d[-1, :] for d in correct_data])
         else:
-            final_group_data = np.array([d[None, :min_len] for d in correct_data]).reshape(-1, 1, min_len)
+            final_group_data = np.array([d[:min_len, :] for d in correct_data]).reshape(-1, min_len, len(metrics))
 
         final_data[group] = final_group_data
 
@@ -111,3 +110,38 @@ def draw_interval_estimates_plot(runs, keys, metrics_names, title, figures_path=
     # plt.title(title, fontsize="xx-large")
     plt.tight_layout()
     plt.savefig(os.path.join(figures_path, f'{title}.png'),bbox_inches='tight')
+
+def draw_curves_plot(runs, keys, metrics_names, title, figures_path="./figures"):
+
+    fig, axes = plt.subplots(1, len(metrics_names))
+
+    fig.set_figheight(5)
+    fig.set_figwidth(len(metrics_names) * 5 + 5)
+
+    for metric_idx, metric_name in enumerate(metrics_names):
+        metric_data = {k:data[:,:,metric_idx] for k,data in runs.items()}
+
+        frames = np.arange(0, 20, 1)
+        frames[-1] -= 1
+        ale_frames_scores_dict = {algorithm: score[:, frames] for algorithm, score in metric_data.items()}
+        iqm = lambda scores: np.array([metrics.aggregate_iqm(scores[..., frame]) for frame in range(scores.shape[-1])])
+        iqm_scores, iqm_cis = rly.get_interval_estimates(ale_frames_scores_dict, iqm, reps=2000)
+
+
+        plot_utils.plot_sample_efficiency_curve(
+                frames + 1,
+                iqm_scores,
+                iqm_cis,
+                algorithms=keys,
+                xlabel=r"Epochs",
+                ylabel=None,
+                legend=False,
+                grid_alpha=0.4,
+                ax=axes[metric_idx]
+            )
+        axes[metric_idx].set_title(metric_name)
+    plt.legend(bbox_to_anchor=(1.04, 0), loc="lower left", borderaxespad=0)
+    plt.suptitle(title, fontsize="xx-large", va='bottom')
+    plt.tight_layout(w_pad=3.0)
+    plt.savefig(os.path.join(figures_path, f"{title}.png"),bbox_inches='tight')
+    
