@@ -1,6 +1,10 @@
 import os
 import pandas as pd
 import numpy as np
+from rliable import library as rly
+from rliable import metrics
+from rliable import plot_utils
+import matplotlib.pyplot as plt
 
 
 # Function to extract metrics from runs
@@ -35,10 +39,10 @@ def moving_average_smoothing(data, window_size=5):
 
 def aggregate_data_from_wandb(
     runs,
-    metric: str,
-    exp_names: list,
-    exp_names_mapping: dict,
-    take_x_seeds: int,
+    metrics: list[str],
+    possible_names: list,
+    grouping_func,
+    return_last_step: bool = True,
     download_again: bool = False,
 ):
     # Download/load history from wandb
@@ -47,62 +51,63 @@ def aggregate_data_from_wandb(
         run_data, history = extract_run_data(run, download_again)
         all_histories.append(history)
 
-    # print(all_histories[0].columns)
-    return all_histories[0]
 
-    # Create first data structure: dict of dict of list (methods->envs->seeds).
-    # if single_env:
-    #     data = {exp_names_mapping[elem]: {env_title_mapping[single_env]: []} for elem in exp_names}
-    #     seeds = {exp_names_mapping[elem]: {env_title_mapping[single_env]: []} for elem in exp_names}
+    data = {possible_name: [] for possible_name in possible_names}
+    epochs = {possible_name: [] for possible_name in possible_names}
+    seeds = {possible_name: [] for possible_name in possible_names}
 
-    # for run, history in zip(runs, all_histories):
-    #     a = create_rliable_compatible_data(history, metric)
-    #     if (
-    #         len(seeds[exp_names_mapping[run.config["exp_name"]]][env_title_mapping[run.config["env_name"]]])
-    #         >= take_x_seeds
-    #     ):
-    #         continue
 
-    #     # Make sure to not take duplicated seeds
-    #     if (
-    #         run.config["seed"]
-    #         in seeds[exp_names_mapping[run.config["exp_name"]]][env_title_mapping[run.config["env_name"]]]
-    #     ):
-    #         print(f"Dropping for {run.config['exp_name']}")
-    #         continue
+    for run, history in zip(runs, all_histories):
+        
+        scores = []
+        for metric in metrics:
+            scores.append(create_rliable_compatible_data(history, metric))
 
-    #     data[exp_names_mapping[run.config["exp_name"]]][env_title_mapping[run.config["env_name"]]].append(a)
-    #     seeds[exp_names_mapping[run.config["exp_name"]]][env_title_mapping[run.config["env_name"]]].append(
-    #         run.config["seed"]
-    #     )
+        scores = np.stack(scores, axis=-1)
+        epoch = create_rliable_compatible_data(history, 'epoch')
 
-    # # Create intermediate data structure: dict of dict of arrays
-    # # For instance data['L2']['Ant Ball'].shape == num_seeds x 1 x timesteps (50)
+        grouping_param = grouping_func(run.config)
+        data[grouping_param].append(scores)
+        epochs[grouping_param].append(epoch)
 
-    # if single_env:
-    #     for method in exp_names_mapping.values():
-    #         data[method][env_title_mapping[single_env]] = np.array(data[method][env_title_mapping[single_env]])[
-    #             :, None, :
-    #         ]
-    # else:
-    #     for env in env_title_mapping.values():
-    #         for method in exp_names_mapping.values():
-    #             # print(f"{[len(elem) for elem in data[method][env]]}")
-    #             data[method][env] = np.array(data[method][env])[:, None, :]
 
-    # # just to verify
-    # if single_env:
-    #     for method in exp_names_mapping.values():
-    #         print(f"{method}, {single_env}")
-    #         print(data[method][env_title_mapping[single_env]].shape)
-    # else:
-    #     for env in env_title_mapping.values():
-    #         for method in exp_names_mapping.values():
-    #             print(f"{method}, {env}")
-    #             print(data[method][env].shape)
 
-    # # Create final data structure dict of arrays (methods->array)
-    # # array shape: num_seeds x num_envs x timesteps
-    # data_new = {key: np.concatenate((list(data[key].values())), axis=1) for key, elem in data.items()}
+    final_data = {possible_name: [] for possible_name in possible_names}
 
-    # return data_new
+    for group, group_data in data.items():
+        correct_data = []
+        min_len = 100000
+        for run_data in group_data:
+            correct_data.append(run_data[~np.isnan(run_data[:, 0]), :])
+            min_len = min(min_len, correct_data[-1].shape[0])
+
+        if return_last_step:
+            final_group_data = np.array([d[-1, :] for d in correct_data])
+        else:
+            final_group_data = np.array([d[None, :min_len] for d in correct_data]).reshape(-1, 1, min_len)
+
+        final_data[group] = final_group_data
+
+    return final_data
+
+
+def draw_interval_estimates_plot(runs, keys, metrics_names, title, figures_path="./figures"):
+    aggregate_func = lambda x: np.array([metrics.aggregate_iqm(x[:, i]) for i in range(x.shape[-1])])
+
+    aggregate_scores, aggregate_scores_cis = rly.get_interval_estimates(
+        runs, aggregate_func, reps=500
+    )
+
+
+    plot_utils.plot_interval_estimates(
+            aggregate_scores,
+            aggregate_scores_cis,
+            metric_names=metrics_names,
+            algorithms=keys,
+            row_height=0.7,
+            xlabel=title,
+            subfigure_width=5.0
+        )
+    # plt.title(title, fontsize="xx-large")
+    plt.tight_layout()
+    plt.savefig(os.path.join(figures_path, f'{title}.png'),bbox_inches='tight')
