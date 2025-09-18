@@ -59,7 +59,7 @@ def aggregate_data_from_wandb(
     for run, history in zip(runs, all_histories):
         
         scores = []
-        for metric in metrics:
+        for metric in metrics.keys():
             scores.append(create_rliable_compatible_data(history, metric))
 
         scores = np.stack(scores, axis=-1)
@@ -101,10 +101,10 @@ def draw_interval_estimates_plot(runs, keys, metrics_names, title, figures_path=
     plot_utils.plot_interval_estimates(
             aggregate_scores,
             aggregate_scores_cis,
-            metric_names=metrics_names,
+            metric_names=metrics_names.values(),
             algorithms=keys,
             row_height=0.7,
-            xlabel=title,
+            xlabel=None,
             subfigure_width=5.0
         )
     # plt.title(title, fontsize="xx-large")
@@ -118,10 +118,14 @@ def draw_curves_plot(runs, keys, metrics_names, title, figures_path="./figures")
     fig.set_figheight(5)
     fig.set_figwidth(len(metrics_names) * 5 + 5)
 
-    for metric_idx, metric_name in enumerate(metrics_names):
+    min_len = 1000000
+    for v in runs.values():
+        min_len = min(min_len, v.shape[1])
+
+    for metric_idx, metric_name in enumerate(metrics_names.values()):
         metric_data = {k:data[:,:,metric_idx] for k,data in runs.items()}
 
-        frames = np.arange(0, 20, 1)
+        frames = np.arange(0, min_len, 1)
         frames[-1] -= 1
         ale_frames_scores_dict = {algorithm: score[:, frames] for algorithm, score in metric_data.items()}
         iqm = lambda scores: np.array([metrics.aggregate_iqm(scores[..., frame]) for frame in range(scores.shape[-1])])
@@ -141,7 +145,7 @@ def draw_curves_plot(runs, keys, metrics_names, title, figures_path="./figures")
             )
         axes[metric_idx].set_title(metric_name)
     plt.legend(bbox_to_anchor=(1.04, 0), loc="lower left", borderaxespad=0)
-    plt.suptitle(title, fontsize="xx-large", va='bottom')
+    # plt.suptitle(title, fontsize="xx-large", va='bottom')
     plt.tight_layout(w_pad=3.0)
     plt.savefig(os.path.join(figures_path, f"{title}.png"),bbox_inches='tight')
     
