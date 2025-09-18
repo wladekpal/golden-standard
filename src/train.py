@@ -226,7 +226,6 @@ def evaluate_agent_in_specific_env(agent, key, jitted_create_batch, config, name
                 f"{prefix}/q_mean": loss_info["critic/q_mean"],
                 f"{prefix}/q_min": loss_info["critic/q_min"],
                 f"{prefix}/q_max": loss_info["critic/q_max"],
-                f"{prefix}/binary_accuracy": loss_info["critic/binary_accuracy"],
             }
         )
     else:
@@ -254,7 +253,7 @@ def evaluate_agent(agent, key, jitted_create_batch, epoch, config):
         eval_names_suff.append("_special")
 
     if config.exp.eval_different_box_numbers:
-        for number_of_boxes in range(1, 12, 2):
+        for number_of_boxes in [config.env.number_of_boxes_max]:
             new_config = copy.deepcopy(config)
             new_config.env = dataclasses.replace(
                 new_config.env,
