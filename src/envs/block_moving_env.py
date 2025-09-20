@@ -295,6 +295,71 @@ class DefaultLevelGenerator:
         )
 
 
+class CheckerboardGenerator(DefaultLevelGenerator):
+    def __init__(self, grid_size, number_of_boxes_min, number_of_boxes_max, number_of_moving_boxes_max, special):
+        assert number_of_boxes_max + number_of_moving_boxes_max <= grid_size * grid_size // 2
+        self.special = special
+        super().__init__(grid_size, number_of_boxes_min, number_of_boxes_max, number_of_moving_boxes_max)
+
+    def generate(self, key):
+        permutation_key, number_of_boxes_key, agent_key, state_key = random.split(key, 4)
+
+        num_possible = ((self.grid_size * self.grid_size) + (1 if self.special else 0)) // 2
+
+        idxs = jnp.arange(num_possible)
+
+        number_of_boxes = jax.random.randint(
+            number_of_boxes_key, (), self.number_of_boxes_min, self.number_of_boxes_max + 1
+        )
+        number_of_boxes_on_target = jnp.maximum(0, number_of_boxes - self.number_of_moving_boxes_max)
+        number_of_targets_without_boxes = number_of_boxes - number_of_boxes_on_target
+
+        is_fixed = idxs < number_of_boxes_on_target
+        is_box = (idxs >= number_of_boxes_on_target) & (idxs < number_of_boxes)
+        is_target = (idxs >= number_of_boxes) & (idxs < number_of_boxes + number_of_targets_without_boxes)
+
+        grid = jnp.piecewise(
+            idxs,
+            [is_fixed, is_box, is_target],
+            [GridStatesEnum.BOX_ON_TARGET, GridStatesEnum.BOX, GridStatesEnum.TARGET, GridStatesEnum.EMPTY],
+        ).astype(jnp.int8)
+        grid = jax.random.permutation(permutation_key, grid)
+
+        grid = self.place_agent(grid[None, :], agent_key)[1].squeeze()
+
+        if self.special:
+            update_idxs = jnp.indices((self.grid_size, self.grid_size)).sum(axis=0) % 2 == 0
+        else:
+            update_idxs = jnp.indices((self.grid_size, self.grid_size)).sum(axis=0) % 2
+
+        update_idxs = jnp.nonzero(update_idxs.flatten(), size=num_possible)
+
+        new_grid = jnp.full((self.grid_size * self.grid_size,), GridStatesEnum.EMPTY)
+        new_grid = new_grid.at[update_idxs].set(grid)
+
+        new_grid = new_grid.reshape((self.grid_size, self.grid_size))
+
+        agent_pos = find_agent_position(new_grid)
+
+        state = BoxPushingState(
+            key=state_key,
+            grid=new_grid,
+            agent_pos=agent_pos,
+            agent_has_box=False,
+            steps=0,
+            number_of_boxes=number_of_boxes,
+            goal=jnp.zeros_like(grid),
+            reward=0.0,
+            success=0,
+            extras={},
+        )
+
+        goal = create_solved_state(state)
+        state = state.replace(goal=goal.grid)
+
+        return state
+
+
 class VariableQuarterGenerator(DefaultLevelGenerator):
     def __init__(
         self,
@@ -483,6 +548,14 @@ class BoxPushingEnv:
         if level_generator == "default":
             self.level_generator = DefaultLevelGenerator(
                 grid_size, number_of_boxes_min, number_of_boxes_max, number_of_moving_boxes_max
+            )
+        elif level_generator == "checkerboard":
+            self.level_generator = CheckerboardGenerator(
+                grid_size,
+                number_of_boxes_min,
+                number_of_boxes_max,
+                number_of_moving_boxes_max,
+                special=kwargs["generator_special"],
             )
         elif level_generator == "variable":
             self.level_generator = VariableQuarterGenerator(
@@ -974,18 +1047,15 @@ def wrap_for_eval(env):
 
 if __name__ == "__main__":
     env = BoxPushingEnv(
-        grid_size=6,
-        number_of_boxes_max=1,
-        number_of_boxes_min=1,
-        number_of_moving_boxes_max=1,
-        level_generator="variable",
-        generator_special=False,
+        grid_size=5,
+        number_of_boxes_max=6,
+        number_of_boxes_min=6,
+        number_of_moving_boxes_max=6,
+        level_generator="checkerboard",
+        generator_special=True,
         dense_rewards=False,
         terminate_when_success=True,
         episode_length=10,
-        quarter_size=1,
     )
-    env = QuarterFilter(env)
-    env = AutoResetWrapper(env)
     key = jax.random.PRNGKey(0)
     env.play_game(key)
