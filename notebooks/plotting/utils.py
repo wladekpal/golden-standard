@@ -115,6 +115,9 @@ def draw_curves_plot(runs, keys, metrics_names, title, figures_path="./figures")
 
     fig, axes = plt.subplots(1, len(metrics_names))
 
+    if len(metrics_names) == 1:
+        axes = [axes]
+
     fig.set_figheight(5)
     fig.set_figwidth(len(metrics_names) * 5 + 5)
 
@@ -148,4 +151,5 @@ def draw_curves_plot(runs, keys, metrics_names, title, figures_path="./figures")
     # plt.suptitle(title, fontsize="xx-large", va='bottom')
     plt.tight_layout(w_pad=3.0)
     plt.savefig(os.path.join(figures_path, f"{title}.png"),bbox_inches='tight')
+    plt.close()
     
