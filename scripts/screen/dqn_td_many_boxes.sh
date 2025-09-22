@@ -7,7 +7,7 @@ grid_size=$2
 exclude_dirs=( ".github" ".ruff_cache" "wandb" ".vscode" ".idea" "__pycache__" ".venv" "experiments" ".git" "notebooks" "runs" "notes" ".pytest")
 
 # Experiment name
-exp_name="many_boxes_crl_mc_grid_${grid_size}"
+exp_name="stich_dqn_td_grid_${grid_size}"
 
 # Create the main experiments directory if it doesn't exist
 mkdir -p ./experiments
@@ -52,11 +52,10 @@ for seed in 1 2 3 4 5
 do
     for number_of_moving_boxes_max in 4 3 2 1
     do
-        echo "Running with grid_size: $grid_size, number_of_boxes_min: $number_of_boxes, number_of_boxes_max: $number_of_boxes, number_of_moving_boxes_max: $number_of_moving_boxes_max"
-        XLA_PYTHON_CLIENT_PREALLOCATE=false CUDA_VISIBLE_DEVICES=$GPU_ID uv run --active src/train.py \
+        CUDA_VISIBLE_DEVICES=$GPU_ID uv run --active src/train.py \
         env:box-pushing \
-        --agent.agent_name crl_search \
-        --exp.name crl_te_${target_entropy}_grid_${grid_size}_boxes_${number_of_boxes}_not_on_target_${number_of_moving_boxes_max} \
+        --agent.agent_name gcdqn \
+        --exp.name dqn_te_${target_entropy}_grid_${grid_size}_boxes_${number_of_boxes}_not_on_target_${number_of_moving_boxes_max}  \
         --env.number_of_boxes_max ${number_of_boxes} \
         --env.number_of_boxes_min ${number_of_boxes} \
         --env.number_of_moving_boxes_max ${number_of_moving_boxes_max} \
@@ -68,10 +67,10 @@ do
         --exp.epochs 50 \
         --exp.gif_every 10 \
         --agent.alpha 0.1 \
-        --agent.expectile 0.5  \
         --exp.max_replay_size 10000 \
         --exp.batch_size 256 \
-        --exp.eval_different_box_numbers \
-        --agent.target_entropy ${target_entropy}
+        --agent.target_entropy ${target_entropy} \
+        --exp.use_future_and_random_goals \
+        --exp.eval_different_box_numbers
     done
 done
