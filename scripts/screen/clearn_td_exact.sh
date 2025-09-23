@@ -53,7 +53,7 @@ do
         CUDA_VISIBLE_DEVICES=$GPU_ID uv run --active src/train.py \
         env:box-pushing \
         --agent.agent_name clearn_search \
-        --exp.name clearn_te_${target_entropy}_grid_${grid_size}_boxes_${number_of_boxes}   \
+        --exp.name clearn_mc_te_${target_entropy}_grid_${grid_size}_boxes_${number_of_boxes}   \
         --env.number_of_boxes_max ${number_of_boxes} \
         --env.number_of_boxes_min ${number_of_boxes} \
         --env.number_of_moving_boxes_max ${number_of_boxes} \
@@ -69,7 +69,6 @@ do
         --exp.batch_size 256 \
         --exp.eval_special \
         --env.level_generator variable \
-        --agent.target_entropy ${target_entropy} \
-        --agent.is_td
+        --agent.target_entropy ${target_entropy} 
     done
 done
