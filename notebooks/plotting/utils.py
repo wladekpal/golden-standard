@@ -5,6 +5,7 @@ from rliable import library as rly
 from rliable import metrics
 from rliable import plot_utils
 import matplotlib.pyplot as plt
+import seaborn as sns
 
 
 # Function to extract metrics from runs
@@ -93,6 +94,7 @@ def aggregate_data_from_wandb(
 def draw_interval_estimates_plot(runs, keys, metrics_names, title, figures_path="./figures"):
     aggregate_func = lambda x: np.array([metrics.aggregate_iqm(x[:, i]) for i in range(x.shape[-1])])
 
+
     aggregate_scores, aggregate_scores_cis = rly.get_interval_estimates(
         runs, aggregate_func, reps=500
     )
@@ -105,11 +107,106 @@ def draw_interval_estimates_plot(runs, keys, metrics_names, title, figures_path=
             algorithms=keys,
             row_height=0.7,
             xlabel=None,
-            subfigure_width=5.0
+            subfigure_width=10.0
         )
     # plt.title(title, fontsize="xx-large")
+
+    
     plt.tight_layout()
     plt.savefig(os.path.join(figures_path, f'{title}.png'),bbox_inches='tight')
+
+
+
+def draw_interval_estimates_plot_per_alg(runs, keys, metrics_names, title, figures_path="./figures"):
+    aggregate_func = lambda x: np.array([metrics.aggregate_iqm(x[:, i]) for i in range(x.shape[-1])])
+
+
+    aggregate_scores, aggregate_scores_cis = rly.get_interval_estimates(
+        runs, aggregate_func, reps=500
+    )
+
+    def plot_interval_estimates(point_estimates,
+                                interval_estimates,
+                                metric_names,
+                                algorithms=None,
+                                colors=None,
+                                color_palette='colorblind',
+                                max_ticks=4,
+                                subfigure_width=3.4,
+                                row_height=0.37,
+                                xlabel_y_coordinate=-0.1,
+                                xlabel='Normalized Score',
+                                **kwargs):
+
+        if algorithms is None:
+            algorithms = list(point_estimates.keys())
+        num_metrics = len(point_estimates[algorithms[0]])
+        figsize = (subfigure_width * num_metrics, row_height * len(algorithms))
+        fig, axes = plt.subplots(nrows=1, ncols=num_metrics, figsize=figsize)
+        if colors is None:
+            color_palette = sns.color_palette(color_palette, n_colors=(len(algorithms) + 1) // 2)
+            colors = {}
+            for i, alg in enumerate(algorithms):
+                colors[alg] = color_palette[i // 2]
+        h = kwargs.pop('interval_height', 0.6)
+
+        for idx, metric_name in enumerate(metric_names):
+            for alg_idx, algorithm in enumerate(algorithms):
+                ax = axes[idx] if num_metrics > 1 else axes
+                # Plot interval estimates.
+                lower, upper = interval_estimates[algorithm][:, idx]
+                ax.barh(
+                    y=alg_idx,
+                    width=upper - lower,
+                    height=h,
+                    left=lower,
+                    color=colors[algorithm],
+                    alpha=0.75,
+                    label=algorithm)
+                # Plot point estimates.
+                ax.vlines(
+                    x=point_estimates[algorithm][idx],
+                    ymin=alg_idx - (7.5 * h / 16),
+                    ymax=alg_idx + (6 * h / 16),
+                    label=algorithm,
+                    color='k',
+                    alpha=0.5)
+                if alg_idx % 2 == 0 and alg_idx > 0:
+                    plt.hlines(alg_idx - 0.5, 0, 1.0, color='gray')
+
+            ax.set_yticks(list(range(len(algorithms))))
+            ax.xaxis.set_major_locator(plt.MaxNLocator(max_ticks))
+            if idx != 0:
+                ax.set_yticks([])
+            else:
+                ax.set_yticklabels(algorithms, fontsize='x-large')
+            ax.set_title(metric_name, fontsize='xx-large')
+            ax.tick_params(axis='both', which='major')
+            plot_utils._decorate_axis(ax, ticklabelsize='xx-large', wrect=5)
+            ax.spines['left'].set_visible(False)
+            ax.grid(True, axis='x', alpha=0.25)
+        fig.text(0.4, xlabel_y_coordinate, xlabel, ha='center', fontsize='xx-large')
+        plt.subplots_adjust(wspace=kwargs.pop('wspace', 0.11), left=0.0)
+        return fig, axes
+
+
+
+    plot_interval_estimates(
+            aggregate_scores,
+            aggregate_scores_cis,
+            metric_names=metrics_names.values(),
+            algorithms=keys,
+            row_height=0.7,
+            xlabel=None,
+            subfigure_width=10.0
+        )
+
+    plt.tight_layout()
+    plt.savefig(os.path.join(figures_path, f'{title}.png'),bbox_inches='tight')
+
+
+
+
 
 def draw_curves_plot(runs, keys, metrics_names, title, figures_path="./figures"):
 
