@@ -47,14 +47,14 @@ echo "Current path: '$(pwd)'"
 
 target_entropy=-1.1
 
-for seed in 1 2 3 4 5
+for seed in  4 5
 do
-    for number_of_boxes in 4 3 2 1
+    for number_of_boxes in 2 1 4 3 
     do
         CUDA_VISIBLE_DEVICES=$GPU_ID uv run --active src/train.py \
         env:box-pushing \
         --agent.agent_name crl_search \
-        --exp.name crl_te_${target_entropy}_grid_${grid_size}_boxes_${number_of_boxes} \
+        --exp.name crl_big_te_${target_entropy}_grid_${grid_size}_boxes_${number_of_boxes} \
         --env.number_of_boxes_max ${number_of_boxes} \
         --env.number_of_boxes_min ${number_of_boxes} \
         --env.number_of_moving_boxes_max ${number_of_boxes} \
@@ -69,6 +69,8 @@ do
         --agent.expectile 0.5  \
         --exp.max_replay_size 10000 \
         --exp.batch_size 256 \
+        --agent.value_hidden_dims 1024 1024 \
+        --agent.net_arch res_block \
         --exp.eval_special \
         --env.level_generator variable \
         --agent.target_entropy ${target_entropy}
