@@ -6,6 +6,8 @@ from rliable import metrics
 from rliable import plot_utils
 import matplotlib.pyplot as plt
 import seaborn as sns
+import matplotlib.colors as mc
+import colorsys
 
 
 # Function to extract metrics from runs
@@ -144,7 +146,7 @@ def draw_interval_estimates_plot_per_alg(runs, keys, metrics_names, title, figur
         figsize = (subfigure_width * num_metrics, row_height * len(algorithms))
         fig, axes = plt.subplots(nrows=1, ncols=num_metrics, figsize=figsize)
         if colors is None:
-            color_palette = sns.color_palette(color_palette, n_colors=(len(algorithms) + 1) // 2)
+            color_palette = sns.color_palette(color_palette, n_colors=(len(algorithms) + 1) // 2)[::-1]
             colors = {}
             for i, alg in enumerate(algorithms):
                 colors[alg] = color_palette[i // 2]
@@ -155,6 +157,7 @@ def draw_interval_estimates_plot_per_alg(runs, keys, metrics_names, title, figur
                 ax = axes[idx] if num_metrics > 1 else axes
                 # Plot interval estimates.
                 lower, upper = interval_estimates[algorithm][:, idx]
+                
                 ax.barh(
                     y=alg_idx,
                     width=upper - lower,
@@ -184,6 +187,7 @@ def draw_interval_estimates_plot_per_alg(runs, keys, metrics_names, title, figur
             ax.tick_params(axis='both', which='major')
             plot_utils._decorate_axis(ax, ticklabelsize='xx-large', wrect=5)
             ax.spines['left'].set_visible(False)
+            ax.set_xlim(left=-0.05, right=1.05)
             ax.grid(True, axis='x', alpha=0.25)
         fig.text(0.4, xlabel_y_coordinate, xlabel, ha='center', fontsize='xx-large')
         plt.subplots_adjust(wspace=kwargs.pop('wspace', 0.11), left=0.0)
@@ -203,6 +207,7 @@ def draw_interval_estimates_plot_per_alg(runs, keys, metrics_names, title, figur
 
     plt.tight_layout()
     plt.savefig(os.path.join(figures_path, f'{title}.png'),bbox_inches='tight')
+    plt.savefig(os.path.join(figures_path, f'{title}.pdf'),bbox_inches='tight')
 
 
 
@@ -248,5 +253,40 @@ def draw_curves_plot(runs, keys, metrics_names, title, figures_path="./figures")
     # plt.suptitle(title, fontsize="xx-large", va='bottom')
     plt.tight_layout(w_pad=3.0)
     plt.savefig(os.path.join(figures_path, f"{title}.png"),bbox_inches='tight')
-    plt.close()
+    plt.savefig(os.path.join(figures_path, f"{title}.pdf"),bbox_inches='tight')
+
+
+def lighten_color(color, amount=0.5):
+    try:
+        c = mc.cnames[color]
+    except:
+        c = color
+    c = colorsys.rgb_to_hls(*mc.to_rgb(c))
+    return colorsys.hls_to_rgb(c[0], 1 - amount * (1 - c[1]), c[2])
+
+def return_color(agent, train=True):
+    color_palette = sns.color_palette('colorblind')
+    idx = 0
+
+    if 'GCDQN' in agent:
+        if 'MC' in agent:
+            idx = 0
+        else:
+            idx = 1
+    elif 'C-LEARN' in agent:
+        if 'MC' in agent:
+            idx = 2
+        else:
+            idx = 3
+    elif 'CRL' in agent:
+        idx = 4
+    else:
+        idx = 5
+
+    c = color_palette[idx]
+
+    if not train:
+        c = lighten_color(c, amount=0.4)
+
+    return c
     
