@@ -303,7 +303,7 @@ def flatten_batch(gamma, get_mc_discounted_rewards, use_targets, transition, rol
         next_state = next_state.replace(grid=remove_targets(next_state.grid))
         future_state = future_state.replace(grid=remove_targets(future_state.grid))
 
-    random_indices = jax.random.randint(key_3, (1,), minval=0, maxval=rolled_grids.shape[0])
+    random_indices = jax.random.randint(sample_key_2, (1,), minval=0, maxval=rolled_grids.shape[0])
     rolled_grids = extract_at_indices(rolled_grids, random_indices)
 
     goals = jax.lax.cond(
