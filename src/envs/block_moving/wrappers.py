@@ -78,7 +78,7 @@ class SymmetryFilter(Wrapper):
             old_pos = old_state.agent_pos[1]
             new_pos = new_state.agent_pos[1]
 
-        # If old_pos and new_pos are on different sides of the middle it means we've crossed the boundry,
+        # If old_pos and new_pos are on different sides of the middle it means we've crossed the boundary,
         # and so we reset the environment
         return jnp.logical_xor(old_pos < middle, new_pos < middle)
 
