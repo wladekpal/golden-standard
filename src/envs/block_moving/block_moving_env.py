@@ -144,7 +144,7 @@ class BoxMovingEnv:
         valid_move = (new_row >= 0) & (new_row < self.grid_size) & (new_col >= 0) & (new_col < self.grid_size)
 
         def move_valid():
-            # Remove the agent from old possition on the grid
+            # Remove the agent from old position on the grid
             grid_after_clear = grid.at[row, col].set(_REMOVE_AGENT_ARRAY[grid[row, col]])
 
             possible_fields_after_clear = jnp.array(
