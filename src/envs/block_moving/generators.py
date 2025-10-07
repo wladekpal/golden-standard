@@ -161,7 +161,7 @@ class VariableQuarterGenerator(DefaultLevelGenerator):
     ):
         # This is mostly for convenience, without it there would have to be a lot of if statements
         assert number_of_boxes_max <= quarter_size * quarter_size
-        assert number_of_boxes_max == number_of_boxes_max, "In this generator we assume all boxes always move"
+        assert number_of_boxes_max == number_of_moving_boxes_max, "In this generator we assume all boxes always move"
         assert number_of_boxes_min == number_of_boxes_max, (
             "In this generator we assume there is only one possible number of boxes"
         )
