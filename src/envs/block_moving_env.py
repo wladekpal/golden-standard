@@ -10,8 +10,8 @@ import os
 import logging
 
 
-class BoxPushingState(struct.PyTreeNode):
-    """State representation for the box pushing environment."""
+class BoxMovingState(struct.PyTreeNode):
+    """State representation for the box moving environment."""
 
     key: jax.Array
     grid: jax.Array  # N x N grid where 0=empty, 1=box
@@ -25,7 +25,7 @@ class BoxPushingState(struct.PyTreeNode):
     extras: Dict  # Field for extra information used by filtering wrappers
 
 
-class TimeStep(BoxPushingState):
+class TimeStep(BoxMovingState):
     action: jax.Array
     done: jax.Array
     truncated: jax.Array
@@ -33,7 +33,7 @@ class TimeStep(BoxPushingState):
 
 @dataclass
 class GridStatesEnum:
-    """Grid states representation for the box pushing environment."""
+    """Grid states representation for the box moving environment."""
 
     EMPTY = jnp.int8(0)
     BOX = jnp.int8(1)
@@ -123,7 +123,7 @@ ACTIONS = {
 
 
 @dataclass
-class BoxPushingConfig:
+class BoxMovingConfig:
     grid_size: int = 5
     number_of_boxes_min: int = 3
     number_of_boxes_max: int = 4
@@ -150,7 +150,7 @@ def calculate_number_of_boxes(grid: jax.Array):
     )
 
 
-def create_solved_state(state: BoxPushingState) -> BoxPushingState:
+def create_solved_state(state: BoxMovingState) -> BoxMovingState:
     """Create a solved state."""
     # Change all target cells to box on target
     target_mask = (state.grid == GridStatesEnum.TARGET) | (state.grid == GridStatesEnum.BOX_ON_TARGET)
@@ -230,7 +230,7 @@ class DefaultLevelGenerator:
         new_grid = grid.at[agent_pos[0], agent_pos[1]].set(agent_state)
         return agent_pos, new_grid
 
-    def generate(self, key) -> BoxPushingState:
+    def generate(self, key) -> BoxMovingState:
         permutation_key, number_of_boxes_key, agent_key, state_key = random.split(key, 4)
 
         idxs = jnp.arange(self.grid_size * self.grid_size)
@@ -259,7 +259,7 @@ class DefaultLevelGenerator:
         # Agent is placed at any field randomly
         agent_pos, grid = self.place_agent(grid, agent_key)
 
-        state = BoxPushingState(
+        state = BoxMovingState(
             key=state_key,
             grid=grid,
             agent_pos=agent_pos,
@@ -422,7 +422,7 @@ class VariableQuarterGenerator(DefaultLevelGenerator):
             jnp.logical_and(coords[0] < down, coords[0] >= up), jnp.logical_and(coords[1] < right, coords[1] >= left)
         )
 
-        state = BoxPushingState(
+        state = BoxMovingState(
             key=state_key,
             grid=grid,
             agent_pos=agent_pos,
@@ -447,8 +447,8 @@ class VariableQuarterGenerator(DefaultLevelGenerator):
         )
 
 
-class BoxPushingEnv:
-    """JAX-based box pushing environment."""
+class BoxMovingEnv:
+    """JAX-based box moving environment."""
 
     # TODO: I should define here a maximum and minimum number of boxes, so that every env during reset gets different number of them
     #  also, I need to add an argument that defines the number of boxes that need to be on target from start
@@ -467,7 +467,7 @@ class BoxPushingEnv:
         **kwargs,
     ):
         logging.info(
-            f"Initializing BoxPushingEnv with grid_size={grid_size}, episode_length={episode_length}, number_of_boxes={number_of_boxes_min}, number_of_boxes_max={number_of_boxes_max}, number_of_moving_boxes_max={number_of_moving_boxes_max}"
+            f"Initializing BoxMovingEnv with grid_size={grid_size}, episode_length={episode_length}, number_of_boxes={number_of_boxes_min}, number_of_boxes_max={number_of_boxes_max}, number_of_moving_boxes_max={number_of_moving_boxes_max}"
         )
         self.grid_size = grid_size
         self.episode_length = episode_length
@@ -496,7 +496,7 @@ class BoxPushingEnv:
         else:
             raise ValueError("Unknown level generator selected")
 
-    def reset(self, key: jax.Array) -> Tuple[BoxPushingState, Dict[str, Any]]:
+    def reset(self, key: jax.Array) -> Tuple[BoxMovingState, Dict[str, Any]]:
         """Reset environment to initial state."""
         state = self.level_generator.generate(key)
         grid = state.grid
@@ -510,7 +510,7 @@ class BoxPushingEnv:
 
         return state, info
 
-    def step(self, state: BoxPushingState, action: int) -> Tuple[BoxPushingState, float, bool, Dict[str, Any]]:
+    def step(self, state: BoxMovingState, action: int) -> Tuple[BoxMovingState, float, bool, Dict[str, Any]]:
         """Take a step in the environment."""
         chex.assert_shape(action, ())
 
@@ -538,12 +538,12 @@ class BoxPushingEnv:
 
         truncated = new_steps >= self.episode_length
         # Checking if agent reaches the goal in next state (new_grid), if yes then success = 1
-        reward = BoxPushingEnv.get_reward(state.grid, new_grid, state.goal).astype(jnp.float32)
+        reward = BoxMovingEnv.get_reward(state.grid, new_grid, state.goal).astype(jnp.float32)
         success = reward.astype(jnp.int32)
         if self.terminate_when_success:
             done = success.astype(bool)
 
-        new_state = BoxPushingState(
+        new_state = BoxMovingState(
             key=state.key,
             grid=new_grid,
             agent_pos=new_pos,
@@ -565,7 +565,7 @@ class BoxPushingEnv:
 
         return new_state, reward, done, info
 
-    def handle_movement(self, state: BoxPushingState, action: int) -> Tuple[jax.Array, bool]:
+    def handle_movement(self, state: BoxMovingState, action: int) -> Tuple[jax.Array, bool]:
         row, col = state.agent_pos[0], state.agent_pos[1]
         grid = state.grid
         dr, dc = ACTIONS[action]
@@ -685,7 +685,7 @@ class BoxPushingEnv:
         solved = jnp.all(_REMOVE_AGENT_ARRAY[new_grid] == _REMOVE_AGENT_ARRAY[goal_grid]).astype(jnp.float32)
         return solved
 
-    def _handle_pickup(self, state: BoxPushingState) -> Tuple[jax.Array, bool]:
+    def _handle_pickup(self, state: BoxMovingState) -> Tuple[jax.Array, bool]:
         """Handle pickup action using PICK_UP_DICT mapping (JAX-friendly)."""
 
         row, col = state.agent_pos[0], state.agent_pos[1]
@@ -712,7 +712,7 @@ class BoxPushingEnv:
         new_grid, new_agent_has_box = jax.lax.cond(any_match, pickup_valid, pickup_invalid)
         return new_grid, new_agent_has_box
 
-    def _handle_putdown(self, state: BoxPushingState) -> Tuple[jax.Array, bool]:
+    def _handle_putdown(self, state: BoxMovingState) -> Tuple[jax.Array, bool]:
         """Handle putdown action using PUT_DOWN_DICT mapping (JAX-friendly)."""
 
         row, col = state.agent_pos[0], state.agent_pos[1]
@@ -748,7 +748,7 @@ class BoxPushingEnv:
         total_reward = 0
         reward = 0
 
-        print("=== Box Pushing Game ===")
+        print("=== Box Moving Game ===")
         print("Controls: w(up), s(down), a(left), d(right), e(pickup), r(drop)")
         print("Goal: Move boxes to target cells (marked with 'T')")
         print("Press 'q' to quit\n")
@@ -797,7 +797,7 @@ class BoxPushingEnv:
                 state, reward, done, info = self.step(state, action)
                 total_reward += reward
 
-    def _display_state(self, state: BoxPushingState):
+    def _display_state(self, state: BoxMovingState):
         """Display the current game state in ASCII."""
         print("\n" + "=" * (self.grid_size * 2 + 1))
         print(state.grid)
@@ -844,8 +844,8 @@ class BoxPushingEnv:
         ax.invert_yaxis()
 
 
-class Wrapper(BoxPushingEnv):
-    def __init__(self, env: BoxPushingEnv):
+class Wrapper(BoxMovingEnv):
+    def __init__(self, env: BoxMovingEnv):
         self._env = env
         # Copy attributes from wrapped environment
         for attr in [
@@ -860,15 +860,15 @@ class Wrapper(BoxPushingEnv):
             if hasattr(env, attr):
                 setattr(self, attr, getattr(env, attr))
 
-    def reset(self, key: jax.Array) -> Tuple[BoxPushingState, Dict[str, Any]]:
+    def reset(self, key: jax.Array) -> Tuple[BoxMovingState, Dict[str, Any]]:
         return self._env.reset(key)
 
-    def step(self, state: BoxPushingState, action: int) -> Tuple[BoxPushingState, float, bool, Dict[str, Any]]:
+    def step(self, state: BoxMovingState, action: int) -> Tuple[BoxMovingState, float, bool, Dict[str, Any]]:
         return self._env.step(state, action)
 
 
 class AutoResetWrapper(Wrapper):
-    def __init__(self, env: BoxPushingEnv):
+    def __init__(self, env: BoxMovingEnv):
         super().__init__(env)
 
     def reset_function(self, key):
@@ -881,7 +881,7 @@ class AutoResetWrapper(Wrapper):
         state, info = self.reset_function(key)
         return state, info
 
-    def step(self, state: BoxPushingState, action: int) -> Tuple[BoxPushingState, float, bool, Dict[str, Any]]:
+    def step(self, state: BoxMovingState, action: int) -> Tuple[BoxMovingState, float, bool, Dict[str, Any]]:
         state, reward, done, info = self._env.step(state, action)
         key_new, _ = jax.random.split(state.key, 2)
 
@@ -903,12 +903,12 @@ class AutoResetWrapper(Wrapper):
 
 
 class SymmetryFilter(Wrapper):
-    def __init__(self, env: BoxPushingEnv, axis="horizontal"):
+    def __init__(self, env: BoxMovingEnv, axis="horizontal"):
         assert env.grid_size % 2 == 0  # For clarity and convenience
         self.axis = axis
         super().__init__(env)
 
-    def check_symmetry_crossing(self, old_state: BoxPushingState, new_state: BoxPushingState):
+    def check_symmetry_crossing(self, old_state: BoxMovingState, new_state: BoxMovingState):
         middle = self._env.grid_size // 2
 
         if self.axis == "horizontal":
@@ -922,7 +922,7 @@ class SymmetryFilter(Wrapper):
         # and so we reset the environment
         return jnp.logical_xor(old_pos < middle, new_pos < middle)
 
-    def step(self, state: BoxPushingState, action: int) -> Tuple[BoxPushingState, float, bool, Dict[str, Any]]:
+    def step(self, state: BoxMovingState, action: int) -> Tuple[BoxMovingState, float, bool, Dict[str, Any]]:
         new_state, reward, done, info = self._env.step(state, action)
         is_truncated = jnp.logical_or(info["truncated"], self.check_symmetry_crossing(state, new_state))
 
@@ -932,17 +932,17 @@ class SymmetryFilter(Wrapper):
 
 
 class QuarterFilter(Wrapper):
-    def __init__(self, env: BoxPushingEnv):
+    def __init__(self, env: BoxMovingEnv):
         assert env.grid_size % 2 == 0  # For clarity and convenience
         super().__init__(env)
 
-    def check_wrong_quarter_crossing(self, new_state: BoxPushingState):
+    def check_wrong_quarter_crossing(self, new_state: BoxMovingState):
         fields_allowed = new_state.extras["fields_allowed"]
         agent_row, agent_col = new_state.agent_pos[0], new_state.agent_pos[1]
 
         return jnp.logical_not(fields_allowed[agent_row, agent_col])
 
-    def step(self, state: BoxPushingState, action: int) -> Tuple[BoxPushingState, float, bool, Dict[str, Any]]:
+    def step(self, state: BoxMovingState, action: int) -> Tuple[BoxMovingState, float, bool, Dict[str, Any]]:
         new_state, reward, done, info = self._env.step(state, action)
         is_truncated = jnp.logical_or(info["truncated"], self.check_wrong_quarter_crossing(new_state))
 
@@ -973,7 +973,7 @@ def wrap_for_eval(env):
 
 
 if __name__ == "__main__":
-    env = BoxPushingEnv(
+    env = BoxMovingEnv(
         grid_size=6,
         number_of_boxes_max=1,
         number_of_boxes_min=1,

@@ -11,7 +11,7 @@ from .block_moving_env import (
     GridStatesEnum,
     DefaultLevelGenerator,
     QuarterGenerator,
-    BoxPushingState,
+    BoxMovingState,
     create_solved_state,
     calculate_number_of_boxes,
     remove_targets,
@@ -109,7 +109,7 @@ def test_create_solved_state_transforms_targets_and_boxes_and_agent_cell1():
 
     agent_pos = jnp.array([0, 0], dtype=jnp.int32)
     key = jax.random.PRNGKey(42)
-    state = BoxPushingState(
+    state = BoxMovingState(
         key=key,
         grid=grid,
         agent_pos=agent_pos,
@@ -152,7 +152,7 @@ def test_create_solved_state_transforms_targets_and_boxes_and_agent_cell2():
 
     agent_pos = jnp.array([0, 0], dtype=jnp.int32)
     key = jax.random.PRNGKey(42)
-    state = BoxPushingState(
+    state = BoxMovingState(
         key=key,
         grid=grid,
         agent_pos=agent_pos,
@@ -195,7 +195,7 @@ def test_create_solved_state_transforms_targets_and_boxes_and_agent_cell3():
 
     agent_pos = jnp.array([0, 0], dtype=jnp.int32)
     key = jax.random.PRNGKey(42)
-    state = BoxPushingState(
+    state = BoxMovingState(
         key=key,
         grid=grid,
         agent_pos=agent_pos,
@@ -238,7 +238,7 @@ def test_create_solved_state_transforms_targets_and_boxes_and_agent_cell4():
 
     agent_pos = jnp.array([0, 0], dtype=jnp.int32)
     key = jax.random.PRNGKey(42)
-    state = BoxPushingState(
+    state = BoxMovingState(
         key=key,
         grid=grid,
         agent_pos=agent_pos,
