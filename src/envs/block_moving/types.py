@@ -4,6 +4,7 @@ from flax import struct
 from typing import Dict
 from dataclasses import dataclass
 
+
 class BoxMovingState(struct.PyTreeNode):
     """State representation for the box moving environment."""
 

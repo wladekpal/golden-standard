@@ -3,6 +3,7 @@ import jax
 import jax.numpy as jnp
 from typing import Tuple, Dict, Any
 
+
 class Wrapper(BoxMovingEnv):
     def __init__(self, env: BoxMovingEnv):
         self._env = env
