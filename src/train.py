@@ -208,8 +208,8 @@ def evaluate_agent_in_specific_env(agent, key, jitted_create_batch, config, name
             {
                 f"{prefix}/critic_loss": loss_info["critic/critic_loss"],
                 f"{prefix}/q_mean": loss_info["critic/q_mean"],
-                f"{prefix}/v_mean": loss_info["value/v_mean"],
-                f"{prefix}/actor_loss": loss_info["actor/actor_loss"],
+                f"{prefix}/q_min": loss_info["critic/q_min"],
+                f"{prefix}/q_max": loss_info["critic/q_max"],
             }
         )
     elif config.agent.agent_name == "gcdqn":

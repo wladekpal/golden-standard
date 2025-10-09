@@ -40,7 +40,7 @@ default_config = ml_collections.FrozenConfigDict(
             actor_loss='awr',  # Actor loss type ('awr' or 'ddpgbc').
             alpha=0.1,  # Temperature in AWR or BC coefficient in DDPG+BC.
             tau=0.005,  # Target network update rate.
-            expectile=0.9, # IQL expectile.
+            expectile=0.5, # IQL expectile.
             actor_log_q=True,  # Whether to maximize log Q (True) or Q itself (False) in the actor loss.
             const_std=True,  # Whether to use constant standard deviation for the actor.
             discrete=True,  # Whether the action space is discrete.
@@ -48,7 +48,7 @@ default_config = ml_collections.FrozenConfigDict(
             # Dataset hyperparameters.
             use_next_obs=False, #TODO: This is not used anymore, we should remove it 
             target_entropy_multiplier=0.5,  # Multiplier for the target entropy (used in SAC-like agents).
-            target_entropy=-1.1,  # Default target entropy for SAC-like agents (-ln(|A|/2))
+            target_entropy=-1.1,  # Default target entropy for agents (-ln(|A|/2))
             use_discounted_mc_rewards=False,  # Whether to use discounted Monte Carlo rewards.
             action_sampling='softmax',
             is_td=False,
