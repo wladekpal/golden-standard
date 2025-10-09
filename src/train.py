@@ -16,7 +16,7 @@ from jax import random
 from impls.agents import create_agent
 from envs.block_moving.block_moving_env import BoxMovingEnv
 from envs.block_moving.wrappers import wrap_for_eval, wrap_for_training
-from envs.block_moving.types import TimeStep, remove_targets
+from envs.block_moving.env_types import TimeStep, remove_targets
 from config import ROOT_DIR
 from impls.utils.checkpoints import save_agent
 from utils import log_gif, sample_actions_critic

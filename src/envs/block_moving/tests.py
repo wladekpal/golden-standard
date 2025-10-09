@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 # adjust the import to where your module actually lives
 from .block_moving_env import BoxMovingEnv
 from .generators import DefaultLevelGenerator, create_solved_state, VariableQuarterGenerator
-from .types import calculate_number_of_boxes, GridStatesEnum, BoxMovingState, remove_targets
+from .env_types import calculate_number_of_boxes, GridStatesEnum, BoxMovingState, remove_targets
 from .wrappers import AutoResetWrapper, QuarterFilter
 
 

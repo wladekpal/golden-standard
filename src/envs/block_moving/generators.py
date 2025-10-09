@@ -1,4 +1,4 @@
-from .types import BoxMovingState, GridStatesEnum, TimeStep
+from .env_types import BoxMovingState, GridStatesEnum, TimeStep
 import jax
 import jax.numpy as jnp
 from jax import random

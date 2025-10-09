@@ -1,6 +1,6 @@
 from typing import Union, Annotated
 from .block_moving.block_moving_env import BoxMovingEnv
-from .block_moving.types import BoxMovingConfig
+from .block_moving.env_types import BoxMovingConfig
 from flax.struct import dataclass
 import tyro
 from dataclasses import asdict

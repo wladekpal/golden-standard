@@ -5,7 +5,7 @@ import chex
 import matplotlib
 import os
 import logging
-from .types import (
+from .env_types import (
     BoxMovingState,
     GridStatesEnum,
     remove_targets,

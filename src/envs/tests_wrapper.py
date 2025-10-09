@@ -4,7 +4,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 from .block_moving.wrappers import AutoResetWrapper
-from .block_moving.types import BoxMovingState
+from .block_moving.env_types import BoxMovingState
 
 
 def make_state(key, extras=None, grid_size=4):
