@@ -7,15 +7,10 @@ import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 # adjust the import to where your module actually lives
-from .block_moving_env import (
-    GridStatesEnum,
-    DefaultLevelGenerator,
-    QuarterGenerator,
-    BoxPushingState,
-    create_solved_state,
-    calculate_number_of_boxes,
-    remove_targets,
-)
+from .block_moving_env import BoxMovingEnv
+from .generators import DefaultLevelGenerator, create_solved_state, VariableQuarterGenerator
+from .env_types import calculate_number_of_boxes, GridStatesEnum, BoxMovingState, remove_targets
+from .wrappers import AutoResetWrapper, QuarterFilter
 
 
 def test_remove_targets_mapping_all_values():
@@ -80,8 +75,13 @@ def test_default_generator_box_and_target_counts(seed):
 @pytest.mark.parametrize("seed", [1, 11])
 def test_quarter_generator_box_and_target_counts(seed):
     """QuarterGenerator should also produce matching counts for boxes and targets."""
-    gen = QuarterGenerator(
-        grid_size=4, number_of_boxes_min=2, number_of_boxes_max=3, number_of_moving_boxes_max=1, special=False
+    gen = VariableQuarterGenerator(
+        grid_size=4,
+        number_of_boxes_min=3,
+        number_of_boxes_max=3,
+        quarter_size=2,
+        number_of_moving_boxes_max=1,
+        special=False,
     )
     key = jax.random.PRNGKey(seed)
     state = gen.generate(key)
@@ -109,7 +109,7 @@ def test_create_solved_state_transforms_targets_and_boxes_and_agent_cell1():
 
     agent_pos = jnp.array([0, 0], dtype=jnp.int32)
     key = jax.random.PRNGKey(42)
-    state = BoxPushingState(
+    state = BoxMovingState(
         key=key,
         grid=grid,
         agent_pos=agent_pos,
@@ -152,7 +152,7 @@ def test_create_solved_state_transforms_targets_and_boxes_and_agent_cell2():
 
     agent_pos = jnp.array([0, 0], dtype=jnp.int32)
     key = jax.random.PRNGKey(42)
-    state = BoxPushingState(
+    state = BoxMovingState(
         key=key,
         grid=grid,
         agent_pos=agent_pos,
@@ -195,7 +195,7 @@ def test_create_solved_state_transforms_targets_and_boxes_and_agent_cell3():
 
     agent_pos = jnp.array([0, 0], dtype=jnp.int32)
     key = jax.random.PRNGKey(42)
-    state = BoxPushingState(
+    state = BoxMovingState(
         key=key,
         grid=grid,
         agent_pos=agent_pos,
@@ -238,7 +238,7 @@ def test_create_solved_state_transforms_targets_and_boxes_and_agent_cell4():
 
     agent_pos = jnp.array([0, 0], dtype=jnp.int32)
     key = jax.random.PRNGKey(42)
-    state = BoxPushingState(
+    state = BoxMovingState(
         key=key,
         grid=grid,
         agent_pos=agent_pos,
@@ -261,3 +261,22 @@ def test_create_solved_state_transforms_targets_and_boxes_and_agent_cell4():
     assert calculate_number_of_boxes(solved.grid) == 2
     # agent_has_box should be cleared to False
     assert bool(solved.agent_has_box) is False
+
+
+if __name__ == "__main__":
+    env = BoxMovingEnv(
+        grid_size=6,
+        number_of_boxes_max=1,
+        number_of_boxes_min=1,
+        number_of_moving_boxes_max=1,
+        level_generator="variable",
+        generator_special=False,
+        dense_rewards=False,
+        terminate_when_success=True,
+        episode_length=10,
+        quarter_size=1,
+    )
+    env = QuarterFilter(env)
+    env = AutoResetWrapper(env)
+    key = jax.random.PRNGKey(0)
+    env.play_game(key)

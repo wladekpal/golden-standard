@@ -14,7 +14,9 @@ import jax.numpy as jnp
 from jax import random
 
 from impls.agents import create_agent
-from envs.block_moving_env import BoxPushingEnv, wrap_for_eval, wrap_for_training, TimeStep, remove_targets
+from envs.block_moving.block_moving_env import BoxMovingEnv
+from envs.block_moving.wrappers import wrap_for_eval, wrap_for_training
+from envs.block_moving.env_types import TimeStep, remove_targets
 from config import ROOT_DIR
 from impls.utils.checkpoints import save_agent
 from utils import log_gif, sample_actions_critic
@@ -137,7 +139,7 @@ def create_batch(
         actor_goals = future_state.grid
 
     # TODO: this should be use only with dense reward/relabeling
-    reward = jax.vmap(BoxPushingEnv.get_reward)(state.grid, next_state.grid, value_goals)
+    reward = jax.vmap(BoxMovingEnv.get_reward)(state.grid, next_state.grid, value_goals)
 
     # Create valid batch
     batch = {
