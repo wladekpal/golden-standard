@@ -57,7 +57,7 @@ do
         CUDA_VISIBLE_DEVICES=$GPU_ID uv run --active src/train.py \
         env:box-moving \
         --agent.agent_name gciql_search \
-        --exp.name gciql_search_1.1_${number_of_boxes}_grid_${grid_size}_ep_len_${episode_length}_filter_${filtering}_expectile_0.9 \
+        --exp.name gciql_search_1.1_${number_of_boxes}_grid_${grid_size}_ep_len_${episode_length}_filter_${filtering}_expectile_0.5 \
         --env.number_of_boxes_max ${number_of_boxes} \
         --env.number_of_boxes_min ${number_of_boxes} \
         --env.number_of_moving_boxes_max ${number_of_boxes} \
@@ -71,7 +71,7 @@ do
         --agent.alpha 0.1 \
         --exp.max_replay_size 10000 \
         --exp.batch_size 256 \
-        --agent.expectile 0.9 \
+        --agent.expectile 0.5 \
         --exp.use_future_and_random_goals \
         --exp.eval_special \
         --env.level_generator variable 
