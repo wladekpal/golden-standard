@@ -1,3 +1,4 @@
+import functools
 from typing import Any
 
 import flax
@@ -28,6 +29,7 @@ class CRLSearchAgent(flax.struct.PyTreeNode):
         """Compute the contrastive value loss for the Q or V function."""
         batch_size = batch['observations'].shape[0]
         actions = batch['actions']
+        I = jnp.eye(batch_size)
 
         q, phi, psi = self.network.select(module_name)(
             batch['observations'],
@@ -39,15 +41,50 @@ class CRLSearchAgent(flax.struct.PyTreeNode):
         if len(phi.shape) == 2:  # Non-ensemble.
             phi = phi[None, ...]
             psi = psi[None, ...]
-        logits = jnp.einsum('eik,ejk->ije', phi, psi) / jnp.sqrt(phi.shape[-1])
-        # logits.shape is (B, B, e) with one term for positive pair and (B - 1) terms for negative pairs in each row.
-        I = jnp.eye(batch_size)
-        contrastive_loss = jax.vmap(
-            lambda _logits: optax.sigmoid_binary_cross_entropy(logits=_logits, labels=I),
+        logits_pos = jnp.einsum('eik,ejk->ije', phi, psi) / jnp.sqrt(phi.shape[-1])
+        log_p = jax.nn.log_sigmoid(logits_pos)
+        pos_loss = jax.vmap(
+            lambda _log_p: -I * _log_p,
             in_axes=-1,
             out_axes=-1,
-        )(logits)
-        contrastive_loss = jnp.mean(contrastive_loss)
+        )(log_p)
+
+        critic_with_params = functools.partial(
+            self.network.select(module_name),
+            params=grad_params,
+        )
+        all_actions = jnp.tile(jnp.arange(6), (batch['observations'].shape[0], 1))  # B x 6
+        q, phi, psi = jax.vmap(critic_with_params, in_axes=(None, None, 1, None))(
+            batch['observations'],
+            batch['value_goals'],
+            all_actions,
+            True,
+        ) # 6 x 2 x B, 6 x 2 x B x e, 6 x 2 x B x e
+
+        if len(phi.shape) == 2:  # Non-ensemble.
+            phi = phi[None, ...]
+            psi = psi[None, ...]
+        logits = jnp.einsum('aeik,aejk->aije', phi, psi) / jnp.sqrt(phi.shape[-1])
+        dist = distrax.Categorical(logits=logits.transpose(1,2,3,0))
+        probs = dist.probs.transpose(3,0,1,2) 
+
+        log_not_p = jax.nn.log_sigmoid(-logits)
+        neg_loss = jax.vmap(
+            lambda _log_not_p: - (1.0 - I) * _log_not_p,
+            in_axes=-1,
+            out_axes=-1,
+        )(log_not_p)
+        neg_loss = jnp.sum(probs*neg_loss, axis=0)  # (B, B, e)
+
+        contrastive_loss = jnp.mean(pos_loss + neg_loss/10)  # (B, B, e)
+
+        # contrastive_loss = jax.vmap(
+        #     lambda _logits: optax.sigmoid_binary_cross_entropy(logits=_logits, labels=I),
+        #     in_axes=-1,
+        #     out_axes=-1,
+        # )(logits)
+        # contrastive_loss = jnp.sum(contrastive_loss, axis=0)  
+        # contrastive_loss = jnp.mean(contrastive_loss)
 
         # Compute additional statistics.
         logits = jnp.mean(logits, axis=-1) # (B, B)

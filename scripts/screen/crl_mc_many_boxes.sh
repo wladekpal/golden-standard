@@ -45,33 +45,32 @@ cd "$temp_dir"
 echo "Current path: '$(pwd)'"
 
 
-target_entropy=-0.69
-number_of_boxes=4
+target_entropy=-1.1
 
 for seed in 1 2
 do
-    for number_of_moving_boxes_max in 3 2 1
+    for number_of_boxes in 3 2 1
     do
         echo "Running with grid_size: $grid_size, number_of_boxes_min: $number_of_boxes, number_of_boxes_max: $number_of_boxes, number_of_moving_boxes_max: $number_of_moving_boxes_max"
         XLA_PYTHON_CLIENT_PREALLOCATE=false CUDA_VISIBLE_DEVICES=$GPU_ID uv run --active src/train.py \
-        env:box-pushing \
+        env:box-moving \
         --agent.agent_name crl_search \
-        --exp.name many_boxes_crl_te_${target_entropy}_${number_of_boxes}_grid_${grid_size}_moveable_${number_of_moving_boxes_max}_no_filtering \
+        --exp.name crl_modified_3_long_divide_ned_by_10_te_${target_entropy}_grid_${grid_size}_boxes_${number_of_boxes} \
         --env.number_of_boxes_max ${number_of_boxes} \
         --env.number_of_boxes_min ${number_of_boxes} \
-        --env.number_of_moving_boxes_max ${number_of_moving_boxes_max} \
+        --env.number_of_moving_boxes_max ${number_of_boxes} \
         --env.grid_size ${grid_size} \
         --exp.gamma 0.99 \
         --env.episode_length 100 \
         --exp.seed ${seed} \
-        --exp.project "CRL-diagonal" \
-        --exp.epochs 50 \
+        --exp.project "paper_main_fig_exact" \
+        --exp.epochs 150 \
         --exp.gif_every 10 \
         --agent.alpha 0.1 \
-        --agent.expectile 0.5  \
         --exp.max_replay_size 10000 \
         --exp.batch_size 256 \
-        --exp.eval_different_box_numbers \
+        --exp.eval_special \
+        --env.level_generator variable \
         --agent.target_entropy ${target_entropy}
     done
 done
