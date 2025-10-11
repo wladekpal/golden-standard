@@ -76,7 +76,7 @@ class CRLSearchAgent(flax.struct.PyTreeNode):
         )(log_not_p)
         neg_loss = jnp.sum(probs*neg_loss, axis=0)  # (B, B, e)
 
-        contrastive_loss = jnp.mean(pos_loss + neg_loss/10)  # (B, B, e)
+        contrastive_loss = jnp.mean(pos_loss + neg_loss)  # (B, B, e)
 
         # contrastive_loss = jax.vmap(
         #     lambda _logits: optax.sigmoid_binary_cross_entropy(logits=_logits, labels=I),

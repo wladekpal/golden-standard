@@ -55,7 +55,7 @@ do
         XLA_PYTHON_CLIENT_PREALLOCATE=false CUDA_VISIBLE_DEVICES=$GPU_ID uv run --active src/train.py \
         env:box-moving \
         --agent.agent_name crl_search \
-        --exp.name crl_modified_3_long_divide_ned_by_10_te_${target_entropy}_grid_${grid_size}_boxes_${number_of_boxes} \
+        --exp.name crl_modified_3_long_diff_parametrization_phi_te_${target_entropy}_grid_${grid_size}_boxes_${number_of_boxes} \
         --env.number_of_boxes_max ${number_of_boxes} \
         --env.number_of_boxes_min ${number_of_boxes} \
         --env.number_of_moving_boxes_max ${number_of_boxes} \
