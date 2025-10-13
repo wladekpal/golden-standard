@@ -46,57 +46,43 @@ class GCIQLSearchAgent(flax.struct.PyTreeNode):
         """Compute the IQL critic loss."""
         next_v = self.network.select('value')(batch['next_observations'], batch['value_goals'])
         if self.config['use_discounted_mc_rewards']:
-            q = batch['rewards'] 
+            target = batch['rewards'] 
         else:
-            q = batch['rewards'] + self.config['discount'] * batch['masks'] * next_v
+            target = batch['rewards'] + self.config['discount'] * batch['masks'] * next_v
 
         q1, q2 = self.network.select('critic')(
             batch['observations'], batch['value_goals'], batch['actions'], params=grad_params
         )
-        critic_loss = ((q1 - q) ** 2 + (q2 - q) ** 2).mean()
+        critic_loss = ((q1 - target) ** 2 + (q2 - target) ** 2).mean()
 
-        return critic_loss, {
-            'critic_loss': critic_loss,
-            'q_mean': q.mean(),
-            'q_max': q.max(),
-            'q_min': q.min(),
-        }
-
-    def actor_loss(self, batch, grad_params, rng=None):
-        """Compute the actor loss (AWR or DDPG+BC)."""
-        # Maximize log Q if actor_log_q is True (which is default).
-
+        # Update target entropy
         all_actions = jnp.tile(jnp.arange(6), (batch['observations'].shape[0], 1))  # B x 6
-        qs = jax.lax.stop_gradient(jax.vmap(self.network.select('critic'), in_axes=(None, None, 1))(batch['observations'], batch['actor_goals'], all_actions)) # 6 x 2 x B
-        qs = qs.min(axis=1) # 6 x B
+        qs = jax.lax.stop_gradient(
+            jax.vmap(self.network.select("critic"), in_axes=(None, None, 1))(batch['observations'], jnp.roll(batch['next_observations'], shift=1, axis=0), all_actions)
+        )  # 6 x 2 x B
+        if len(qs.shape) == 2:  # Non-ensemble.
+            qs = qs[:, None, ...]
+        qs = qs.mean(axis=1)  # 6 x B
         qs = qs.transpose(1, 0) # B x 6
 
-        alpha = self.network.select('alpha')(params=grad_params)
-        dist = distrax.Categorical(logits=qs / jnp.maximum(1e-6, alpha))
-        probs = dist.probs  # shape (B, 6)
+        alpha_temp = self.network.select('alpha_temp')(params=grad_params)
+        dist = distrax.Categorical(logits=qs / jnp.maximum(1e-6, alpha_temp))
+        entropy = dist.entropy()
+        alpha_temp_loss = ((entropy + self.config['target_entropy'])**2).mean()  # Target entropy is a negative constant like -log(6)
 
-        log_probs = jnp.log(probs + 1e-8)
-        entropy = -(probs * log_probs).sum(axis=-1).mean()
+        total_loss = critic_loss +  alpha_temp_loss
 
-        log_probs_rb = dist.log_prob(batch['actions'])
-        entropy_rb = -log_probs_rb.mean()
-
-        alpha_loss = ((entropy + self.config['target_entropy']) ** 2).mean()  # Target entropy is a negative constant like -log(6)
-        actor_loss = 0
-        total_loss = actor_loss + alpha_loss
-
-        actor_info = {
-            'total_loss': total_loss,
-            'actor_loss': actor_loss,
-            'adv': 0,
-            'bc_log_prob': log_probs.mean(),
-            'alpha_loss': alpha_loss,
-            'alpha': alpha,
-            'entropy': entropy,
-            'entropy_rb_actions': entropy_rb,
+        return total_loss, {
+            'critic_loss': critic_loss,
+            'q_mean': target.mean(),
+            'q_max': target.max(),
+            'q_min': target.min(),
+            'q.std': target.std(),
+            'entropy': entropy.mean(),
+            'alpha_temp': alpha_temp,
+            'entropy_std': dist.entropy().std(),
+            'alpha_temp_loss': alpha_temp_loss,
         }
-
-        return total_loss, actor_info
 
     @jax.jit
     def total_loss(self, batch, grad_params, rng=None):
@@ -112,12 +98,7 @@ class GCIQLSearchAgent(flax.struct.PyTreeNode):
         for k, v in critic_info.items():
             info[f'critic/{k}'] = v
 
-        rng, actor_rng = jax.random.split(rng)
-        actor_loss, actor_info = self.actor_loss(batch, grad_params, actor_rng)
-        for k, v in actor_info.items():
-            info[f'actor/{k}'] = v
-
-        loss = value_loss + critic_loss + actor_loss
+        loss = value_loss + critic_loss
         return loss, info
 
     def target_update(self, network, module_name):
@@ -156,16 +137,18 @@ class GCIQLSearchAgent(flax.struct.PyTreeNode):
         if not self.config['discrete']:
             raise NotImplementedError("ClearnSearchAgent.sample_actions supports only discrete action spaces.")
         
+        all_actions = jnp.tile(jnp.arange(6), (observations.shape[0], 1))  # B x 6
+        qs = jax.lax.stop_gradient(jax.vmap(self.network.select('critic'), in_axes=(None, None, 1))(observations, goals, all_actions)) # 6 x 2 x B
+        qs = qs.mean(axis=1) # 6 x B
+        qs = qs.transpose(1, 0) # B x 6
+
         if self.config['action_sampling'] == 'softmax':
             # Use critic to get Q-values (use first/ensemble as appropriate). Prefer the minimum head for conservative action,
             # or average — here we average the two heads and pick argmax.
-            all_actions = jnp.tile(jnp.arange(6), (observations.shape[0], 1))  # B x 6
-            qs = jax.lax.stop_gradient(jax.vmap(self.network.select('critic'), in_axes=(None, None, 1))(observations, goals, all_actions)) # 6 x 2 x B
-            qs = qs.mean(axis=1) # 6 x B
-            qs = qs.transpose(1, 0) # B x 6
 
             # Softmax actions
-            dist = distrax.Categorical(logits=qs / jnp.maximum(1e-6, 1))
+            alpha_temp = jax.lax.stop_gradient(self.network.select('alpha_temp')())
+            dist = distrax.Categorical(logits=qs / jnp.maximum(1e-6, alpha_temp))
             actions = dist.sample(seed=seed)
         elif self.config['action_sampling'] == 'epsilon_greedy':
             greedy_actions = jnp.argmax(qs, axis=-1)  # B
@@ -260,14 +243,14 @@ class GCIQLSearchAgent(flax.struct.PyTreeNode):
 
         if config['target_entropy'] is None:
             config['target_entropy'] = -config['target_entropy_multiplier'] * action_dim
-        alpha_def = LogParam()
+        alpha_temp_def = LogParam()
         
         network_info = dict(
             value=(value_def, (ex_observations, ex_goals)),
             critic=(critic_def, (ex_observations, ex_goals, ex_actions)),
             target_critic=(copy.deepcopy(critic_def), (ex_observations, ex_goals, ex_actions)),
             actor=(actor_def, (ex_observations, ex_goals)),
-            alpha=(alpha_def, ()),
+            alpha_temp=(alpha_temp_def, ()),
         )
         networks = {k: v[0] for k, v in network_info.items()}
         network_args = {k: v[1] for k, v in network_info.items()}
