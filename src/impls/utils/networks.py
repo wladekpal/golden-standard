@@ -433,13 +433,15 @@ class GCBilinearValue(nn.Module):
         if self.goal_encoder is not None:
             goals = self.goal_encoder(goals)
 
+        psi = self.psi(goals)
+        psi_states = self.psi(observations)
+        psi_states = psi_states.mean(axis=0)
         if actions is None:
-            phi_inputs = observations
+            phi_inputs = psi_states
         else:
-            phi_inputs = jnp.concatenate([observations, actions], axis=-1)
+            phi_inputs = jnp.concatenate([psi_states,actions], axis=-1)
 
         phi = self.phi(phi_inputs)
-        psi = self.psi(goals)
 
         v = (phi * psi / jnp.sqrt(self.latent_dim)).sum(axis=-1)
 
