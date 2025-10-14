@@ -26,16 +26,16 @@ static_model = """
     <texture type="skybox" builtin="gradient" rgb1="0.3 0.5 0.7" rgb2="0 0 0" width="512" height="3072"/>
 
 
-    <texture name="wood1" file="/home/wladekpal/crl_subgoal/assets/light-wood.png" type="2d"/>
+    <texture name="wood1" file="assets/light-wood.png" type="2d"/>
     <material name="wood1" texture="wood1" shininess="0.5"/>
 
-    <texture name="wood2" file="/home/wladekpal/crl_subgoal/assets/oak.png" type="2d"/>
+    <texture name="wood2" file="assets/oak.png" type="2d"/>
     <material name="wood2" texture="wood2" shininess="0.5"/>
 
-    <texture name="wood3" file="/home/wladekpal/crl_subgoal/assets/wood3.png" type="2d"/>
+    <texture name="wood3" file="assets/wood3.png" type="2d"/>
     <material name="wood3" texture="wood3" shininess="0.5"/>
 
-    <texture name="steel" file="/home/wladekpal/crl_subgoal/assets/steel.png" type="2d"/>
+    <texture name="steel" file="assets/steel.png" type="2d"/>
     <material name="steel" texture="steel" shininess="0.5"/>
 
   </asset>
@@ -52,10 +52,10 @@ if len(sys.argv) < 2:
 data_path = sys.argv[1]
 data = np.load(data_path)
 
-state = data[0][10]
 FIELD_WIDTH = 0.5
 BLOCK_WIDTH = 0.3
 SUBDIV_STEPS = 10
+ENV_IDX = 0
 SPHERE_SIZE = 0.2
 RESOLUTION = (1000, 1000)
 EP_LEN = 30
@@ -204,7 +204,7 @@ def render_trajectory(data, static_model):
     return frames
 
 
-frames = render_trajectory(data[:EP_LEN, 0], static_model)
+frames = render_trajectory(data[:EP_LEN, ENV_IDX], static_model)
 
 
 fig, ax = plt.subplots(figsize=(frames[0].shape[1] / 50, frames[0].shape[0] / 50), dpi=100)
