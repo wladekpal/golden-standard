@@ -16,7 +16,7 @@ static_model = """
   <statistic center="1 0 0.55" extent="1.1"/>
 
   <visual>
-    <headlight diffuse="0.6 0.6 0.6" ambient="0.3 0.3 0.3" specular="0 0 0"/>
+    <headlight diffuse="0.8 0.8 0.8" ambient="0.3 0.3 0.3" specular="0 0 0"/>
     <rgba haze="0.15 0.25 0.35 1"/>
     <global offwidth="1000" offheight="1000" azimuth="150" elevation="-20"/>
 
@@ -114,7 +114,7 @@ def add_target(spec, x, y):
     spec.worldbody.add_geom(
         name="target-%d-%d" % (x, y),
         type=mj.mjtGeom.mjGEOM_BOX,
-        rgba=[0, 1, 0.1, 0.1],
+        rgba=[0, 1, 0.1, 0.4],
         pos=[x, y, BLOCK_WIDTH / 1.8],
         size=[BLOCK_WIDTH / 1.8, BLOCK_WIDTH / 1.8, BLOCK_WIDTH / 1.8],
         material="wood1",
