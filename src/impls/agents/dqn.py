@@ -9,7 +9,7 @@ import ml_collections
 import optax
 from impls.utils.encoders import GCEncoder, encoder_modules
 from impls.utils.flax_utils import ModuleDict, TrainState, nonpytree_field
-from impls.utils.networks import GCActor, GCDiscreteActor, GCDiscreteCritic, GCValue, LogParam
+from impls.utils.networks import GCActor, GCDiscreteActor, GCDiscreteBilinearCritic, GCDiscreteCritic, GCValue, LogParam, GCDiscreteMRNCritic
 
 
 class GCDQNAgent(flax.struct.PyTreeNode):
@@ -185,11 +185,20 @@ class GCDQNAgent(flax.struct.PyTreeNode):
             encoders['critic'] = GCEncoder(concat_encoder=encoder_module())
 
         # For DQN we only need a discrete critic (we keep other modules for compatibility/minimal changes).
-        critic_def = GCDiscreteCritic(
+        critic_def = GCDiscreteBilinearCritic(
+            # hidden_dims=config['value_hidden_dims'],
+            # layer_norm=config['layer_norm'],
+            # ensemble=True,
+            # # gc_encoder=encoders.get('critic'),
+            # action_dim=action_dim,
+            # net_arch=config['net_arch'],
             hidden_dims=config['value_hidden_dims'],
+            latent_dim=config['latent_dim'],
             layer_norm=config['layer_norm'],
             ensemble=True,
-            gc_encoder=encoders.get('critic'),
+            value_exp=False,
+            state_encoder=encoders.get('critic_state'),
+            goal_encoder=encoders.get('critic_goal'),
             action_dim=action_dim,
             net_arch=config['net_arch'],
         )
