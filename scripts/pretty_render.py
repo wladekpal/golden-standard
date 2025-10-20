@@ -27,11 +27,11 @@ static_model = """
   </visual>
 
   <asset>
-    <texture type="skybox" builtin="gradient" rgb1="0.3 0.5 0.7" rgb2="0 0 0" width="512" height="3072"/>
+    <texture type="skybox" builtin="gradient"
+            rgb1="0.18 0.22 0.28" rgb2="0.02 0.03 0.05" width="512" height="3072"/>
 
 
-    <texture name="wood1" file="assets/light-wood.png" type="2d"/>
-    <material name="wood1" texture="wood1" shininess="0.5"/>
+    # <texture name="wood1" file="assets/light-wood.png" type="2d"/>
 
     <texture name="wood2" file="assets/oak.png" type="2d"/>
     <material name="wood2" texture="wood2" shininess="0.5"/>
@@ -39,8 +39,10 @@ static_model = """
     <texture name="wood3" file="assets/wood3.png" type="2d"/>
     <material name="wood3" texture="wood3" shininess="0.5"/>
 
-    <texture name="steel" file="assets/steel.png" type="2d"/>
-    <material name="steel" texture="steel" shininess="0.5"/>
+    # <texture name="steel" file="assets/steel.png" type="2d"/>
+
+    <material name="wood1" texture="wood1" shininess="0.8" specular="0.15"/>
+    <material name="steel" texture="steel" shininess="1.2" specular="0.6"/>
 
   </asset>
 
@@ -62,7 +64,7 @@ SUBDIV_STEPS = 10
 ENV_IDX = 0
 SPHERE_SIZE = 0.2
 RESOLUTION = (1000, 1000)
-EP_LEN = 30
+EP_LEN = 2
 
 
 def find_agent(state):
@@ -199,9 +201,9 @@ def render_trajectory(data, static_model):
                 camera = mj.MjvCamera()
                 camera.type = mj.mjtCamera.mjCAMERA_FREE
                 camera.distance = 8
-                camera.azimuth = 65
-                camera.elevation = -25
-                camera.lookat[:] = [2, 2, 0.55]
+                camera.azimuth = -10
+                camera.elevation = -50
+                camera.lookat[:] = [2, 1.25, -1]
                 renderer.update_scene(data_mj, camera)
                 frames.append(renderer.render())
 
@@ -215,7 +217,7 @@ fig, ax = plt.subplots(figsize=(frames[0].shape[1] / 50, frames[0].shape[0] / 50
 ax.axis("off")
 im = ax.imshow(frames[0], animated=True)
 
-output_path = "output.gif"
+output_path = "output_above.gif"
 
 
 def update(i):
