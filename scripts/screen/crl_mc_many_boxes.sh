@@ -3,13 +3,11 @@
 GPU_ID=$1
 grid_size=$2
 
-number_of_boxes_min=3
-number_of_boxes_max=7
 
 exclude_dirs=( ".github" ".ruff_cache" "wandb" ".vscode" ".idea" "__pycache__" ".venv" "experiments" ".git" "notebooks" "runs" "notes" ".pytest")
 
 # Experiment name
-exp_name="test_generalization_sc"
+exp_name="many_boxes_crl_mc_grid_${grid_size}"
 
 # Create the main experiments directory if it doesn't exist
 mkdir -p ./experiments
@@ -47,34 +45,33 @@ cd "$temp_dir"
 echo "Current path: '$(pwd)'"
 
 
-echo "Running with grid_size: $grid_size, number_of_boxes_min: $number_of_boxes_min, number_of_boxes_max: $number_of_boxes_max"
+target_entropy=-0.69
+number_of_boxes=4
 
-moving_boxes_max=5
-
-for seed in 1 2 3
+for seed in 1 2
 do
-    for bs in 128 32 256 
+    for number_of_moving_boxes_max in 3 2 1
     do
-        CUDA_VISIBLE_DEVICES=$GPU_ID uv run --active src/train.py \
+        echo "Running with grid_size: $grid_size, number_of_boxes_min: $number_of_boxes, number_of_boxes_max: $number_of_boxes, number_of_moving_boxes_max: $number_of_moving_boxes_max"
+        XLA_PYTHON_CLIENT_PREALLOCATE=false CUDA_VISIBLE_DEVICES=$GPU_ID uv run --active src/train.py \
         env:box-pushing \
-        --agent.agent_name crl \
-        --agent.no-use-embeddings \
-        --agent.actor-hidden-dims 600 256 \
-        --agent.value-hidden-dims 600 256 \
-        --exp.name 600_256_moving_boxes_${moving_boxes_max}_grid_${grid_size}_range_${number_of_boxes_min}_${number_of_boxes_max}_alpha_${alpha} \
-        --env.number_of_boxes_max ${number_of_boxes_max} \
-        --env.number_of_boxes_min ${number_of_boxes_min} \
-        --env.number_of_moving_boxes_max ${moving_boxes_max} \
+        --agent.agent_name crl_search \
+        --exp.name many_boxes_crl_te_${target_entropy}_${number_of_boxes}_grid_${grid_size}_moveable_${number_of_moving_boxes_max}_no_filtering \
+        --env.number_of_boxes_max ${number_of_boxes} \
+        --env.number_of_boxes_min ${number_of_boxes} \
+        --env.number_of_moving_boxes_max ${number_of_moving_boxes_max} \
         --env.grid_size ${grid_size} \
         --exp.gamma 0.99 \
         --env.episode_length 100 \
-        --exp.seed $seed \
-        --exp.project "test_crl_env" \
+        --exp.seed ${seed} \
+        --exp.project "CRL-diagonal" \
         --exp.epochs 50 \
         --exp.gif_every 10 \
         --agent.alpha 0.1 \
+        --agent.expectile 0.5  \
         --exp.max_replay_size 10000 \
-        --agent.batch_size ${bs} \
-        --exp.eval-different-box-numbers
+        --exp.batch_size 256 \
+        --exp.eval_different_box_numbers \
+        --agent.target_entropy ${target_entropy}
     done
 done

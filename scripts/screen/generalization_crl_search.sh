@@ -51,17 +51,14 @@ echo "Running with grid_size: $grid_size, number_of_boxes_min: $number_of_boxes_
 
 moving_boxes_max=5
 
-for seed in 1 2 3
+for seed in 1 2 
 do
-    for bs in 128 32 256 
+    for target_entropy in -1.38
     do
         CUDA_VISIBLE_DEVICES=$GPU_ID uv run --active src/train.py \
         env:box-pushing \
-        --agent.agent_name crl \
-        --agent.no-use-embeddings \
-        --agent.actor-hidden-dims 600 256 \
-        --agent.value-hidden-dims 600 256 \
-        --exp.name 600_256_moving_boxes_${moving_boxes_max}_grid_${grid_size}_range_${number_of_boxes_min}_${number_of_boxes_max}_alpha_${alpha} \
+        --agent.agent_name crl_search \
+        --exp.name crl_softmax_all_moveable__te_-1.38_moving_boxes_${moving_boxes_max}_grid_${grid_size}_range_${number_of_boxes_min}_${number_of_boxes_max}_alpha_0.1 \
         --env.number_of_boxes_max ${number_of_boxes_max} \
         --env.number_of_boxes_min ${number_of_boxes_min} \
         --env.number_of_moving_boxes_max ${moving_boxes_max} \
@@ -69,12 +66,12 @@ do
         --exp.gamma 0.99 \
         --env.episode_length 100 \
         --exp.seed $seed \
-        --exp.project "test_crl_env" \
+        --exp.project "crl_search_sanity" \
         --exp.epochs 50 \
         --exp.gif_every 10 \
-        --agent.alpha 0.1 \
+        --agent.alpha 0.1  \
         --exp.max_replay_size 10000 \
-        --agent.batch_size ${bs} \
+        --agent.target_entropy ${target_entropy} \
         --exp.eval-different-box-numbers
     done
 done

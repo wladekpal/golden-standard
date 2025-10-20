@@ -7,10 +7,12 @@ from config import ROOT_DIR
 import jax
 import jax.numpy as jnp
 import distrax
+from impls.agents.crl import CRLAgent
+from impls.agents.crl_search import CRLSearchAgent
 
 
-def log_gif(original_env, episode_length, prefix_gif, timesteps, state):
-    grid_size = state.grid.shape[-2:]
+def log_gif(original_env, episode_length, prefix_gif, timesteps):
+    grid_size = timesteps.grid.shape[-2:]
     fig, ax = plt.subplots(figsize=grid_size)
 
     animate = functools.partial(original_env.animate, ax, timesteps, img_prefix=os.path.join(ROOT_DIR, "assets"))
@@ -43,10 +45,14 @@ def sample_actions_critic(
     qs = jax.lax.stop_gradient(
         jax.vmap(agent.network.select("critic"), in_axes=(None, None, 1))(observations, goals, all_actions)
     )  # 6 x 2 x B
+
+    if len(qs.shape) == 2:  # Non-ensemble.
+        qs = qs[:, None, ...]
+
     qs = qs.min(axis=1)  # 6 x B
-    qs = value_transform(qs)
     qs = qs.transpose(1, 0)  # B x 6
-    qs = (qs - qs.mean(axis=1, keepdims=True)) / jnp.maximum(1e-6, qs.std(axis=1, keepdims=True))  # Normalize logits.
+    if isinstance(agent, CRLAgent) or isinstance(agent, CRLSearchAgent):
+        qs = value_transform(qs)
     dist = distrax.Categorical(logits=qs / jnp.maximum(1e-6, temperature))
     actions = dist.sample(seed=seed)
     return actions

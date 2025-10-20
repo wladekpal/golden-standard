@@ -3,8 +3,8 @@
 GPU_ID=$1
 grid_size=$2
 
-number_of_boxes_min=3
-number_of_boxes_max=7
+number_of_boxes_min=0
+number_of_boxes_max=0
 
 exclude_dirs=( ".github" ".ruff_cache" "wandb" ".vscode" ".idea" "__pycache__" ".venv" "experiments" ".git" "notebooks" "runs" "notes" ".pytest")
 
@@ -49,7 +49,7 @@ echo "Current path: '$(pwd)'"
 
 echo "Running with grid_size: $grid_size, number_of_boxes_min: $number_of_boxes_min, number_of_boxes_max: $number_of_boxes_max"
 
-moving_boxes_max=5
+moving_boxes_max=0
 
 for seed in 1 2 3
 do
@@ -57,11 +57,8 @@ do
     do
         CUDA_VISIBLE_DEVICES=$GPU_ID uv run --active src/train.py \
         env:box-pushing \
-        --agent.agent_name crl \
-        --agent.no-use-embeddings \
-        --agent.actor-hidden-dims 600 256 \
-        --agent.value-hidden-dims 600 256 \
-        --exp.name 600_256_moving_boxes_${moving_boxes_max}_grid_${grid_size}_range_${number_of_boxes_min}_${number_of_boxes_max}_alpha_${alpha} \
+        --agent.agent_name crl_search \
+        --exp.name search_crl_${bs}_bs_moving_boxes_${moving_boxes_max}_grid_${grid_size}_range_${number_of_boxes_min}_${number_of_boxes_max}_alpha_${alpha} \
         --env.number_of_boxes_max ${number_of_boxes_max} \
         --env.number_of_boxes_min ${number_of_boxes_min} \
         --env.number_of_moving_boxes_max ${moving_boxes_max} \
@@ -69,12 +66,11 @@ do
         --exp.gamma 0.99 \
         --env.episode_length 100 \
         --exp.seed $seed \
-        --exp.project "test_crl_env" \
+        --exp.project "navigation_crl" \
         --exp.epochs 50 \
         --exp.gif_every 10 \
         --agent.alpha 0.1 \
         --exp.max_replay_size 10000 \
-        --agent.batch_size ${bs} \
-        --exp.eval-different-box-numbers
+        --agent.batch_size ${bs} 
     done
 done

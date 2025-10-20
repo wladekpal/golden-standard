@@ -264,12 +264,14 @@ class HIQLAgent(flax.struct.PyTreeNode):
             layer_norm=config['layer_norm'],
             ensemble=True,
             gc_encoder=value_encoder_def,
+            net_arch=config['net_arch'],
         )
         target_value_def = GCValue(
             hidden_dims=config['value_hidden_dims'],
             layer_norm=config['layer_norm'],
             ensemble=True,
             gc_encoder=target_value_encoder_def,
+            net_arch=config['net_arch'],
         )
 
         if config['discrete']:
@@ -277,6 +279,7 @@ class HIQLAgent(flax.struct.PyTreeNode):
                 hidden_dims=config['actor_hidden_dims'],
                 action_dim=action_dim,
                 gc_encoder=low_actor_encoder_def,
+                net_arch=config['net_arch'],
             )
         else:
             low_actor_def = GCActor(
@@ -285,6 +288,7 @@ class HIQLAgent(flax.struct.PyTreeNode):
                 state_dependent_std=False,
                 const_std=config['const_std'],
                 gc_encoder=low_actor_encoder_def,
+                net_arch=config['net_arch'],
             )
 
         high_actor_def = GCActor(
@@ -293,6 +297,7 @@ class HIQLAgent(flax.struct.PyTreeNode):
             state_dependent_std=False,
             const_std=config['const_std'],
             gc_encoder=high_actor_encoder_def,
+            net_arch=config['net_arch'],
         )
 
         network_info = dict(
