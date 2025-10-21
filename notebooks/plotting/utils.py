@@ -280,6 +280,11 @@ def return_color(agent, train=True):
             idx = 3
     elif 'CRL' in agent:
         idx = 4
+    elif 'GCIQL' in agent:
+        if 'MC' in agent:
+            idx = 8
+        else:
+            idx = 7
     else:
         idx = 5
 
