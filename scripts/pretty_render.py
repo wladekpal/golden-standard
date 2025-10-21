@@ -17,37 +17,42 @@ np.set_printoptions(precision=3, suppress=True, linewidth=100)
 # TODO: Had to remove lightsource due to some rendering artifacts
 static_model = """
 <mujoco>
-  <statistic center="1 0 0.55" extent="1.1"/>
+    <statistic center="1.5 1.5 0.4" extent="2.2"/>
 
-  <visual>
-    <headlight diffuse="0.8 0.8 0.8" ambient="0.3 0.3 0.3" specular="0 0 0"/>
-    <rgba haze="0.15 0.25 0.35 1"/>
-    <global offwidth="1000" offheight="1000" azimuth="150" elevation="-20"/>
+    <visual>
+        <quality shadowsize="4096" offsamples="8"/>
+        <map znear="0.01" zfar="80" fogstart="8" fogend="14"/>
+    <headlight diffuse="0.42 0.44 0.48" ambient="0.16 0.16 0.18" specular="0.12 0.12 0.12"/>
+        <rgba haze="0.12 0.18 0.25 1"/>
+    <global offwidth="2200" offheight="2200" fovy="35"/>
+    </visual>
 
-  </visual>
+    <asset>
+        <texture type="skybox" builtin="gradient"
+                        rgb1="0.18 0.22 0.28" rgb2="0.02 0.03 0.05" width="512" height="3072"/>
+        <texture name="wood1" file="assets/light-wood.png" type="2d"/>
+        <texture name="wood2" file="assets/oak.png" type="2d"/>
+        <texture name="wood3" file="assets/wood3.png" type="2d"/>
+        <texture name="steel" file="assets/steel.png" type="2d"/>
 
-  <asset>
-    <texture type="skybox" builtin="gradient"
-            rgb1="0.18 0.22 0.28" rgb2="0.02 0.03 0.05" width="512" height="3072"/>
+    <material name="tile_light" rgba="0.7 0.76 0.84 1" specular="0.08" shininess="0.18" emission="0.0"/>
+    <material name="tile_dark" rgba="0.26 0.34 0.48 1" specular="0.06" shininess="0.15" emission="0.0"/>
+    <material name="wood_block" texture="wood2" shininess="0.3" specular="0.14"/>
+    <material name="wood_carried" texture="wood3" shininess="0.46" specular="0.22"/>
+    <material name="target" rgba="0.25 0.8 0.5 0.5" emission="0.12" specular="0.03" shininess="0.85"/>
+    <material name="agent" texture="steel" specular="0.7" shininess="0.7" emission="0.05"
+                rgba="0.92 0.22 0.18 0.9"/>
+    </asset>
 
-
-    # <texture name="wood1" file="assets/light-wood.png" type="2d"/>
-
-    <texture name="wood2" file="assets/oak.png" type="2d"/>
-    <material name="wood2" texture="wood2" shininess="0.5"/>
-
-    <texture name="wood3" file="assets/wood3.png" type="2d"/>
-    <material name="wood3" texture="wood3" shininess="0.5"/>
-
-    # <texture name="steel" file="assets/steel.png" type="2d"/>
-
-    <material name="wood1" texture="wood1" shininess="0.8" specular="0.15"/>
-    <material name="steel" texture="steel" shininess="1.2" specular="0.6"/>
-
-  </asset>
-
-  <worldbody>
-  </worldbody>
+    <worldbody>
+    <light name="key" pos="5 -3 7" dir="-0.8 0.4 -1" diffuse="0.58 0.5 0.46"
+             specular="0.2 0.18 0.17" ambient="0.18 0.18 0.21" cutoff="40" exponent="6"
+                     castshadow="true"/>
+    <light name="fill" pos="-4 6 4" dir="0 -1 -0.4" diffuse="0.32 0.4 0.55"
+             specular="0.12 0.16 0.22" ambient="0.2 0.23 0.28" cutoff="70" exponent="2"/>
+    <light name="rim" pos="2 4 6" dir="-0.2 -0.5 -1" diffuse="0.22 0.3 0.44"
+             specular="0.14 0.18 0.24" ambient="0.14 0.17 0.21" cutoff="55" exponent="4"/>
+    </worldbody>
 </mujoco>
 """
 
@@ -63,8 +68,8 @@ BLOCK_WIDTH = 0.3
 SUBDIV_STEPS = 10
 ENV_IDX = 0
 SPHERE_SIZE = 0.2
-RESOLUTION = (1000, 1000)
-EP_LEN = 2
+RESOLUTION = (1600, 1200)
+EP_LEN = 10
 
 
 def find_agent(state):
@@ -79,9 +84,9 @@ def add_field(spec, x, y):
     spec.worldbody.add_geom(
         name="floor-%d-%d" % (x, y),
         type=mj.mjtGeom.mjGEOM_BOX,
-        rgba=([0.2, 0.3, 0.4, 1] if checker_color else [0.1, 0.2, 0.3, 1]),
         pos=[x, y, 0],
-        size=[FIELD_WIDTH, FIELD_WIDTH, 0.01],
+        size=[FIELD_WIDTH, FIELD_WIDTH, 0.02],
+        material="tile_light" if checker_color else "tile_dark",
     )
 
 
@@ -91,7 +96,8 @@ def add_box(spec, x, y):
         type=mj.mjtGeom.mjGEOM_BOX,
         pos=[x, y, BLOCK_WIDTH / 2],
         size=[BLOCK_WIDTH / 2, BLOCK_WIDTH / 2, BLOCK_WIDTH / 2],
-        material="wood1",
+        material="wood_block",
+        rgba=[0.28, 0.24, 0.20, 1.0],  # darker tint for the box
     )
 
 
@@ -101,7 +107,7 @@ def add_carried_box(spec, x, y):
         type=mj.mjtGeom.mjGEOM_BOX,
         pos=[x, y, SPHERE_SIZE * 2.0],
         size=[BLOCK_WIDTH / 6, BLOCK_WIDTH / 6, BLOCK_WIDTH / 6],
-        material="wood1",
+        material="wood_carried",
     )
 
 
@@ -109,10 +115,9 @@ def add_actor(spec, x, y):
     spec.worldbody.add_geom(
         name="sphere",
         type=mj.mjtGeom.mjGEOM_SPHERE,
-        rgba=[0, 0.7, 1, 0.7],
         pos=[x, y, SPHERE_SIZE * 1.1],
         size=[SPHERE_SIZE, SPHERE_SIZE, SPHERE_SIZE],
-        material="steel",
+        material="agent",
     )
 
 
@@ -120,18 +125,36 @@ def add_target(spec, x, y):
     spec.worldbody.add_geom(
         name="target-%d-%d" % (x, y),
         type=mj.mjtGeom.mjGEOM_BOX,
-        rgba=[0, 1, 0.1, 0.4],
         pos=[x, y, BLOCK_WIDTH / 1.8],
         size=[BLOCK_WIDTH / 1.8, BLOCK_WIDTH / 1.8, BLOCK_WIDTH / 1.8],
-        material="wood1",
+        material="target",
         contype=0,
         conaffinity=0,
     )
 
 
+def compute_crop_bounds(frame, threshold=10, margin=4):
+    max_val = frame.max()
+    adjusted_threshold = threshold if max_val > 1.0 else threshold / 255.0
+    mask = frame.mean(axis=2) > adjusted_threshold
+    rows = np.where(mask.any(axis=1))[0]
+    cols = np.where(mask.any(axis=0))[0]
+
+    if rows.size == 0 or cols.size == 0:
+        return (0, frame.shape[0], 0, frame.shape[1])
+
+    top = max(rows[0] - margin, 0)
+    bottom = min(rows[-1] + 1 + margin, frame.shape[0])
+    left = max(cols[0] - margin, 0)
+    right = min(cols[-1] + 1 + margin, frame.shape[1])
+    return (top, bottom, left, right)
+
+
 def render_trajectory(data, static_model):
     # Create an empty list to store the rendered images
     frames = []
+    scene_option = mj.MjvOption()
+
     # Iterate through the timesteps data
     next_data = data.copy()
     next_data[:-1] = data[1:]
@@ -141,10 +164,20 @@ def render_trajectory(data, static_model):
         next_actor_pos = find_agent(next_state)
         curr_actor_pos = find_agent(state)
 
-        num_subdivisions = 1 if (next_actor_pos == curr_actor_pos).all() else SUBDIV_STEPS
+        if curr_actor_pos is None:
+            curr_actor_pos = np.array([0.0, 0.0])
+        else:
+            curr_actor_pos = curr_actor_pos.astype(float)
+
+        if next_actor_pos is None:
+            next_actor_pos = curr_actor_pos.copy()
+        else:
+            next_actor_pos = next_actor_pos.astype(float)
+
+        num_subdivisions = SUBDIV_STEPS if not np.array_equal(next_actor_pos, curr_actor_pos) else 1
 
         for subdiv_step in range(num_subdivisions):
-            interpolated_fraction = subdiv_step / (SUBDIV_STEPS - 1)
+            interpolated_fraction = (subdiv_step / (SUBDIV_STEPS - 1)) if num_subdivisions > 1 else 0.0
             interp_pos = (next_actor_pos - curr_actor_pos) * interpolated_fraction + curr_actor_pos
 
             spec = mj.MjSpec.from_string(static_model)
@@ -197,20 +230,32 @@ def render_trajectory(data, static_model):
             # Render the current state and add it to the frames list
             with mj.Renderer(model, *RESOLUTION) as renderer:
                 mj.mj_forward(model, data_mj)
-                # Use the same camera settings as before
+                grid_center = (grid_size - 1) / 2
+                lookat_x = grid_center
+                lookat_y = grid_center
+                # Use a free camera with a broader framing to keep the full board in sight
                 camera = mj.MjvCamera()
                 camera.type = mj.mjtCamera.mjCAMERA_FREE
-                camera.distance = 8
-                camera.azimuth = -10
-                camera.elevation = -50
-                camera.lookat[:] = [2, 1.25, -1]
-                renderer.update_scene(data_mj, camera)
+                camera.distance = max(11.0, grid_size * 3.0)
+                camera.azimuth = -45
+                camera.elevation = -45
+                camera.lookat[:] = [lookat_x, lookat_y, -0.05]
+                renderer.update_scene(data_mj, camera, scene_option=scene_option)
+                renderer.scene.flags[mj.mjtRndFlag.mjRND_SHADOW] = True
+                renderer.scene.flags[mj.mjtRndFlag.mjRND_SKYBOX] = True
+                renderer.scene.flags[mj.mjtRndFlag.mjRND_FOG] = True
+                renderer.scene.flags[mj.mjtRndFlag.mjRND_HAZE] = True
+                renderer.scene.flags[mj.mjtRndFlag.mjRND_REFLECTION] = True
                 frames.append(renderer.render())
 
     return frames
 
 
 frames = render_trajectory(data[:EP_LEN, ENV_IDX], static_model)
+
+crop_top, crop_bottom, crop_left, crop_right = compute_crop_bounds(frames[0])
+if (crop_top, crop_bottom, crop_left, crop_right) != (0, frames[0].shape[0], 0, frames[0].shape[1]):
+    frames = [frame[crop_top:crop_bottom, crop_left:crop_right] for frame in frames]
 
 
 fig, ax = plt.subplots(figsize=(frames[0].shape[1] / 50, frames[0].shape[0] / 50), dpi=100)
