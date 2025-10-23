@@ -38,8 +38,9 @@ static_model = """
     <material name="tile_light" rgba="0.7 0.76 0.84 1" specular="0.08" shininess="0.18" emission="0.0"/>
     <material name="tile_dark" rgba="0.26 0.34 0.48 1" specular="0.06" shininess="0.15" emission="0.0"/>
     <material name="wood_block" texture="wood2" shininess="0.3" specular="0.14"/>
-    <material name="wood_carried" texture="wood3" shininess="0.46" specular="0.22"/>
-    <material name="target" rgba="0.25 0.8 0.5 0.5" emission="0.12" specular="0.03" shininess="0.85"/>
+    <material name="wood_carried" texture="wood2" shininess="0.46" specular="0.22"/>
+    <material name="target_empty" rgba="0.8 0.8 0.25 0.35" emission="0.12" specular="0.03" shininess="0.85"/>
+    <material name="target" rgba="0.25 0.8 0.3 0.35" emission="0.12" specular="0.03" shininess="0.85"/>
     <material name="agent" texture="steel" specular="0.7" shininess="0.7" emission="0.05"
                 rgba="0.92 0.22 0.18 0.9"/>
     </asset>
@@ -69,7 +70,10 @@ SUBDIV_STEPS = 10
 ENV_IDX = 0
 SPHERE_SIZE = 0.2
 RESOLUTION = (1600, 1200)
-EP_LEN = 10
+EP_LEN = 15
+
+AGENT_NOT_CARRYING = [3, 5, 6, 8]
+AGENT_CARRYING = [4, 7, 9, 11]
 
 
 def find_agent(state):
@@ -101,13 +105,25 @@ def add_box(spec, x, y):
     )
 
 
+def add_interpolated_box(spec, x, y, z, size=BLOCK_WIDTH / 2):
+    spec.worldbody.add_geom(
+        name="box-%d-%d-%d" % (x, y, z),
+        type=mj.mjtGeom.mjGEOM_BOX,
+        pos=[x, y, z],
+        size=[size, size, size],
+        material="wood_block",
+        rgba=[0.28, 0.24, 0.20, 1.0],  # darker tint for the box
+    )
+
+
 def add_carried_box(spec, x, y):
     spec.worldbody.add_geom(
         name="carried-box-%d-%d" % (x, y),
         type=mj.mjtGeom.mjGEOM_BOX,
         pos=[x, y, SPHERE_SIZE * 2.0],
-        size=[BLOCK_WIDTH / 6, BLOCK_WIDTH / 6, BLOCK_WIDTH / 6],
-        material="wood_carried",
+        size=[BLOCK_WIDTH / 5, BLOCK_WIDTH / 5, BLOCK_WIDTH / 5],
+        material="wood_block",
+        rgba=[0.28, 0.24, 0.20, 1.0],  # darker tint for the box
     )
 
 
@@ -121,13 +137,13 @@ def add_actor(spec, x, y):
     )
 
 
-def add_target(spec, x, y):
+def add_target(spec, x, y, empty=True):
     spec.worldbody.add_geom(
         name="target-%d-%d" % (x, y),
         type=mj.mjtGeom.mjGEOM_BOX,
         pos=[x, y, BLOCK_WIDTH / 1.8],
         size=[BLOCK_WIDTH / 1.8, BLOCK_WIDTH / 1.8, BLOCK_WIDTH / 1.8],
-        material="target",
+        material="target" if not empty else "target_empty",
         contype=0,
         conaffinity=0,
     )
@@ -148,6 +164,12 @@ def compute_crop_bounds(frame, threshold=10, margin=4):
     left = max(cols[0] - margin, 0)
     right = min(cols[-1] + 1 + margin, frame.shape[1])
     return (top, bottom, left, right)
+
+
+def calculate_box_pickup_pos(pos, coef):
+    pos_diff = SPHERE_SIZE * 2.0 - BLOCK_WIDTH / 2.0
+    size_diff = BLOCK_WIDTH / 2 - BLOCK_WIDTH / 5
+    return pos + np.array([0, 0, pos_diff]) * (1.0 - coef), BLOCK_WIDTH / 5 + size_diff * coef
 
 
 def render_trajectory(data, static_model):
@@ -174,7 +196,22 @@ def render_trajectory(data, static_model):
         else:
             next_actor_pos = next_actor_pos.astype(float)
 
-        num_subdivisions = SUBDIV_STEPS if not np.array_equal(next_actor_pos, curr_actor_pos) else 1
+        curr_actor_state = state[int(curr_actor_pos[0]), int(curr_actor_pos[1])]
+        next_actor_state = next_state[int(next_actor_pos[0]), int(next_actor_pos[1])]
+
+        if curr_actor_state in AGENT_CARRYING and next_actor_state in AGENT_NOT_CARRYING:
+            put_down = True
+            pick_up = False
+        elif curr_actor_state in AGENT_NOT_CARRYING and next_actor_state in AGENT_CARRYING:
+            put_down = False
+            pick_up = True
+        else:
+            put_down = False
+            pick_up = False
+
+        subdivide = (not np.array_equal(next_actor_pos, curr_actor_pos)) or put_down or pick_up
+
+        num_subdivisions = SUBDIV_STEPS if subdivide else 1
 
         for subdiv_step in range(num_subdivisions):
             interpolated_fraction = (subdiv_step / (SUBDIV_STEPS - 1)) if num_subdivisions > 1 else 0.0
@@ -186,6 +223,19 @@ def render_trajectory(data, static_model):
             # Add geoms based on the current state
             for i, j in itertools.product(range(grid_size), range(grid_size)):
                 add_field(spec, i, j)
+
+                if pick_up or put_down:
+                    if np.array_equal(np.array([i, j]), curr_actor_pos):
+                        box_fraction = (
+                            interpolated_fraction if put_down else (1 - interpolated_fraction) if pick_up else 0.0
+                        )
+                        box_pos, box_size = calculate_box_pickup_pos(np.array([j, i, BLOCK_WIDTH / 2]), box_fraction)
+                        box_z = box_pos[2]
+                        add_interpolated_box(spec, i, j, box_z, size=box_size)
+                        add_actor(spec, interp_pos[0], interp_pos[1])
+                        if state[i, j] in [6, 7, 8, 9]:
+                            add_target(spec, i, j, empty=True)
+                        continue
 
                 if state[i, j] == 1:
                     add_box(spec, i, j)
@@ -209,15 +259,15 @@ def render_trajectory(data, static_model):
                 if state[i, j] == 8:  # agent_on_target_with_box
                     add_box(spec, i, j)
                     add_actor(spec, interp_pos[0], interp_pos[1])
-                    add_target(spec, i, j)
+                    add_target(spec, i, j, empty=False)
                 if state[i, j] == 9:  # agent_on_target_with_box_carrying_box
                     add_box(spec, i, j)
                     add_actor(spec, interp_pos[0], interp_pos[1])
                     add_carried_box(spec, interp_pos[0], interp_pos[1])
-                    add_target(spec, i, j)
+                    add_target(spec, i, j, empty=False)
                 if state[i, j] == 10:  # box_on_target
                     add_box(spec, i, j)
-                    add_target(spec, i, j)
+                    add_target(spec, i, j, empty=False)
                 if state[i, j] == 11:  # agent_on_box_carrying_box
                     add_box(spec, i, j)
                     add_actor(spec, interp_pos[0], interp_pos[1])
