@@ -7,7 +7,7 @@ os.environ["MUJOCO_GL"] = "egl"
 import matplotlib.pyplot as plt
 import mujoco as mj
 import numpy as np
-from matplotlib.animation import FuncAnimation, PillowWriter
+from matplotlib.animation import FuncAnimation, PillowWriter, HTMLWriter, FFMpegWriter  # noqa: F401
 
 
 # Printing.
@@ -24,7 +24,7 @@ static_model = """
         <map znear="0.01" zfar="80" fogstart="8" fogend="14"/>
     <headlight diffuse="0.42 0.44 0.48" ambient="0.16 0.16 0.18" specular="0.12 0.12 0.12"/>
         <rgba haze="0.12 0.18 0.25 1"/>
-    <global offwidth="2200" offheight="2200" fovy="35"/>
+    <global offwidth="3200" offheight="3200" fovy="35"/>
     </visual>
 
     <asset>
@@ -70,7 +70,7 @@ SUBDIV_STEPS = 10
 ENV_IDX = 0
 SPHERE_SIZE = 0.2
 RESOLUTION = (1600, 1200)
-EP_LEN = 15
+EP_LEN = 30
 
 AGENT_NOT_CARRYING = [3, 5, 6, 8]
 AGENT_CARRYING = [4, 7, 9, 11]
@@ -301,21 +301,31 @@ def render_trajectory(data, static_model):
     return frames
 
 
-frames = render_trajectory(data[:EP_LEN, ENV_IDX], static_model)
+print(data.shape)
+new_data = data[:EP_LEN, ENV_IDX]
+# new_data = np.concatenate([new_data] + 50 * [new_data[-1][np.newaxis, ...]], axis=0)
+
+print(new_data.shape)
+
+frames = render_trajectory(new_data, static_model)
 
 crop_top, crop_bottom, crop_left, crop_right = compute_crop_bounds(frames[0])
 if (crop_top, crop_bottom, crop_left, crop_right) != (0, frames[0].shape[0], 0, frames[0].shape[1]):
     frames = [frame[crop_top:crop_bottom, crop_left:crop_right] for frame in frames]
 
 
-fig, ax = plt.subplots(figsize=(frames[0].shape[1] / 50, frames[0].shape[0] / 50), dpi=100)
+fig, ax = plt.subplots(figsize=(frames[0].shape[1] / 50, frames[0].shape[0] / 50), dpi=100, frameon=False)
+fig.subplots_adjust(left=0, bottom=0, right=1, top=1, wspace=None, hspace=None)
 ax.axis("off")
 im = ax.imshow(frames[0], animated=True)
+# plt.imsave("output_above.png", frames[0])
+# exit(0)
 
-output_path = "output_above.gif"
+output_path = "stitching_4_failure.gif"
 
 
 def update(i):
+    print(f"Saving frame {i}")
     im.set_array(frames[i])
     return (im,)
 
