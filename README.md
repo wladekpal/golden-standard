@@ -39,7 +39,7 @@ When using wandb logging, all experiment results, including detailed information
 ## Hyperparameters ⚙️
 Hyperparameters and options can be seen by invoking: `uv run src/train.py --help`. All options can be divided into three general categories, indicated by prefixes used in the flag names:
 * `exp.` - General experimental setup settings, including logging options, random seeds, experiment names etc (see [here](./src/config.py) for more details).
-* `env.` - Environment related settings, including difficulty of the environment, goal and starting positions sampling distributions, number of boxes, size of the grid etc (see `BoxMovingConfig` class [here](./src/config.py) for more details).
+* `env.` - Environment related settings, including difficulty of the environment, goal and starting positions sampling distributions, number of boxes, size of the grid etc (see `BoxMovingConfig` class [here](./src/envs/block_moving/env_types.py) for more details).
 * `actor.` - Algorithm related settings, including learning rates, batch sizes, network architectures and the choice of the algorithm itself (see [here](./src/impls/agents/__init__.py) for more details).
 
 # Environment 🕹️
@@ -61,7 +61,7 @@ Due to the nature of investigated issue we primarly focused on goal-conditioned 
 * [OGBench](https://github.com/seohongpark/ogbench) - Benchmark for offline goal-conditioned RL algorithms, on which we based our algorithms impelementation and code structure.
 * [JaxGCRL](https://github.com/MichalBortkiewicz/JaxGCRL) - Online goal-conditioned RL benchmark, with impelementations of various goal-conditioned RL algorithms in JAX, primarly Contrastive RL. 
 * [Jumanji](https://github.com/instadeepai/jumanji) - A collection of RL environments written in JAX, Sokoban environment included here inspired our box-moving environment.
-    
+
 
 ## Citing 📄
 If you find this work useful in your research, please cite us as follows:
