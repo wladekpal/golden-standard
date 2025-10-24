@@ -1,18 +1,37 @@
-# Abstract
-Reinforcement learning (RL) promises to solve long-horizon tasks even when training data contains only short fragments of the behaviors. This experience stitching capability is often viewed as the purview of temporal difference (TD) methods. However, outside of small tabular settings, trajectories never intersect, calling into question this conventional wisdom. Moreover, the common belief is that Monte Carlo (MC) methods should not be able to recombine experience, yet it remains unclear whether function approximation could result in a form of implicit stitching. We empirically study whether the conventional wisdom about stitching actually holds in settings where function approximation is used. The experiments demonstrate that Monte Carlo methods can achieve experience stitching. While TD methods retain a slight edge, the gap is substantially smaller than the gap between small and large neural networks, even on simple tasks. Increasing critic capacity reduces the generalization gap for both MC and TD methods, suggesting that the traditional TD inductive bias for stitching may be less necessary in the era of large models and that scaling alone can deliver stitching in RL. 
 
-# Installation
+# Overview
 
-Using uv, there is installation happening while running the code.
+Reinforcement learning (RL) promises to solve long-horizon tasks even when training data contains only short fragments of the behaviors. This quality is called stitching, and is a crucial prerequisite for more general, foundational RL models. Conventional wisdom dictates, that only temporal difference (TD) methods are able stitch fragments of experiences gathered during the training and use them to solve more complex tasks. We show that, while on simple, low-dimensional settings TD methods can indeed stitch experiences, this does not transfer to more complex, high-dimensional tasks. Additionally we show that Monte Carlo (MC) methods, while they still fall behind TD methods, are able to exhibit some stitching behavior as well. Furthermore we determine that scaling the network sizes plays more of a critical role in closing the generalization gap than previously thought, and is a promising avenue of research, especially in the age of larger models in RL.
 
+
+<p align="center">
+    <video autoplay muted loop playsinline preload="metadata" style="width:45%; height:auto; object-fit:contain; border-radius:0;" aria-label="TD stitching success view 1">
+        <source src="assets/stitching_1_success.mp4" type="video/mp4">
+    </video>
+    <video autoplay muted loop playsinline preload="metadata" style="width:45%; height:auto; object-fit:contain; border-radius:0;" aria-label="TD stitching failure view 2">
+        <source src="assets/stitching_4_failure.mp4" type="video/mp4">
+    </video>
+</p>
+
+# Installation $ Setup
+
+This repo uses uv. To install uv, please follow the instructions [here](https://docs.astral.sh/uv/getting-started/installation/).
+To install all dependencies and create the virual environment run:
+```
+uv sync
+```
+> [!NOTE]
+> We are using `wandb` for experiment tracking by default, you may be prompted to login to wandb when running first experiment. If you don't want to use wandb, you can use `--exp.mode disabled` flag to skip wandb logging.
+
+# Running experiments
+To run a simple training with CRL and default environment configuration use:
+> [!WARNING]
+> Our repository is optimized for GPU, running line below without decent GPU may take a very long time.
 ```bash
-uv run src/train.py 
+uv run src/train.py env:box-moving --exp.name test
 ```
 
-Running tests:
-```bash
-uv run pytest src/envs/tests.py
-```
+Current version of the code only supports `box-moving` environment, thus in each experiment you should specify `env:box-moving` flag first.
 
 # For development
 
