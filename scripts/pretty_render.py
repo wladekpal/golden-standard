@@ -7,7 +7,6 @@ os.environ["MUJOCO_GL"] = "egl"
 import matplotlib.pyplot as plt
 import mujoco as mj
 import numpy as np
-from matplotlib.animation import FuncAnimation, PillowWriter, HTMLWriter, FFMpegWriter  # noqa: F401
 
 
 # Printing.
@@ -66,11 +65,12 @@ data = np.load(data_path)
 
 FIELD_WIDTH = 0.5
 BLOCK_WIDTH = 0.3
-SUBDIV_STEPS = 10
+SUBDIV_STEPS = 30
 ENV_IDX = 0
 SPHERE_SIZE = 0.2
-RESOLUTION = (1600, 1200)
-EP_LEN = 30
+RESOLUTION = (2400, 1800)
+# RESOLUTION = (1200, 900)
+EP_LEN = 50
 
 AGENT_NOT_CARRYING = [3, 5, 6, 8]
 AGENT_CARRYING = [4, 7, 9, 11]
@@ -308,6 +308,7 @@ new_data = data[:EP_LEN, ENV_IDX]
 print(new_data.shape)
 
 frames = render_trajectory(new_data, static_model)
+print(len(frames))
 
 crop_top, crop_bottom, crop_left, crop_right = compute_crop_bounds(frames[0])
 if (crop_top, crop_bottom, crop_left, crop_right) != (0, frames[0].shape[0], 0, frames[0].shape[1]):
@@ -318,25 +319,28 @@ fig, ax = plt.subplots(figsize=(frames[0].shape[1] / 50, frames[0].shape[0] / 50
 fig.subplots_adjust(left=0, bottom=0, right=1, top=1, wspace=None, hspace=None)
 ax.axis("off")
 im = ax.imshow(frames[0], animated=True)
+os.makedirs("frames", exist_ok=True)
+for i, frame in enumerate(frames):
+    plt.imsave(f"frames/frame_{i:04d}.png", frame)
 # plt.imsave("output_above.png", frames[0])
 # exit(0)
 
-output_path = "stitching_4_failure.gif"
+# output_path = "stitching_4_success.mp4"
 
 
-def update(i):
-    print(f"Saving frame {i}")
-    im.set_array(frames[i])
-    return (im,)
+# def update(i):
+#     print(f"Saving frame {i}")
+#     im.set_array(frames[i])
+#     return (im,)
 
 
-print("Creating .gif file")
-fps = 12  # default frames per second; change if you want
-anim = FuncAnimation(fig, update, frames=len(frames), interval=1000 / fps, blit=True)
+# print("Creating .gif file")
+# fps = 60  # default frames per second; change if you want
+# anim = FuncAnimation(fig, update, frames=len(frames), interval=1000 / fps, blit=True)
 
-# Save using PillowWriter
-writer = PillowWriter(fps=fps)
-anim.save(output_path, writer=writer)
-plt.close(fig)  # close figure to avoid duplicate display
+# # Save using PillowWriter
+# writer = FFMpegWriter(fps=fps)
+# anim.save(output_path, writer=writer)
+# plt.close(fig)  # close figure to avoid duplicate display
 
-print(f"Saved GIF to {output_path} (frames={len(frames)}, fps={fps}).\nDisplaying below:")
+# print(f"Saved GIF to {output_path} (frames={len(frames)}, fps={fps}).\nDisplaying below:")
