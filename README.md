@@ -55,6 +55,7 @@ Due to the nature of investigated issue we primarly focused on goal-conditioned 
 * C-Learning - TD algorithm running without rewards.
 * GCDQN - Both TD and MC versions, with rewards.
 * GCIQL - Both TD and MC versions, with rewards.
+
 Specifically, the algorithms presented in ther paper include `clearn_search`, `crl_search`, `gciql_search` and `gcdqn`. All of the above **do not have a agent network**. We also include some other algorithms, but they were not thoroughly tested, and may not work with the newest code version.
 
 
