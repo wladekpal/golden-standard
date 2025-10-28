@@ -7,6 +7,7 @@ import jax
 import jax.numpy as jnp
 import ml_collections
 import optax
+from functools import partial
 
 from impls.utils.encoders import GCEncoder, encoder_modules
 from impls.utils.flax_utils import ModuleDict, TrainState, nonpytree_field
@@ -118,13 +119,13 @@ class ClearnSearchAgent(flax.struct.PyTreeNode):
 
         return self.replace(network=new_network, rng=new_rng), info
 
-    @jax.jit
+    @partial(jax.jit, static_argnames=("evaluation",))
     def sample_actions(
         self,
         observations,
         goals=None,
         seed=None,
-        temperature=1.0,
+        evaluation=False,
     ):
         """
         Returns integer action indices. Continuous actions are not supported here.
@@ -136,6 +137,11 @@ class ClearnSearchAgent(flax.struct.PyTreeNode):
         qs = jax.lax.stop_gradient(jax.vmap(self.network.select('critic'), in_axes=(None, None, 1))(observations, goals, all_actions)) # 6 x 2 x B
         qs = qs.mean(axis=1) # 6 x B
         qs = qs.transpose(1, 0) # B x 6
+
+        if evaluation:
+            actions = jnp.argmax(qs, axis=-1)
+            return actions
+
         if self.config['action_sampling'] == 'softmax':
             # Use critic to get Q-values (use first/ensemble as appropriate). Prefer the minimum head for conservative action,
             # or average — here we average the two heads and pick argmax.

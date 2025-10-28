@@ -19,11 +19,11 @@ from envs.block_moving.wrappers import wrap_for_eval, wrap_for_training
 from envs.block_moving.env_types import TimeStep, remove_targets
 from config import ROOT_DIR
 from impls.utils.checkpoints import save_agent
-from utils import log_gif, sample_actions_critic
+from utils import log_gif
 
 
 @functools.partial(jax.jit, static_argnums=(2, 3, 4, 5, 6))
-def collect_data(agent, key, env, num_envs, episode_length, use_targets=False, critic_temp=None):
+def collect_data(agent, key, env, num_envs, episode_length, use_targets=False, evaluation=False):
     def step_fn(carry, step_num):
         state, info, key = carry
         key, sample_key = jax.random.split(key)
@@ -35,18 +35,12 @@ def collect_data(agent, key, env, num_envs, episode_length, use_targets=False, c
             lambda: state.replace(grid=remove_targets(state.grid), goal=remove_targets(state.goal)),
         )
 
-        if critic_temp is None:
-            actions = agent.sample_actions(
-                state_agent.grid.reshape(num_envs, -1), state_agent.goal.reshape(num_envs, -1), seed=sample_key
-            )
-        else:
-            actions = sample_actions_critic(
-                agent,
-                state_agent.grid.reshape(num_envs, -1),
-                state_agent.goal.reshape(num_envs, -1),
-                seed=sample_key,
-                temperature=critic_temp,
-            )
+        actions = agent.sample_actions(
+            state_agent.grid.reshape(num_envs, -1),
+            state_agent.goal.reshape(num_envs, -1),
+            seed=sample_key,
+            evaluation=evaluation,
+        )
 
         new_state, reward, done, info = env.step(state, actions)
         timestep = TimeStep(
@@ -154,7 +148,7 @@ def create_batch(
     return batch
 
 
-def evaluate_agent_in_specific_env(agent, key, jitted_create_batch, config, name, create_gif=False, critic_temp=None):
+def evaluate_agent_in_specific_env(agent, key, jitted_create_batch, config, name, create_gif=False, evaluation=True):
     env_eval = create_env(config.env)
     env_eval = wrap_for_eval(env_eval)  # Note: Wrap for eval is not using any quarter filtering
     env_eval.step = jax.jit(jax.vmap(env_eval.step))
@@ -171,7 +165,7 @@ def evaluate_agent_in_specific_env(agent, key, jitted_create_batch, config, name
         config.exp.num_envs,
         config.env.episode_length,
         use_targets=config.exp.use_targets,
-        critic_temp=critic_temp,
+        evaluation=evaluation,
     )
     timesteps = jax.tree_util.tree_map(lambda x: x.swapaxes(1, 0), timesteps)  # Returns N_envs x episode_length x ...
 
@@ -268,7 +262,7 @@ def evaluate_agent(agent, key, jitted_create_batch, epoch, config):
 
     for eval_config, eval_name_suff in zip(eval_configs, eval_names_suff):
         eval_info_tmp, loss_info = evaluate_agent_in_specific_env(
-            agent, key, jitted_create_batch, eval_config, eval_name_suff, create_gif=create_gif
+            agent, key, jitted_create_batch, eval_config, eval_name_suff, create_gif=create_gif, evaluation=True
         )
         eval_info.update(eval_info_tmp)
         if eval_name_suff == "":
@@ -282,7 +276,7 @@ def evaluate_agent(agent, key, jitted_create_batch, epoch, config):
             eval_config,
             eval_name_suff + "soft_q",
             create_gif=create_gif,
-            critic_temp=1.0,
+            evaluation=False,
         )
         eval_info.update(eval_info_tmp)
 
