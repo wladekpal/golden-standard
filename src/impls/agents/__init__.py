@@ -52,6 +52,7 @@ default_config = ml_collections.FrozenConfigDict(
             use_discounted_mc_rewards=False,  # Whether to use discounted Monte Carlo rewards.
             action_sampling='softmax',
             is_td=False,
+            new_negative_sampling=False,
         )
     )
 

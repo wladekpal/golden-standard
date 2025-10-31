@@ -76,15 +76,18 @@ class CRLSearchAgent(flax.struct.PyTreeNode):
         )(log_not_p)
         neg_loss = jnp.sum(probs*neg_loss, axis=0)  # (B, B, e)
 
-        contrastive_loss = jnp.mean(pos_loss + neg_loss)  # (B, B, e)
+        if self.config['new_negative_sampling']:
+            print("Using new negative sampling")
+            contrastive_loss = jnp.mean(pos_loss + neg_loss)  # (B, B, e)
 
-        # contrastive_loss = jax.vmap(
-        #     lambda _logits: optax.sigmoid_binary_cross_entropy(logits=_logits, labels=I),
-        #     in_axes=-1,
-        #     out_axes=-1,
-        # )(logits)
-        # contrastive_loss = jnp.sum(contrastive_loss, axis=0)  
-        # contrastive_loss = jnp.mean(contrastive_loss)
+        else:
+            contrastive_loss = jax.vmap(
+                lambda _logits: optax.sigmoid_binary_cross_entropy(logits=_logits, labels=I),
+                in_axes=-1,
+                out_axes=-1,
+            )(logits)
+            contrastive_loss = jnp.sum(contrastive_loss, axis=0)  
+            contrastive_loss = jnp.mean(contrastive_loss)
 
         # Compute additional statistics.
         logits = jnp.mean(logits, axis=-1) # (B, B)
@@ -352,6 +355,7 @@ def get_config():
             frame_stack=ml_collections.config_dict.placeholder(int),  # Number of frames to stack.
             target_entropy_multiplier=0.5,  # Multiplier for the target entropy (used in SAC-like agents), when target_entropy not set
             target_entropy=-jnp.log(6),  # Target entropy (None for automatic tuning).
+            new_negative_sampling=False,  # Whether to use new negative sampling strategy.
         )
     )
     return config

@@ -49,28 +49,39 @@ target_entropy=-1.1
 
 for seed in 1 2
 do
-    for number_of_boxes in 3 2 1
+    for number_of_boxes in 7 5 9
     do
-        echo "Running with grid_size: $grid_size, number_of_boxes_min: $number_of_boxes, number_of_boxes_max: $number_of_boxes, number_of_moving_boxes_max: $number_of_moving_boxes_max"
-        XLA_PYTHON_CLIENT_PREALLOCATE=false CUDA_VISIBLE_DEVICES=$GPU_ID uv run --active src/train.py \
-        env:box-moving \
-        --agent.agent_name crl_search \
-        --exp.name crl_modified_3_long_diff_parametrization_phi_te_${target_entropy}_grid_${grid_size}_boxes_${number_of_boxes} \
-        --env.number_of_boxes_max ${number_of_boxes} \
-        --env.number_of_boxes_min ${number_of_boxes} \
-        --env.number_of_moving_boxes_max ${number_of_boxes} \
-        --env.grid_size ${grid_size} \
-        --exp.gamma 0.99 \
-        --env.episode_length 100 \
-        --exp.seed ${seed} \
-        --exp.project "paper_main_fig_exact" \
-        --exp.epochs 150 \
-        --exp.gif_every 10 \
-        --agent.alpha 0.1 \
-        --exp.max_replay_size 10000 \
-        --exp.batch_size 256 \
-        --exp.eval_special \
-        --env.level_generator variable \
-        --agent.target_entropy ${target_entropy}
+        # iterate negative sampling off/on
+        for neg_flag in "" "--agent.new_negative_sampling"
+        do
+            if [ -z "$neg_flag" ]; then
+                neg_state="off"
+            else
+                neg_state="on"
+            fi
+
+            echo "Running with grid_size: $grid_size, number_of_boxes_min: $number_of_boxes, number_of_boxes_max: $number_of_boxes, negative_sampling: $neg_state, seed: $seed"
+            XLA_PYTHON_CLIENT_PREALLOCATE=false CUDA_VISIBLE_DEVICES=$GPU_ID uv run --active src/train.py \
+            env:box-moving \
+            --agent.agent_name crl_search \
+            --exp.name crl_30.10.25__te_${target_entropy}_grid_${grid_size}_boxes_${number_of_boxes}_neg_${neg_state} \
+            --env.number_of_boxes_max ${number_of_boxes} \
+            --env.number_of_boxes_min ${number_of_boxes} \
+            --env.number_of_moving_boxes_max ${number_of_boxes} \
+            --env.grid_size ${grid_size} \
+            --exp.gamma 0.99 \
+            --env.episode_length 100 \
+            --exp.seed ${seed} \
+            --exp.project "paper_main_fig_exact" \
+            --exp.epochs 50 \
+            --exp.gif_every 10 \
+            --agent.alpha 0.1 \
+            ${neg_flag} \
+            --exp.max_replay_size 10000 \
+            --exp.batch_size 256 \
+            --agent.target_entropy ${target_entropy}
+            # --exp.eval_special \
+            # --env.level_generator variable \
+        done
     done
 done
