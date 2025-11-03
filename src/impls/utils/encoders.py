@@ -3,6 +3,7 @@ from typing import Sequence
 
 import flax.linen as nn
 import jax.numpy as jnp
+import math
 
 from impls.utils.networks import MLP
 
@@ -81,7 +82,10 @@ class ImpalaEncoder(nn.Module):
 
     @nn.compact
     def __call__(self, x, train=True, cond_var=None):
-        x = x.astype(jnp.float32) / 255.0
+        print("START x shape", x.shape)
+        obs_size = x.shape[-1]
+        x = x.reshape(-1, int(math.sqrt(obs_size)), int(math.sqrt(obs_size)))
+        print("reshaped:", x.shape )
 
         conv_out = x
 
@@ -93,7 +97,9 @@ class ImpalaEncoder(nn.Module):
         conv_out = nn.relu(conv_out)
         if self.layer_norm:
             conv_out = nn.LayerNorm()(conv_out)
-        out = conv_out.reshape((*x.shape[:-3], -1))
+
+        print("conv_out shape before reshape:", conv_out.shape)
+        out = conv_out.reshape(-1, conv_out.shape[-1])
 
         out = MLP(self.mlp_hidden_dims, activate_final=True, layer_norm=self.layer_norm)(out)
 

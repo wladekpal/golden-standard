@@ -40,7 +40,7 @@ default_config = ml_collections.FrozenConfigDict(
             actor_log_q=True,  # Whether to maximize log Q (True) or Q itself (False) in the actor loss.
             const_std=True,  # Whether to use constant standard deviation for the actor.
             discrete=True,  # Whether the action space is discrete.
-            encoder=ml_collections.config_dict.placeholder(str),  # Visual encoder name (None, 'impala_small', etc.).
+            encoder='none',  # Visual encoder name (None, 'impala_small', etc.).
             # Dataset hyperparameters.
             use_next_obs=False, #TODO: This is not used anymore, we should remove it 
             target_entropy_multiplier=0.5,  # Multiplier for the target entropy (used in SAC-like agents).

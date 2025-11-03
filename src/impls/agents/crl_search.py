@@ -198,7 +198,7 @@ class CRLSearchAgent(flax.struct.PyTreeNode):
             encoder_module = encoder_modules[config['encoder']]
             encoders['critic_state'] = encoder_module()
             encoders['critic_goal'] = encoder_module()
-            encoders['actor'] = GCEncoder(concat_encoder=encoder_module())
+            encoders['actor'] = GCEncoder(state_encoder=encoder_module(), goal_encoder=encoder_module())
             if config['actor_loss'] == 'awr':
                 encoders['value_state'] = encoder_module()
                 encoders['value_goal'] = encoder_module()
@@ -261,6 +261,9 @@ class CRLSearchAgent(flax.struct.PyTreeNode):
         if config['target_entropy'] is None:
             config['target_entropy'] = -config['target_entropy_multiplier'] * action_dim/2
         alpha_temp_def = LogParam()
+
+
+        print("EXAMPLE OBSERVATIONS SHAPE:", ex_observations.shape, ex_goals.shape, ex_actions.shape)
 
         network_info = dict(
             critic=(critic_def, (ex_observations, ex_goals, ex_actions)),
