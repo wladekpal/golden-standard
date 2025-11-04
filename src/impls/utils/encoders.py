@@ -65,7 +65,7 @@ class ImpalaEncoder(nn.Module):
     stack_sizes: tuple = (16, 32, 32)
     num_blocks: int = 2
     dropout_rate: float = None
-    mlp_hidden_dims: Sequence[int] = (512,)
+    mlp_hidden_dims: Sequence[int] = (256,)
     layer_norm: bool = False
 
     def setup(self):
@@ -82,10 +82,8 @@ class ImpalaEncoder(nn.Module):
 
     @nn.compact
     def __call__(self, x, train=True, cond_var=None):
-        print("START x shape", x.shape)
         obs_size = x.shape[-1]
-        x = x.reshape(-1, int(math.sqrt(obs_size)), int(math.sqrt(obs_size)))
-        print("reshaped:", x.shape )
+        x = x.reshape(-1, int(math.sqrt(obs_size)), int(math.sqrt(obs_size)), 1)
 
         conv_out = x
 
@@ -98,7 +96,6 @@ class ImpalaEncoder(nn.Module):
         if self.layer_norm:
             conv_out = nn.LayerNorm()(conv_out)
 
-        print("conv_out shape before reshape:", conv_out.shape)
         out = conv_out.reshape(-1, conv_out.shape[-1])
 
         out = MLP(self.mlp_hidden_dims, activate_final=True, layer_norm=self.layer_norm)(out)

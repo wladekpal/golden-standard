@@ -428,7 +428,6 @@ class GCBilinearValue(nn.Module):
             actions: Actions (optional).
             info: Whether to additionally return the representations phi and psi.
         """
-        print("OBSERVATIONS SHAPE:", observations.shape, goals.shape, actions.shape if actions is not None else None)
         if self.state_encoder is not None:
             observations = self.state_encoder(observations)
         if self.goal_encoder is not None:
