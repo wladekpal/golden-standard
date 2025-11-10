@@ -1,22 +1,42 @@
-from envs.block_moving.env_types import GridStatesEnum, BoxMovingState
+from envs.block_moving.env_types import GridStatesEnum, BoxMovingState, TimeStep
 from envs.block_moving.block_moving_env import BoxMovingEnv
 import jax.numpy as jnp
+import jax
 from itertools import permutations, product
+import matplotlib.pyplot as plt
+import matplotlib.animation as animation
+import functools
 
+actor_states = jnp.array(
+    [
+        GridStatesEnum.AGENT,
+        GridStatesEnum.AGENT_CARRYING_BOX,
+        GridStatesEnum.AGENT_ON_BOX,
+        GridStatesEnum.AGENT_ON_TARGET,
+        GridStatesEnum.AGENT_ON_TARGET_CARRYING_BOX,
+        GridStatesEnum.AGENT_ON_TARGET_WITH_BOX,
+        GridStatesEnum.AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX,
+        GridStatesEnum.AGENT_ON_BOX_CARRYING_BOX,
+    ]
+)
 
-def find_boxes(state):
-    return jnp.argwhere(state == GridStatesEnum.BOX)
+box_states = jnp.array(
+    [
+        GridStatesEnum.BOX,
+        GridStatesEnum.AGENT_ON_BOX,
+        GridStatesEnum.AGENT_ON_BOX_CARRYING_BOX,
+    ]
+)
 
+target_states = jnp.array(
+    [
+        GridStatesEnum.TARGET,
+        GridStatesEnum.AGENT_ON_TARGET,
+        GridStatesEnum.AGENT_ON_TARGET_CARRYING_BOX,
+    ]
+)
 
-def find_goals(state):
-    return jnp.argwhere(state == GridStatesEnum.TARGET)
-
-
-def find_agent(state):
-    return jnp.argwhere(state >= GridStatesEnum.AGENT)[0]
-
-
-forbidden_states = jnp.array(
+carrying_states = jnp.array(
     [
         GridStatesEnum.AGENT_CARRYING_BOX,
         GridStatesEnum.AGENT_ON_BOX_CARRYING_BOX,
@@ -24,6 +44,31 @@ forbidden_states = jnp.array(
         GridStatesEnum.AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX,
     ]
 )
+# EMPTY = jnp.int8(0)
+# BOX = jnp.int8(1)
+# TARGET = jnp.int8(2)
+# AGENT = jnp.int8(3)
+# AGENT_CARRYING_BOX = jnp.int8(4)  # Agent is carrying a box
+# AGENT_ON_BOX = jnp.int8(5)  # Agent is on box
+# AGENT_ON_TARGET = jnp.int8(6)  # Agent is on target
+# AGENT_ON_TARGET_CARRYING_BOX = jnp.int8(7)  # Agent is on target carrying the box
+# AGENT_ON_TARGET_WITH_BOX = jnp.int8(8)  # Agent is on target on which there is a box
+# AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX = jnp.int8(9)  # noqa: E501 Agent is on target on which there is a box and is carrying a box
+# BOX_ON_TARGET = jnp.int8(10)  # Box is on target
+# AGENT_ON_BOX_CARRYING_BOX = jnp.int8(11)  # Agent is on box carrying a box
+
+
+# TODO: agent on box and agent on target states handling
+def find_boxes(state):
+    return jnp.argwhere(jnp.isin(state, box_states))
+
+
+def find_goals(state):
+    return jnp.argwhere(jnp.isin(state, target_states))
+
+
+def find_agent(state):
+    return jnp.argwhere(jnp.isin(state, actor_states))[0]
 
 
 def generate_permutations(positions):
@@ -69,14 +114,72 @@ def retrieve_moves(agent_pos, box_pos, goal_pos):
     return actions
 
 
-def solve_state(state):
+def retrieve_moves_carrying(agent_pos, box_pos, goal_pos):
+    actions = []
+
+    current_pos = agent_pos
+
+    for box, goal in zip(box_pos, goal_pos):
+        delta = box - current_pos
+        actions.extend(translate_delta_to_action(delta))
+        actions.append(4)
+        delta = goal - box
+        actions.extend(translate_delta_to_action(delta))
+        actions.append(5)
+        current_pos = goal
+
+    return actions
+
+
+def solve_state(state: jnp.ndarray):
     agent_position = find_agent(state)
-    if (state[agent_position[0], agent_position[1]] == forbidden_states).any():
+    if (state[agent_position[0], agent_position[1]] == carrying_states).any():
+        if state[agent_position[0], agent_position[1]] == GridStatesEnum.AGENT_ON_TARGET_CARRYING_BOX:
+            state = state.at[agent_position[0], agent_position[1]].set(GridStatesEnum.AGENT_ON_TARGET_WITH_BOX)
+            moves = solve_normal_state(state)
+            return [5] + moves
+        else:
+            return solve_carrying_state(state)
+    else:
+        return solve_normal_state(state)
+
+
+def solve_carrying_state(state: jnp.ndarray):
+    agent_position = find_agent(state)
+    box_positions = find_boxes(state)
+    goal_positions = find_goals(state)
+
+    box_permutations = generate_permutations(box_positions)
+    goal_permutations = generate_permutations(goal_positions)
+
+    box_permutations = [jnp.concatenate([agent_position[None, ...], p]) for p in box_permutations]
+
+    pairings = list(product(box_permutations, goal_permutations))
+
+    min_cost = jnp.inf
+    best_path = None
+
+    for pairing in pairings:
+        boxes, goals = pairing
+        cost = compute_cost(agent_position, boxes, goals)
+        if cost < min_cost:
+            min_cost = cost
+            best_path = (boxes, goals)
+
+    best_moves = retrieve_moves(agent_position, best_path[0], best_path[1])
+
+    assert best_moves[0] == 4  # first move must be pickup
+
+    return best_moves[1:]
+
+
+def solve_normal_state(state: jnp.ndarray):
+    agent_position = find_agent(state)
+    if (state[agent_position[0], agent_position[1]] == carrying_states).any():
         raise ValueError("State with agent carrying box is not supported.")
 
     box_positions = find_boxes(state)
     goal_positions = find_goals(state)
-
     box_permutations = generate_permutations(box_positions)
     goal_permutations = generate_permutations(goal_positions)
 
@@ -100,17 +203,23 @@ def solve_state(state):
 def calculate_optimal_q_value_and_traj(env: BoxMovingEnv, state: BoxMovingState, discount=0.99):
     best_moves = solve_state(state.grid)
 
-    trajectory = [state]
+    trajectory = []
 
     last_state = state
 
     rewards = []
 
     for action in best_moves:
-        last_state = trajectory[-1]
-        last_state, reward, _, _ = env.step(last_state, action)
+        current_state, reward, _, _ = env.step(last_state, action)
         rewards.append(reward)
-        trajectory.append(last_state)
+        timestep = TimeStep(**last_state.__dict__, action=action, done=jnp.array(False), truncated=jnp.array(False))
+        trajectory.append(timestep)
+        last_state = current_state
+
+    timestep = TimeStep(
+        **last_state.__dict__, action=jnp.array(action), done=jnp.array(False), truncated=jnp.array(False)
+    )
+    trajectory.append(timestep)
 
     q_value = 0
 
@@ -121,25 +230,33 @@ def calculate_optimal_q_value_and_traj(env: BoxMovingEnv, state: BoxMovingState,
 
 
 if __name__ == "__main__":
-    test_state = jnp.array(
-        [
-            [0, 0, 1, 0, 3],
-            [0, 2, 0, 1, 0],
-            [0, 0, 0, 0, 0],
-            [0, 0, 0, 2, 0],
-            [0, 0, 0, 0, 0],
-        ]
+    env = BoxMovingEnv(
+        grid_size=3,
+        episode_length=100,
+        number_of_boxes_max=4,
+        number_of_boxes_min=4,
+        number_of_moving_boxes_max=4,
     )
-    print(solve_state(test_state))
 
-    # xd = jnp.array([
-    #     [1, 2],
-    #     [3, 4],
-    #     [5, 6],
-    #     [7, 8],
-    # ])
-    # print(xd)
-    # perms = generate_permutations(xd)
-    # print(len(perms))
-    # for p in perms:
-    #     print(p)
+    key = jax.random.PRNGKey(3)
+    state, _ = env.reset(key)
+
+    traj, q_value = calculate_optimal_q_value_and_traj(env, state)
+    print("Optimal Q value:", q_value)
+
+    traj_len = len(traj)
+
+    traj = jax.tree.map(lambda *xs: jnp.array(xs)[None, ...], *traj)
+
+    grid_size = traj.grid.shape[-2:]
+    fig, ax = plt.subplots(figsize=grid_size)
+
+    animate = functools.partial(env.animate, ax, traj, img_prefix="assets")
+
+    # Create animation
+    anim = animation.FuncAnimation(fig, animate, frames=traj_len + 1, interval=80, repeat=False)
+
+    # Save as GIF
+    gif_path = "block_moving_epoch.gif"
+    anim.save(gif_path, writer="pillow")
+    plt.close()
