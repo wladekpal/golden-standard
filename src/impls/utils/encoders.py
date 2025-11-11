@@ -4,7 +4,6 @@ from typing import Sequence
 import flax.linen as nn
 import jax.numpy as jnp
 import math
-
 from impls.utils.networks import MLP
 
 
@@ -67,6 +66,7 @@ class ImpalaEncoder(nn.Module):
     dropout_rate: float = None
     mlp_hidden_dims: Sequence[int] = (256,)
     layer_norm: bool = False
+    coord_conv: bool = False
 
     def setup(self):
         stack_sizes = self.stack_sizes
@@ -84,6 +84,16 @@ class ImpalaEncoder(nn.Module):
     def __call__(self, x, train=True, cond_var=None):
         obs_size = x.shape[-1]
         x = x.reshape(-1, int(math.sqrt(obs_size)), int(math.sqrt(obs_size)), 1)
+
+        if self.coord_conv:
+            batch_size = x.shape[0]
+            x_coord = jnp.linspace(-1, 1, x.shape[1])[None, :, None, None]
+            x_coord = jnp.tile(x_coord, (batch_size, 1, x.shape[2], 1))
+
+            y_coord = jnp.linspace(-1, 1, x.shape[2])[None, None, :, None]
+            y_coord = jnp.tile(y_coord, (batch_size, x.shape[1], 1, 1))
+
+            x = jnp.concatenate([x, x_coord, y_coord], axis=-1)
 
         conv_out = x
 
@@ -144,5 +154,6 @@ encoder_modules = {
     'impala_debug': functools.partial(ImpalaEncoder, num_blocks=1, stack_sizes=(4, 4)),
     'impala_xs' : functools.partial(ImpalaEncoder, num_blocks=1, stack_sizes=(16, 32)),
     'impala_small': functools.partial(ImpalaEncoder, num_blocks=1),
+    'impala_small_coord': functools.partial(ImpalaEncoder, num_blocks=1, coord_conv=True),
     'impala_large': functools.partial(ImpalaEncoder, stack_sizes=(64, 128, 128), mlp_hidden_dims=(1024,)),
 }
