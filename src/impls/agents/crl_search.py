@@ -194,7 +194,7 @@ class CRLSearchAgent(flax.struct.PyTreeNode):
 
         # Define encoders.
         encoders = dict()
-        if config['encoder'] is not None:
+        if config['encoder'] is not None and config['encoder'] != "":
             encoder_module = encoder_modules[config['encoder']]
             encoders['critic_state'] = encoder_module()
             encoders['critic_goal'] = encoder_module()
