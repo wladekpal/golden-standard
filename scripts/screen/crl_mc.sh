@@ -1,13 +1,14 @@
 #!/bin/bash
 
-GPU_ID=$1
-grid_size=$2
+GPU_ID=${1:?Error: GPU_ID parameter is required}
+grid_size=${2:?Error: grid_size parameter is required}
+exp_dir_name=${3:?Error: exp_dir_name parameter is required}
 
 
 exclude_dirs=( ".github" ".ruff_cache" "wandb" ".vscode" ".idea" "__pycache__" ".venv" "experiments" ".git" "notebooks" "runs" "notes" ".pytest")
 
 # Experiment name
-exp_name="many_boxes_crl_mc_grid_${grid_size}"
+exp_name="$(basename "$0" .sh)_${exp_dir_name}_${grid_size}_grid"
 
 # Create the main experiments directory if it doesn't exist
 mkdir -p ./experiments
@@ -45,35 +46,30 @@ cd "$temp_dir"
 echo "Current path: '$(pwd)'"
 
 
-echo "Running with grid_size: $grid_size, number_of_boxes_min: $number_of_boxes_min, number_of_boxes_max: $number_of_boxes_max"
+number_of_boxes=3 
+echo "Running with grid_size: $grid_size, number_of_boxes: $number_of_boxes"
 
 
-for seed in 1 2
+for seed in 1 2 3
 do
-    for number_of_boxes in 2 3 4
+    for discount in 0.9 0.999 0.99 
     do
-      for episode_length in 100 
-      do
         CUDA_VISIBLE_DEVICES=$GPU_ID uv run --active src/train.py \
-        env:box-pushing \
+        env:box-moving \
         --agent.agent_name crl_search \
-        --exp.name crl_te_1.38_${number_of_boxes}_grid_${grid_size}_ep_len_${episode_length}_no_filtering \
+        --exp.name crl_${number_of_boxes}_grid_${grid_size}_discount_${discount} \
         --env.number_of_boxes_max ${number_of_boxes} \
         --env.number_of_boxes_min ${number_of_boxes} \
         --env.number_of_moving_boxes_max ${number_of_boxes} \
         --env.grid_size ${grid_size} \
-        --exp.gamma 0.99 \
-        --env.episode_length ${episode_length} \
+        --agent.discount ${discount} \
         --exp.seed ${seed} \
-        --exp.project "action_sampling_comparison" \
+        --exp.project "CRL_hparams" \
         --exp.epochs 50 \
         --exp.gif_every 10 \
-        --agent.alpha 0.1 \
-        --agent.expectile 0.5  \
         --exp.max_replay_size 10000 \
         --exp.batch_size 256 \
         --exp.eval_special \
-        --env.level_generator quarter 
-        done
+        --env.level_generator variable 
     done
 done

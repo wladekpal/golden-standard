@@ -301,9 +301,9 @@ def train(config: Config):
         mode=config.exp.mode,
     )
     if config.exp.save_dir is None:
-        run_directory = os.path.join(ROOT_DIR, "runs", config.exp.name)
+        run_directory = os.path.join(ROOT_DIR, "runs", config.exp.name+f"_seed_{config.exp.seed}")
     else:
-        run_directory = os.path.join(config.exp.save_dir, config.exp.name)
+        run_directory = os.path.join(config.exp.save_dir, config.exp.name+f"_seed_{config.exp.seed}")
     os.makedirs(run_directory, exist_ok=True)
 
     # Create environment and batch functions

@@ -49,27 +49,26 @@ echo "Current path: '$(pwd)'"
 number_of_boxes=3 
 echo "Running with grid_size: $grid_size, number_of_boxes: $number_of_boxes"
 
+
 for seed in 1 2 3
 do
-    for discount in 0.9 0.999 0.99 
+    for target_entropy in -0.69 -1.1 -1.79
     do
         CUDA_VISIBLE_DEVICES=$GPU_ID uv run --active src/train.py \
         env:box-moving \
-        --agent.agent_name gcdqn \
-        --exp.name dqn_${number_of_boxes}_grid_${grid_size}_discount_${discount} \
+        --agent.agent_name crl_search \
+        --exp.name crl_${number_of_boxes}_grid_${grid_size}_t_entropy_${target_entropy} \
         --env.number_of_boxes_max ${number_of_boxes} \
         --env.number_of_boxes_min ${number_of_boxes} \
         --env.number_of_moving_boxes_max ${number_of_boxes} \
         --env.grid_size ${grid_size} \
-        --agent.discount ${discount} \
-        --env.episode_length 100 \
+        --agent.target_entropy ${target_entropy} \
         --exp.seed ${seed} \
-        --exp.project "DQN_hparams" \
+        --exp.project "CRL_hparams" \
         --exp.epochs 50 \
         --exp.gif_every 10 \
         --exp.max_replay_size 10000 \
         --exp.batch_size 256 \
-        --exp.use_future_and_random_goals \
         --exp.eval_special \
         --env.level_generator variable 
     done
