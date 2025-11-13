@@ -315,7 +315,7 @@ def train(config: Config):
     jitted_flatten_batch = jax.jit(jax.vmap(flatten_batch, in_axes=(None, None, 0, 0)), static_argnums=(0, 1))
     jitted_create_batch = functools.partial(
         create_batch,
-        gamma=config.exp.gamma,
+        gamma=config.agent.discount,
         use_targets=config.exp.use_targets,
         use_future_and_random_goals=config.exp.use_future_and_random_goals,
         jitted_flatten_batch=jitted_flatten_batch,
