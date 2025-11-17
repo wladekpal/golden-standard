@@ -256,6 +256,60 @@ def flatten_batch(gamma, get_mc_discounted_rewards, transition, sample_key):
     return states, next_state, future_state, goal_index
 
 
+# TODO: will need to adjust it later for minigrid envs (if we would like to use them)
+def flatten_batch_obbt(gamma, get_mc_discounted_rewards, transition, sample_key):
+    # Because it's vmaped transition.obs.shape is of shape (episode_len, obs_dim)
+
+    if get_mc_discounted_rewards:
+        rewards = transition.reward
+        steps = transition.steps
+        discounted_rewards = get_discounted_rewards(steps.squeeze(), rewards.squeeze(), gamma)
+        transition = transition.replace(reward=discounted_rewards)
+
+    seq_len = transition.grid.shape[0]
+    arrangement = jnp.arange(seq_len)
+    is_future_mask = jnp.array(
+        arrangement[:, None] < arrangement[None], dtype=jnp.float32
+    )  # upper triangular matrix of shape seq_len, seq_len where all non-zero entries are 1
+    discount = gamma ** jnp.array(arrangement[None] - arrangement[:, None], dtype=jnp.float32)
+    probs = is_future_mask * discount
+    # probs is an upper triangular matrix of shape seq_len, seq_len of the form:
+    #    [[0.        , 0.99      , 0.98010004, 0.970299  , 0.960596 ],
+    #    [0.        , 0.        , 0.99      , 0.98010004, 0.970299  ],
+    #    [0.        , 0.        , 0.        , 0.99      , 0.98010004],
+    #    [0.        , 0.        , 0.        , 0.        , 0.99      ],
+    #    [0.        , 0.        , 0.        , 0.        , 0.        ]]
+    # assuming seq_len = 5
+    # the same result can be obtained using probs = is_future_mask * (gamma ** jnp.cumsum(is_future_mask, axis=-1))
+    single_trajectories = segment_ids_per_row(transition.steps.squeeze())
+    single_trajectories = jnp.concatenate(
+        [single_trajectories[:, jnp.newaxis].T] * seq_len,
+        axis=0,
+    )
+    # array of seq_len x seq_len where a row is an array of traj_ids that correspond to the episode index from which that time-step was collected
+    # timesteps collected from the same episode will have the same traj_id. All rows of the single_trajectories are same.
+
+    probs = probs * jnp.equal(single_trajectories, single_trajectories.T) + jnp.eye(seq_len) * 1e-5
+    # ith row of probs will be non zero only for time indices that
+    # 1) are greater than i
+    # 2) have the same traj_id as the ith time index
+
+    # To make sure, that we take future states only from single trajectory, when no future states, take the same state
+    new_probs = probs * jnp.diag(jnp.ones(probs.shape[0] - 1), k=1) + jnp.eye(seq_len) * 1e-5
+    goal_index_next_state = jax.random.categorical(sample_key, jnp.log(new_probs))
+    next_state = jax.tree_util.tree_map(
+        lambda x: jnp.take(x, goal_index_next_state[:-1], axis=0), transition
+    )  # the last goal_index cannot be considered as there is no future.
+
+    goal_index = jax.random.categorical(sample_key, jnp.log(probs))
+    future_state = jax.tree_util.tree_map(
+        lambda x: jnp.take(x, goal_index[:-1], axis=0), transition
+    )  # the last goal_index cannot be considered as there is no future.
+    states = jax.tree_util.tree_map(lambda x: x[:-1], transition)  # all states but the last one are considered
+    future_states = jax.tree_util.tree_map(lambda x: x[1:], transition)  # all states but the first one are considered
+
+    return states, next_state, future_states, goal_index
+
 # Computes cumulative discounted returns for each time step until the end of its trajectory
 # Supports multiple trajectories in a rollout and wrap-around episodes
 def get_discounted_rewards(steps, rewards, gamma):
