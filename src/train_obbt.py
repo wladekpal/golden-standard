@@ -109,7 +109,9 @@ def one_big_beautiful_trajectory(states, future_states, key):
         lambda x: x.reshape(-1, *x.shape[2:])[: batch_size], future_states_trajectories
     )  # (batch_size, grid_size, grid_size)
 
-    return states_concat, states_concat.action, future_states_concat
+    states_concat_action = states_concat.action
+
+    return states_concat, states_concat_action, future_states_concat
 
 
 def create_batch(
@@ -127,7 +129,7 @@ def create_batch(
         gamma, use_discounted_mc_rewards, timesteps, batch_keys
     ) 
 
-    state, actions, next_state, future_state, goal_index = get_single_pair_from_every_env(
+    state1, actions, next_state, future_state1, goal_index = get_single_pair_from_every_env(
         state,
         next_state,
         future_state,
