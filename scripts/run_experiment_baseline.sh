@@ -18,7 +18,7 @@ else
         GOALS_FLAG=--exp.no_use_future_and_random_goals
 fi
 
-uv run src/train_obbt.py env:box-moving \
+uv run src/train.py env:box-moving \
         --agent.agent_name $AGENT \
         --agent.action_sampling softmax \
         --exp.name "$AGENT"_tunable_ent_1.38_sampling_"$BOX_NUM"_boxes_6_grid \

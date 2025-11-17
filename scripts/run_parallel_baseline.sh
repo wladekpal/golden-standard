@@ -15,7 +15,7 @@ AGENT=$2
 
 for BOX_NUM in 1 2 3;
 do
-    ./scripts/run_experiment.sh $SEED $AGENT $BOX_NUM &
+    ./scripts/run_experiment_baseline.sh $SEED $AGENT $BOX_NUM &
 done
 
 wait
