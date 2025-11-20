@@ -220,8 +220,8 @@ def draw_curves_plot(runs, keys, metrics_names, title, figures_path="./figures")
     if len(metrics_names) == 1:
         axes = [axes]
 
-    fig.set_figheight(5)
-    fig.set_figwidth(len(metrics_names) * 5 + 5)
+    fig.set_figheight(10)
+    fig.set_figwidth(len(metrics_names) * 10 + 5)
 
     min_len = 1000000
     for v in runs.values():
@@ -236,19 +236,21 @@ def draw_curves_plot(runs, keys, metrics_names, title, figures_path="./figures")
         iqm = lambda scores: np.array([metrics.aggregate_iqm(scores[..., frame]) for frame in range(scores.shape[-1])])
         iqm_scores, iqm_cis = rly.get_interval_estimates(ale_frames_scores_dict, iqm, reps=2000)
 
+        colors = {alg:return_color(alg) for alg in keys} 
 
         plot_utils.plot_sample_efficiency_curve(
                 frames + 1,
                 iqm_scores,
                 iqm_cis,
                 algorithms=keys,
+                colors=colors,
                 xlabel=r"Epochs",
                 ylabel=None,
                 legend=False,
                 grid_alpha=0.4,
                 ax=axes[metric_idx]
             )
-        axes[metric_idx].set_title(metric_name)
+        axes[metric_idx].set_title(metric_name, fontsize=30)
     plt.legend(bbox_to_anchor=(1.04, 0), loc="lower left", borderaxespad=0)
     # plt.suptitle(title, fontsize="xx-large", va='bottom')
     plt.tight_layout(w_pad=3.0)
