@@ -81,6 +81,10 @@ def create_batch(
 ):
     batch_key, sampling_key = jax.random.split(key, 2)
     batch_keys = jax.random.split(batch_key, timesteps.grid.shape[0])
+
+    # Since flatten_batch is vmapped and we don't have access to whole batch inside, we need to roll the grids here,
+    # to provide source of random targets.
+    # rolling_mask is used to indicate whether for particular item in batch we should use future or random goals
     rolled_grids = jnp.roll(timesteps.grid, shift=1, axis=0)
     if use_future_and_random_goals:
         batch_half = timesteps.grid.shape[0] // 2
