@@ -246,7 +246,7 @@ def evaluate_agent(agent, key, jitted_create_batch, epoch, config):
     eval_names_suff = [""]
 
     eval_info = {"epoch": epoch}
-    create_gif = epoch > 0 and epoch % config.exp.gif_every == 0
+    create_gif = epoch > 0 and epoch % config.exp.gif_every == 0 and config.exp.num_gifs > 0
 
     if config.exp.eval_special:
         special_config = copy.deepcopy(config)
