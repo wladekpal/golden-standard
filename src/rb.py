@@ -305,7 +305,7 @@ def flatten_batch(gamma, get_mc_discounted_rewards, use_targets, transition, rol
 
     # Here we select one of the rolled grids, which is another rollout from batch, as source of random goals
     rolled_grids_indices = jax.random.randint(sample_key_3, (1,), minval=0, maxval=rolled_grids.shape[0])
-    rolled_grids = extract_at_indices(rolled_grids, rolled_grids_indices)
+    rolled_grids = extract_at_indices(rolled_grids, random_indices)
 
     # Depending on rolling_mask we use either future or random goals
     goals = jax.lax.cond(
