@@ -9,6 +9,7 @@ import jax.numpy as jnp
 import distrax
 from impls.agents.crl import CRLAgent
 from impls.agents.crl_search import CRLSearchAgent
+import tempfile
 
 
 def log_gif(original_env, episode_length, prefix_gif, timesteps):
@@ -21,7 +22,9 @@ def log_gif(original_env, episode_length, prefix_gif, timesteps):
     anim = animation.FuncAnimation(fig, animate, frames=episode_length, interval=80, repeat=False)
 
     # Save as GIF
-    gif_path = "/tmp/block_moving_epoch.gif"
+
+    gif_file = tempfile.NamedTemporaryFile(suffix=".gif")
+    gif_path = gif_file.name
     anim.save(gif_path, writer="pillow")
     plt.close()
 
