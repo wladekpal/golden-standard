@@ -7,7 +7,6 @@ os.environ["MUJOCO_GL"] = "egl"
 import matplotlib.pyplot as plt
 import mujoco as mj
 import numpy as np
-from matplotlib.animation import FuncAnimation, PillowWriter
 
 
 # Printing.
@@ -24,7 +23,7 @@ static_model = """
         <map znear="0.01" zfar="80" fogstart="8" fogend="14"/>
     <headlight diffuse="0.42 0.44 0.48" ambient="0.16 0.16 0.18" specular="0.12 0.12 0.12"/>
         <rgba haze="0.12 0.18 0.25 1"/>
-    <global offwidth="2200" offheight="2200" fovy="35"/>
+    <global offwidth="3200" offheight="3200" fovy="35"/>
     </visual>
 
     <asset>
@@ -66,11 +65,12 @@ data = np.load(data_path)
 
 FIELD_WIDTH = 0.5
 BLOCK_WIDTH = 0.3
-SUBDIV_STEPS = 10
+SUBDIV_STEPS = 30
 ENV_IDX = 0
 SPHERE_SIZE = 0.2
-RESOLUTION = (1600, 1200)
-EP_LEN = 15
+RESOLUTION = (2400, 1800)
+# RESOLUTION = (1200, 900)
+EP_LEN = 50
 
 AGENT_NOT_CARRYING = [3, 5, 6, 8]
 AGENT_CARRYING = [4, 7, 9, 11]
@@ -301,32 +301,17 @@ def render_trajectory(data, static_model):
     return frames
 
 
-frames = render_trajectory(data[:EP_LEN, ENV_IDX], static_model)
+new_data = data[:EP_LEN, ENV_IDX]
+frames = render_trajectory(new_data, static_model)
 
 crop_top, crop_bottom, crop_left, crop_right = compute_crop_bounds(frames[0])
 if (crop_top, crop_bottom, crop_left, crop_right) != (0, frames[0].shape[0], 0, frames[0].shape[1]):
     frames = [frame[crop_top:crop_bottom, crop_left:crop_right] for frame in frames]
 
-
-fig, ax = plt.subplots(figsize=(frames[0].shape[1] / 50, frames[0].shape[0] / 50), dpi=100)
+fig, ax = plt.subplots(figsize=(frames[0].shape[1] / 50, frames[0].shape[0] / 50), dpi=100, frameon=False)
+fig.subplots_adjust(left=0, bottom=0, right=1, top=1, wspace=None, hspace=None)
 ax.axis("off")
 im = ax.imshow(frames[0], animated=True)
-
-output_path = "output_above.gif"
-
-
-def update(i):
-    im.set_array(frames[i])
-    return (im,)
-
-
-print("Creating .gif file")
-fps = 12  # default frames per second; change if you want
-anim = FuncAnimation(fig, update, frames=len(frames), interval=1000 / fps, blit=True)
-
-# Save using PillowWriter
-writer = PillowWriter(fps=fps)
-anim.save(output_path, writer=writer)
-plt.close(fig)  # close figure to avoid duplicate display
-
-print(f"Saved GIF to {output_path} (frames={len(frames)}, fps={fps}).\nDisplaying below:")
+os.makedirs("frames", exist_ok=True)
+for i, frame in enumerate(frames):
+    plt.imsave(f"frames/frame_{i:04d}.png", frame)
