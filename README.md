@@ -1,72 +1,76 @@
-
 # Overview 📖
 
-Reinforcement learning (RL) promises to solve long-horizon tasks even when training data contains only short fragments of the behaviors. This quality is called stitching, and is a crucial prerequisite for more general, foundational RL models. Conventional wisdom dictates, that only temporal difference (TD) methods are able stitch fragments of experiences gathered during the training and use them to solve more complex tasks. We show that, while on simple, low-dimensional settings TD methods can indeed stitch experiences, this does not transfer to more complex, high-dimensional tasks. Additionally we show that Monte Carlo (MC) methods, while they still fall behind TD methods, are able to exhibit some stitching behavior as well. Furthermore we determine that scaling the network sizes plays more of a critical role in closing the generalization gap than previously thought, and is a promising avenue of research, especially in the age of larger models in RL.
-
+Reinforcement learning (RL) promises to solve long-horizon tasks even when training data contains only short fragments of behaviors. This capability, called stitching, is a crucial prerequisite for more general, foundational RL models. Conventional wisdom holds that only temporal difference (TD) methods can stitch fragments of experiences gathered during training. We show that while TD methods can stitch experiences in simple, low-dimensional settings, this behavior does not transfer to more complex, high-dimensional tasks. We also show that Monte Carlo (MC) methods, although still behind TD methods, can exhibit some stitching behavior. Furthermore, we find that increasing network capacity plays a critical role in closing the generalization gap, which is an encouraging direction as models grow larger in RL.
 
 <p align="center">
     <img src="assets/stitching_1_success.gif" alt="Box Moving Task Illustration" width="600"/>
     <img src="assets/stitching_4_failure.gif" alt="Box Moving Task Illustration" width="600"/>
     <p style="text-align:center;font-size:2.0em;margin-top:8px;">
-    TD methods can stitch in low-dimensional tasks (left), but fail in higher-dimensional setting (right).
+    TD methods can stitch in low-dimensional tasks (left), but fail in higher-dimensional settings (right).
     </p>
 </p>
 
-
 # Installation & Setup 🔧
 
-This repo uses uv. To install uv, please follow the instructions [here](https://docs.astral.sh/uv/getting-started/installation/).
-To install all dependencies and create the virual environment run:
-```
+This repo uses uv. To install uv, follow the instructions [here](https://docs.astral.sh/uv/getting-started/installation/).
+To install all dependencies and create the virtual environment, run:
+```bash
 uv sync
 ```
 > [!NOTE]
-> We are using `wandb` for experiment tracking by default, you may be prompted to login to wandb when running first experiment. If you don't want to use wandb, pass `--exp.mode disabled` flag to skip wandb logging.
+> We use wandb for experiment tracking by default and you may be prompted to log in when running your first experiment. If you do not want to use wandb, pass the flag `--exp.mode disabled` to skip wandb logging.
 
 # Running experiments 🔬
-To run a simple training with CRL and default environment configuration use:
+
+To run a simple training with CRL and the default environment configuration:
 > [!WARNING]
-> Our repository is optimized for GPU, running line below without decent GPU may take a very long time.
+> This repository is optimized for GPU. Running the command below without a capable GPU may be very slow.
 ```bash
 uv run src/train.py env:box-moving --exp.name test
 ```
 
-Current version of the code only supports `box-moving` environment, thus in each experiment you should specify `env:box-moving` flag first.
+The current version supports only the `box-moving` environment; specify `env:box-moving` for each experiment.
 
 ## Wandb logging 📈
-When using wandb logging, all experiment results, including detailed information about environment and algorithm data will be gathered and logged. Additionally, a simple gif with agent's behavior will be recorded and stored in wandb.
+
+When wandb logging is enabled, experiment results (including environment and algorithm data) are logged to wandb. A short GIF of the agent's behavior is also recorded and stored in wandb.
 
 ## Hyperparameters ⚙️
-Hyperparameters and options can be seen by invoking: `uv run src/train.py --help`. All options can be divided into three general categories, indicated by prefixes used in the flag names:
-* `exp.` - General experimental setup settings, including logging options, random seeds, experiment names etc (see [here](./src/config.py) for more details).
-* `env.` - Environment related settings, including difficulty of the environment, goal and starting positions sampling distributions, number of boxes, size of the grid etc (see `BoxMovingConfig` class [here](./src/envs/block_moving/env_types.py) for more details).
-* `actor.` - Algorithm related settings, including learning rates, batch sizes, network architectures and the choice of the algorithm itself (see [here](./src/impls/agents/__init__.py) for more details).
+
+List of hyperparameters and options is available via:
+```bash
+uv run src/train.py --help
+```
+Options are grouped by prefixes:
+* `exp.` - General experimental settings (logging, seeds, experiment names, etc.). See `./src/config.py` for details.
+* `env.` - Environment settings (difficulty, goal/start distributions, number of boxes, grid size, etc.). See `BoxMovingConfig` in `./src/envs/block_moving/env_types.py`.
+* `actor.` - Algorithm settings (learning rates, batch sizes, network architectures, and algorithm choices). See `./src/impls/agents/__init__.py`.
 
 # Environment 🕹️
-Our Box Moving environment is a grid-world environment where an agent needs to move boxes to target locations. The environment can be configured to have different grid sizes, number of boxes, and difficulty levels. While this may seem simple, the complexity of the task rises exponentially with the increase of grid size and number of boxes, which is ideal for testing of stitching capabilities. 
 
-Environment supports 2 modes of sampling box and goal positions (`--env.level_generator` flag):
+The Box Moving environment is a grid-world where an agent moves boxes to target locations. It supports different grid sizes, numbers of boxes, and difficulty levels. While simple conceptually, complexity grows rapidly with grid size and box count, making it well suited for testing stitching capabilities.
+
+The environment supports two modes for sampling box and goal positions (set via `--env.level_generator`):
 * `default` - Boxes and targets are spawned randomly on the grid.
-* `variable` - Boxes and targets are spawned in corners of the grid. During normal operation the corners for boxes and goals are always adjacent. When `--exp.eval_special` flag is passed, the algorithm is additionaly evaluated on boxe and goal corners being diagonally opposite, the results from this mode is logged in wandb under `eval_special` tab.
+* `variable` - Boxes and targets are spawned in grid corners. Under normal evaluation the box and goal corners are adjacent. If `--exp.eval_special` is passed, the algorithm is additionally evaluated with box and goal corners diagonally opposite; results from this mode are logged in wandb under the `eval_special` tab.
 
 # Supported algorithms 🧠
-Due to the nature of investigated issue we primarly focused on goal-conditioned RL algorithms, and to further isolate the problems related to stitching we removed actors from all of the tested algorithms. The actions are instead sampled directly from the Q-function via softmax sampling. The algorithms we tested include:
-* Contrastive RL (CRL) - MC algorithm running without rewards.
-* C-Learning - TD algorithm running without rewards.
-* GCDQN - Both TD and MC versions, with rewards.
-* GCIQL - Both TD and MC versions, with rewards.
 
-Specifically, the algorithms presented in ther paper include `clearn_search`, `crl_search`, `gciql_search` and `gcdqn`. All of the above **do not have a agent network**. We also include some other algorithms, but they were not thoroughly tested, and may not work with the newest code version.
+We focus on goal-conditioned RL algorithms and, to isolate stitching behaviors, remove policy networks from tested algorithms. Actions are sampled directly from the Q-function via softmax sampling. The main algorithms include:
+* Contrastive RL (CRL) — a Monte Carlo (MC) style algorithm running without rewards.
+* C-Learning — a TD algorithm running without rewards.
+* GCDQN — TD and MC variants, with rewards.
+* GCIQL — TD and MC variants, with rewards.
 
+The paper includes `clearn_search`, `crl_search`, `gciql_search`, and `gcdqn`. These do NOT include an agent network. We also include some other algorithms that were not thoroughly tested and may not be fully compatible with the latest code.
 
 ## Also see 👀
-* [OGBench](https://github.com/seohongpark/ogbench) - Benchmark for offline goal-conditioned RL algorithms, on which we based our algorithms impelementation and code structure.
-* [JaxGCRL](https://github.com/MichalBortkiewicz/JaxGCRL) - Online goal-conditioned RL benchmark, with impelementations of various goal-conditioned RL algorithms in JAX, primarly Contrastive RL. 
-* [Jumanji](https://github.com/instadeepai/jumanji) - A collection of RL environments written in JAX, Sokoban environment included here inspired our box-moving environment.
-
+* [OGBench](https://github.com/seohongpark/ogbench) — benchmark for offline goal-conditioned RL algorithms, which inspired parts of our code structure.
+* [JaxGCRL](https://github.com/MichalBortkiewicz/JaxGCRL) — online goal-conditioned RL benchmark with various algorithms implemented in JAX.
+* [Jumanji](https://github.com/instadeepai/jumanji) — collection of RL environments in JAX; Sokoban inspired aspects of our box-moving environment.
 
 ## Citing 📄
-If you find this work useful in your research, please cite us as follows:
+If you use this work, please cite:
 ```bibtex
 @inproceedings{anonymous2026temporal,
   title={Is Temporal Difference Learning the Gold Standard for Stitching in RL?},
@@ -75,7 +79,8 @@ If you find this work useful in your research, please cite us as follows:
   url={https://michalbortkiewicz.github.io/golden-standard/}
 }
 ```
+
 ## Questions or issues ❓
-If you have any questions or issues feel free to open an issue on GitHub or contact us directly via email:
-- Michał Bortkiewicz ([michalbortkiewicz8@gmail.com](michalbortkiewicz8@gmail.com)).
-- Władysław Pałucki ([w.palucki@uw.edu.pl)](w.palucki@uw.edu.pl)).
+Open an issue on GitHub or contact:
+- Michał Bortkiewicz (michalbortkiewicz8@gmail.com)
+- Władysław Pałucki (w.palucki@uw.edu.pl)
