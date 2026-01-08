@@ -7,8 +7,8 @@ requires-python = ">=3.11"
 dependencies = [
     "distrax>=0.1.5",
     "flax>=0.8.4",
-    "jax[cuda12]>=0.4.26; platform_system != 'Darwin'",
-    "jax>=0.4.26; platform_system == 'Darwin'",
+    "jax[cuda12]==0.7.2; platform_system != 'Darwin'",
+    "jax==0.7.2; platform_system == 'Darwin'",
     "matplotlib>=3.10.3",
     "ml-collections>=1.1.0",
     "moviepy>=2.2.1",
@@ -17,9 +17,8 @@ dependencies = [
     "pytest>=8.4.1",
     "ruff>=0.11.11",
     "tqdm>=4.67.1",
-    "tyro>=0.9.26",
+    "tyro==0.9.26",
     "wandb>=0.19.11",
-    "xminigrid>=0.9.1",
 ]
 
 [dependency-groups]
