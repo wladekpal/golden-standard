@@ -18,20 +18,20 @@ class LSTMThinkingCritic(nn.Module):
     
     This module uses an LSTM to perform iterative "thinking" over the input,
     allowing the model to refine its Q-value estimates through multiple processing steps.
+    Takes action as input (concatenated with observations/goals) and outputs single Q-value.
     
     Attributes:
         d_model: Hidden dimension size for LSTM and embeddings.
-        action_dim: Number of discrete actions.
         thinking_steps: Number of thinking iterations to perform.
         ensemble: Whether to use an ensemble of critics.
         gc_encoder: Optional goal-conditioned encoder.
     """
     
     d_model: int = 256
-    action_dim: int = 6
     thinking_steps: int = 3
     ensemble: bool = True
     gc_encoder: nn.Module = None
+    layer_norm: bool = True
     
     def setup(self):
         # Input embedding layer
@@ -47,16 +47,14 @@ class LSTMThinkingCritic(nn.Module):
         # Core LSTM - use LSTMCell with variance_scaling init to avoid cuSolver issues
         self.lstm = nn.RNN(
             nn.LSTMCell(
-                features=self.d_model,
-                kernel_init=nn.initializers.variance_scaling(1.0, 'fan_avg', 'uniform'),
-                recurrent_kernel_init=nn.initializers.variance_scaling(1.0, 'fan_avg', 'uniform'),
+                features=self.d_model
             ),
             return_carry=True
         )
         
         # Output layers
         self.final_ln = nn.LayerNorm()
-        self.q_head = nn.Dense(self.action_dim, kernel_init=default_init())
+        self.q_head = nn.Dense(1, kernel_init=default_init())  # Single Q-value output
     
     def __call__(self, observations, goals=None, actions=None):
         """Forward pass with thinking steps.
@@ -64,11 +62,10 @@ class LSTMThinkingCritic(nn.Module):
         Args:
             observations: Observation tensor of shape (B, obs_dim)
             goals: Goal tensor of shape (B, goal_dim) (optional)
-            actions: Action indices of shape (B,) (optional, for Q(s,a) queries)
+            actions: One-hot encoded actions of shape (B, action_dim)
             
         Returns:
-            Q-values: If actions is None, returns Q(s,a) for all actions (B, action_dim).
-                     If actions is provided, returns Q(s,a) for specified actions (B,).
+            Q-values: Q(s,a) for the given action, shape (B,)
         """
         # Encode inputs
         if self.gc_encoder is not None:
@@ -78,6 +75,10 @@ class LSTMThinkingCritic(nn.Module):
             if goals is not None:
                 inputs.append(goals)
             inputs = jnp.concatenate(inputs, axis=-1)
+        
+        # Concatenate action (one-hot encoded)
+        if actions is not None:
+            inputs = jnp.concatenate([inputs, actions], axis=-1)
         
         B = inputs.shape[0]
         
@@ -99,26 +100,18 @@ class LSTMThinkingCritic(nn.Module):
         # Take last timestep output: (B, d_model)
         final_out = lstm_out[:, -1, :]
         
-        # Apply layer norm and get Q-values
+        # Apply layer norm and get Q-value
         out = self.final_ln(final_out)
-        q_values = self.q_head(out)  # (B, action_dim)
+        q_value = self.q_head(out).squeeze(-1)  # (B,)
         
-        # If actions provided, select Q-values for those actions
-        if actions is not None:
-            # actions shape: (B,) with integer indices
-            q_values = jnp.take_along_axis(
-                q_values, 
-                jnp.expand_dims(actions, axis=-1), 
-                axis=-1
-            ).squeeze(-1)  # (B,)
-        
-        return q_values
+        return q_value
 
 
 class GCLSTMDiscreteCritic(nn.Module):
     """Goal-conditioned LSTM critic for discrete actions with ensemble support.
     
     Wraps LSTMThinkingCritic with optional ensemble functionality.
+    Takes action indices as input and converts to one-hot encoding.
     """
     
     d_model: int = 256
@@ -126,6 +119,7 @@ class GCLSTMDiscreteCritic(nn.Module):
     thinking_steps: int = 3
     ensemble: bool = True
     gc_encoder: nn.Module = None
+    layer_norm: bool = True
     
     def setup(self):
         critic_cls = LSTMThinkingCritic
@@ -134,22 +128,27 @@ class GCLSTMDiscreteCritic(nn.Module):
         
         self.critic = critic_cls(
             d_model=self.d_model,
-            action_dim=self.action_dim,
             thinking_steps=self.thinking_steps,
             ensemble=False,  # Ensemble is handled by ensemblize wrapper
             gc_encoder=self.gc_encoder,
+            layer_norm=self.layer_norm,
         )
     
     def __call__(self, observations, goals=None, actions=None):
         """Forward pass.
         
+        Args:
+            observations: Observation tensor of shape (B, obs_dim)
+            goals: Goal tensor of shape (B, goal_dim) (optional)
+            actions: Action indices of shape (B,) - will be converted to one-hot
+        
         Returns:
-            If ensemble=True: array with shape (2, B) or (2, B, action_dim)
-            If ensemble=False: single q tensor with shape (B,) or (B, action_dim)
+            If ensemble=True: Q-values with shape (2, B)
+            If ensemble=False: Q-values with shape (B,)
         """
-        q = self.critic(observations, goals, actions)
-        # When ensembled, q already has shape (2, B) or (2, B, action_dim)
-        # Return as-is to match GCValue/GCDiscreteCritic behavior
+        # Convert action indices to one-hot encoding (like GCDiscreteCritic)
+        actions_onehot = jnp.eye(self.action_dim)[actions]
+        q = self.critic(observations, goals, actions_onehot)
         return q
 
 
@@ -170,28 +169,29 @@ class GCDQNLSTMAgent(flax.struct.PyTreeNode):
 
         Assumes:
          - batch['actions'] contains integer action indices.
-         - critic returns Q(s,a) for specified actions or Q(s, :) for all actions.
+         - critic takes actions as input and returns Q(s,a) scalar(s).
         """
-        # Current Q for taken actions - shape (2, B) when actions provided
-        q_both = self.network.select('critic')(
+        action_dim = 6
+        
+        # Current Q for taken actions - shape (2, B)
+        q1_a, q2_a = self.network.select('critic')(
             batch['observations'], batch['value_goals'], batch['actions'], params=grad_params
         )
-        q1_a, q2_a = q_both[0], q_both[1]
         # Ensure shapes are (batch,)
         q1_a = jnp.squeeze(q1_a, axis=-1) if q1_a.ndim > 1 else q1_a
         q2_a = jnp.squeeze(q2_a, axis=-1) if q2_a.ndim > 1 else q2_a
 
-        # Target Q: get Q-values for all actions at next states
-        # Get Q-values for all actions (no action argument) - shape (2, B, action_dim)
-        target_q = jax.lax.stop_gradient(
-            self.network.select('target_critic')(
-                batch['next_observations'], batch['value_goals'], actions=None
+        # Target Q: use target critic to get Q-values for all actions, then take max
+        # vmap over actions like in dqn.py
+        all_actions = jnp.tile(jnp.arange(action_dim), (batch['next_observations'].shape[0], 1))  # B x action_dim
+        qs = jax.lax.stop_gradient(
+            jax.vmap(self.network.select('target_critic'), in_axes=(None, None, 1))(
+                batch['next_observations'], batch['value_goals'], all_actions
             )
-        )
-        # target_q shape: (2, B, action_dim)
-        # Average ensemble and take max
-        target_q_avg = (target_q[0] + target_q[1]) / 2  # (B, action_dim)
-        max_next_q = jnp.max(target_q_avg, axis=-1)  # (B,)
+        )  # action_dim x 2 x B
+        qs = qs.mean(axis=1)  # action_dim x B (average over ensemble)
+        qs = qs.transpose(1, 0)  # B x action_dim
+        max_next_q = jnp.max(qs, axis=-1)  # B
 
         # TD or MC target
         if self.config['use_discounted_mc_rewards']:
@@ -203,19 +203,21 @@ class GCDQNLSTMAgent(flax.struct.PyTreeNode):
         critic_loss = ((q1_a - target) ** 2 + (q2_a - target) ** 2).mean()
 
         # Entropy regularization for action selection
-        current_q = jax.lax.stop_gradient(
-            self.network.select('critic')(
-                batch['observations'], 
-                jnp.roll(batch['next_observations'], shift=1, axis=0), 
-                actions=None,
-                params=grad_params
+        all_actions = jnp.tile(jnp.arange(action_dim), (batch['observations'].shape[0], 1))  # B x action_dim
+        current_qs = jax.lax.stop_gradient(
+            jax.vmap(self.network.select('critic'), in_axes=(None, None, 1))(
+                batch['observations'],
+                jnp.roll(batch['next_observations'], shift=1, axis=0),
+                all_actions,
             )
-        )
-        # current_q shape: (2, B, action_dim)
-        current_q_avg = (current_q[0] + current_q[1]) / 2  # (B, action_dim)
+        )  # action_dim x 2 x B
+        if len(current_qs.shape) == 2:  # Non-ensemble
+            current_qs = current_qs[:, None, ...]
+        current_qs = current_qs.mean(axis=1)  # action_dim x B
+        current_qs = current_qs.transpose(1, 0)  # B x action_dim
 
         alpha_temp = self.network.select('alpha_temp')(params=grad_params)
-        dist = distrax.Categorical(logits=current_q_avg / jnp.maximum(1e-6, alpha_temp))
+        dist = distrax.Categorical(logits=current_qs / jnp.maximum(1e-6, alpha_temp))
         entropy = dist.entropy()
         alpha_temp_loss = ((entropy + self.config['target_entropy']) ** 2).mean()
 
@@ -278,9 +280,17 @@ class GCDQNLSTMAgent(flax.struct.PyTreeNode):
         if not self.config['discrete']:
             raise NotImplementedError("GCDQNLSTMAgent supports only discrete action spaces.")
         
-        # Get Q-values for all actions - shape (2, B, action_dim)
-        q_both = self.network.select('critic')(observations, goals, actions=None)
-        qs = (q_both[0] + q_both[1]) / 2  # (B, action_dim)
+        action_dim = 6
+        
+        # Get Q-values for all actions by vmapping over action indices (like dqn.py)
+        all_actions = jnp.tile(jnp.arange(action_dim), (observations.shape[0], 1))  # B x action_dim
+        qs = jax.lax.stop_gradient(
+            jax.vmap(self.network.select('critic'), in_axes=(None, None, 1))(
+                observations, goals, all_actions
+            )
+        )  # action_dim x 2 x B
+        qs = qs.mean(axis=1)  # action_dim x B (average over ensemble)
+        qs = qs.transpose(1, 0)  # B x action_dim
 
         if self.config['action_sampling'] == 'softmax':
             alpha_temp = jax.lax.stop_gradient(self.network.select('alpha_temp')())
@@ -289,7 +299,7 @@ class GCDQNLSTMAgent(flax.struct.PyTreeNode):
         elif self.config['action_sampling'] == 'epsilon_greedy':
             greedy_actions = jnp.argmax(qs, axis=-1)
             rng, rng_uniform = jax.random.split(seed)
-            random_actions = jax.random.randint(rng, greedy_actions.shape, 0, self.config['action_dim'])
+            random_actions = jax.random.randint(rng, greedy_actions.shape, 0, action_dim)
             probs = jax.random.uniform(rng_uniform, greedy_actions.shape)
             actions = jnp.where(probs < self.config.get('epsilon', 0.1), random_actions, greedy_actions)
         elif self.config['action_sampling'] == 'greedy':

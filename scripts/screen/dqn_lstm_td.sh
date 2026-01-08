@@ -66,7 +66,7 @@ do
         --exp.gamma 0.99 \
         --env.episode_length 100 \
         --exp.seed ${seed} \
-        --exp.project "dqn_lstm_td" \
+        --exp.project "dqn_lstm_td_correct_init" \
         --exp.epochs 50 \
         --exp.gif_every 10 \
         --agent.alpha 0.1 \
