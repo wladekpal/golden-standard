@@ -5,6 +5,7 @@ from impls.agents.dqn import GCDQNAgent
 from impls.agents.dqn_lstm import GCDQNLSTMAgent
 from impls.agents.gcbc import GCBCAgent
 from impls.agents.gciql import GCIQLAgent
+from impls.agents.gciql_lstm import GCIQLLSTMAgent
 from impls.agents.gciql_search import GCIQLSearchAgent
 from impls.agents.qrl import QRLAgent
 from impls.agents.sac import SACAgent
@@ -49,8 +50,9 @@ default_config = ml_collections.FrozenConfigDict(
             use_discounted_mc_rewards=False,  # Whether to use discounted Monte Carlo rewards.
             action_sampling='softmax',
             is_td=False,
-            lstm_hidden_size=128,  # Hidden size for LSTM in GCDQNLSTMAgent.
+            lstm_hidden_size=256,  # Hidden size for LSTM in GCDQNLSTMAgent.
             thinking_steps=3,  # Number of thinking steps for GCDQNLSTMAgent.
+            num_layers=2,  # Number of LSTM layers for GCDQNLSTMAgent.
         )
     )
 
@@ -102,6 +104,13 @@ def create_agent(config: ml_collections.FrozenConfigDict, example_batch: dict, s
         )
     elif config.agent_name == "gcdqn_lstm":
         agent = GCDQNLSTMAgent.create(
+            seed,
+            example_batch['observations'],
+            example_batch['actions'],
+            config,
+        )
+    elif config.agent_name == "gciql_lstm":
+        agent = GCIQLLSTMAgent.create(
             seed,
             example_batch['observations'],
             example_batch['actions'],

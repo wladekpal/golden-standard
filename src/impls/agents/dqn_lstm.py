@@ -27,15 +27,16 @@ class LSTMThinkingCritic(nn.Module):
         gc_encoder: Optional goal-conditioned encoder.
     """
     
-    d_model: int = 256
+    d_model: int = 64
     thinking_steps: int = 3
     ensemble: bool = True
     gc_encoder: nn.Module = None
     layer_norm: bool = True
+    num_layers: int = 2
     
     def setup(self):
         # Input embedding layer
-        self.input_embed_layer = nn.Dense(self.d_model, kernel_init=default_init())
+        self.input_embed_layer = nn.Dense(self.d_model)
         
         # Start token (learnable)
         self.start_token = self.param(
@@ -45,12 +46,10 @@ class LSTMThinkingCritic(nn.Module):
         )
         
         # Core LSTM - use LSTMCell with variance_scaling init to avoid cuSolver issues
-        self.lstm = nn.RNN(
-            nn.LSTMCell(
-                features=self.d_model
-            ),
-            return_carry=True
-        )
+        self.lstm = [
+            nn.RNN(nn.LSTMCell(features=self.d_model)) 
+            for _ in range(self.num_layers)
+        ]
         
         # Output layers
         self.final_ln = nn.LayerNorm()
@@ -89,13 +88,14 @@ class LSTMThinkingCritic(nn.Module):
         # Create sequence with start token for first step
         x_first = x_emb + self.start_token
         if self.thinking_steps > 1:
-            x_rest = jnp.broadcast_to(x_emb, (B, self.thinking_steps - 1, self.d_model))
+            x_rest = jnp.tile(x_emb, (1, self.thinking_steps - 1, 1))
             x_seq = jnp.concatenate([x_first, x_rest], axis=1)
         else:
             x_seq = x_first
-        
-        # Run LSTM: output shape (B, thinking_steps, d_model)
-        carry, lstm_out = self.lstm(x_seq)
+
+        lstm_out = x_seq
+        for i, lstm_layer in enumerate(self.lstm):
+            lstm_out = lstm_layer(lstm_out)
         
         # Take last timestep output: (B, d_model)
         final_out = lstm_out[:, -1, :]
@@ -114,12 +114,13 @@ class GCLSTMDiscreteCritic(nn.Module):
     Takes action indices as input and converts to one-hot encoding.
     """
     
-    d_model: int = 256
+    d_model: int = 64
     action_dim: int = 6
     thinking_steps: int = 3
     ensemble: bool = True
     gc_encoder: nn.Module = None
     layer_norm: bool = True
+    num_layers: int = 2
     
     def setup(self):
         critic_cls = LSTMThinkingCritic
@@ -132,6 +133,7 @@ class GCLSTMDiscreteCritic(nn.Module):
             ensemble=False,  # Ensemble is handled by ensemblize wrapper
             gc_encoder=self.gc_encoder,
             layer_norm=self.layer_norm,
+            num_layers=self.num_layers,
         )
     
     def __call__(self, observations, goals=None, actions=None):
@@ -340,6 +342,8 @@ class GCDQNLSTMAgent(flax.struct.PyTreeNode):
             thinking_steps=config['thinking_steps'],
             ensemble=True,
             gc_encoder=encoders.get('critic'),
+            layer_norm=config['layer_norm'],
+            num_layers=2,
         )
 
         # Keep dummy value/actor defs for compatibility
@@ -391,7 +395,7 @@ def get_config():
             batch_size=1024,
             
             # LSTM architecture
-            lstm_hidden_size=256,
+            lstm_hidden_size=64,
             thinking_steps=3,
             
             # Legacy MLP dims (for compatibility with value/actor)
