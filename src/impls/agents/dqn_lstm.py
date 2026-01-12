@@ -32,28 +32,28 @@ class LSTMThinkingCritic(nn.Module):
     ensemble: bool = True
     gc_encoder: nn.Module = None
     layer_norm: bool = True
-    num_layers: int = 2
+    num_layers: int = 1
     
     def setup(self):
-        # Input embedding layer
         self.input_embed_layer = nn.Dense(self.d_model)
-        
-        # Start token (learnable)
         self.start_token = self.param(
-            'start_token',
-            nn.initializers.normal(stddev=0.02),
+            'start_token', 
+            nn.initializers.normal(stddev=0.02), 
             (1, 1, self.d_model)
         )
-        
-        # Core LSTM - use LSTMCell with variance_scaling init to avoid cuSolver issues
-        self.lstm = [
+        self.lstm_layers = [
             nn.RNN(nn.LSTMCell(features=self.d_model)) 
             for _ in range(self.num_layers)
         ]
-        
-        # Output layers
+        # Layer norms between LSTM layers for stability
+        self.layer_norms = [nn.LayerNorm() for _ in range(self.num_layers)]
         self.final_ln = nn.LayerNorm()
-        self.q_head = nn.Dense(1, kernel_init=default_init())  # Single Q-value output
+        # Standard initialization for value head
+        self.value_head = nn.Dense(
+            1,
+            kernel_init=nn.initializers.orthogonal(1.0),
+            bias_init=nn.initializers.zeros,
+        )
     
     def __call__(self, observations, goals=None, actions=None):
         """Forward pass with thinking steps.
@@ -94,15 +94,17 @@ class LSTMThinkingCritic(nn.Module):
             x_seq = x_first
 
         lstm_out = x_seq
-        for i, lstm_layer in enumerate(self.lstm):
-            lstm_out = lstm_layer(lstm_out)
+        for i, (lstm_layer, ln) in enumerate(zip(self.lstm_layers, self.layer_norms)):
+            lstm_new = lstm_layer(lstm_out)
+            # Residual connection + LayerNorm for better gradient flow
+            lstm_out = ln(lstm_out + lstm_new)
         
         # Take last timestep output: (B, d_model)
         final_out = lstm_out[:, -1, :]
         
         # Apply layer norm and get Q-value
         out = self.final_ln(final_out)
-        q_value = self.q_head(out).squeeze(-1)  # (B,)
+        q_value = self.value_head(out).squeeze(-1)  # (B,)
         
         return q_value
 
@@ -120,7 +122,7 @@ class GCLSTMDiscreteCritic(nn.Module):
     ensemble: bool = True
     gc_encoder: nn.Module = None
     layer_norm: bool = True
-    num_layers: int = 2
+    num_layers: int = 1
     
     def setup(self):
         critic_cls = LSTMThinkingCritic
@@ -343,7 +345,7 @@ class GCDQNLSTMAgent(flax.struct.PyTreeNode):
             ensemble=True,
             gc_encoder=encoders.get('critic'),
             layer_norm=config['layer_norm'],
-            num_layers=2,
+            num_layers=1,
         )
 
         # Keep dummy value/actor defs for compatibility
