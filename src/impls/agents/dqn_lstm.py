@@ -32,10 +32,12 @@ class LSTMThinkingCritic(nn.Module):
     ensemble: bool = True
     gc_encoder: nn.Module = None
     layer_norm: bool = True
+    pre_layer_norm: bool = True
     num_layers: int = 1
     
     def setup(self):
         self.input_embed_layer = nn.Dense(self.d_model)
+        self.pre_ln = nn.LayerNorm()
         self.start_token = self.param(
             'start_token', 
             nn.initializers.normal(stddev=0.02), 
@@ -47,7 +49,6 @@ class LSTMThinkingCritic(nn.Module):
         ]
         # Layer norms between LSTM layers for stability
         self.layer_norms = [nn.LayerNorm() for _ in range(self.num_layers)]
-        self.final_ln = nn.LayerNorm()
         # Standard initialization for value head
         self.value_head = nn.Dense(
             1,
@@ -79,10 +80,10 @@ class LSTMThinkingCritic(nn.Module):
         if actions is not None:
             inputs = jnp.concatenate([inputs, actions], axis=-1)
         
-        B = inputs.shape[0]
-        
         # Embed input: (B, d_model) -> (B, 1, d_model)
         x_emb = self.input_embed_layer(inputs)
+        if self.pre_layer_norm:
+            x_emb = self.pre_ln(x_emb)
         x_emb = jnp.expand_dims(x_emb, axis=1)
         
         # Create sequence with start token for first step
@@ -103,8 +104,7 @@ class LSTMThinkingCritic(nn.Module):
         final_out = lstm_out[:, -1, :]
         
         # Apply layer norm and get Q-value
-        out = self.final_ln(final_out)
-        q_value = self.value_head(out).squeeze(-1)  # (B,)
+        q_value = self.value_head(final_out).squeeze(-1)  # (B,)
         
         return q_value
 
@@ -122,6 +122,7 @@ class GCLSTMDiscreteCritic(nn.Module):
     ensemble: bool = True
     gc_encoder: nn.Module = None
     layer_norm: bool = True
+    pre_layer_norm: bool = True
     num_layers: int = 1
     
     def setup(self):
@@ -135,6 +136,7 @@ class GCLSTMDiscreteCritic(nn.Module):
             ensemble=False,  # Ensemble is handled by ensemblize wrapper
             gc_encoder=self.gc_encoder,
             layer_norm=self.layer_norm,
+            pre_layer_norm=self.pre_layer_norm,
             num_layers=self.num_layers,
         )
     
@@ -211,7 +213,7 @@ class GCDQNLSTMAgent(flax.struct.PyTreeNode):
         current_qs = jax.lax.stop_gradient(
             jax.vmap(self.network.select('critic'), in_axes=(None, None, 1))(
                 batch['observations'],
-                jnp.roll(batch['next_observations'], shift=1, axis=0),
+                batch['value_goals'],  # <-- was jnp.roll(batch['next_observations'], ...) before -- not sure what is correct
                 all_actions,
             )
         )  # action_dim x 2 x B
