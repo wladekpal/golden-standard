@@ -27,7 +27,7 @@ class LSTMThinkingCritic(nn.Module):
         gc_encoder: Optional goal-conditioned encoder.
     """
     
-    d_model: int = 64
+    d_model: int = 256
     thinking_steps: int = 3
     ensemble: bool = True
     gc_encoder: nn.Module = None
@@ -116,7 +116,7 @@ class GCLSTMDiscreteCritic(nn.Module):
     Takes action indices as input and converts to one-hot encoding.
     """
     
-    d_model: int = 64
+    d_model: int = 256
     action_dim: int = 6
     thinking_steps: int = 3
     ensemble: bool = True
@@ -344,36 +344,20 @@ class GCDQNLSTMAgent(flax.struct.PyTreeNode):
             d_model=config['lstm_hidden_size'],
             action_dim=action_dim,
             thinking_steps=config['thinking_steps'],
-            ensemble=True,
+            ensemble=config['ensemble'],
             gc_encoder=encoders.get('critic'),
             layer_norm=config['layer_norm'],
             num_layers=1,
         )
 
-        # Keep dummy value/actor defs for compatibility
-        value_def = GCValue(
-            hidden_dims=config['value_hidden_dims'],
-            layer_norm=config['layer_norm'],
-            ensemble=False,
-            gc_encoder=None,
-            net_arch=config.get('net_arch', 'mlp'),
-        )
-        actor_def = GCDiscreteActor(
-            hidden_dims=config['actor_hidden_dims'],
-            action_dim=action_dim,
-            gc_encoder=None,
-            net_arch=config.get('net_arch', 'mlp'),
-        )
 
         if config['target_entropy'] is None:
             config['target_entropy'] = -config['target_entropy_multiplier'] * action_dim / 2
         alpha_temp_def = LogParam()
 
         network_info = dict(
-            value=(value_def, (ex_observations, ex_goals)),
             critic=(critic_def, (ex_observations, ex_goals, ex_actions)),
             target_critic=(copy.deepcopy(critic_def), (ex_observations, ex_goals, ex_actions)),
-            actor=(actor_def, (ex_observations, ex_goals)),
             alpha_temp=(alpha_temp_def, ()),
         )
         networks = {k: v[0] for k, v in network_info.items()}
@@ -439,6 +423,7 @@ def get_config():
             gc_negative=True,
             p_aug=0.0,
             frame_stack=ml_collections.config_dict.placeholder(int),
+            ensemble=True,
         )
     )
     return config

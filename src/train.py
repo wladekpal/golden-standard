@@ -19,7 +19,7 @@ from envs.block_moving.wrappers import wrap_for_eval, wrap_for_training
 from envs.block_moving.env_types import TimeStep, remove_targets
 from config import ROOT_DIR
 from impls.utils.checkpoints import save_agent
-from utils import log_gif, sample_actions_critic
+from utils import log_gif, sample_actions_critic, calculate_params
 
 
 @functools.partial(jax.jit, static_argnums=(2, 3, 4, 5, 6))
@@ -350,6 +350,7 @@ def train(config: Config):
         "value_goals": dummy_timestep.grid.reshape(1, -1),
         "actor_goals": dummy_timestep.grid.reshape(1, -1),
     }
+    calculate_params(example_batch, config)
     agent = create_agent(config.agent, example_batch, config.exp.seed)
 
     @jax.jit

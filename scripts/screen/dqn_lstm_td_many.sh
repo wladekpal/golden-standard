@@ -59,7 +59,7 @@ do
         CUDA_VISIBLE_DEVICES=$GPU_ID uv run --active src/train.py \
         env:box-moving \
         --agent.agent_name gcdqn_lstm \
-        --exp.name single_lstm_pre_norm_not_rolled_goals \
+        --exp.name ens_true \
         --env.number_of_boxes_max ${number_of_boxes} \
         --env.number_of_boxes_min ${number_of_boxes} \
         --env.number_of_moving_boxes_max ${number_of_moving_boxes_max} \
@@ -67,7 +67,7 @@ do
         --exp.gamma 0.99 \
         --env.episode_length 100 \
         --exp.seed ${seed} \
-        --exp.project "dqn_lstm_td_correct_init_generalized" \
+        --exp.project "test_logging" \
         --exp.epochs 50 \
         --exp.gif_every 10 \
         --agent.alpha 0.1 \

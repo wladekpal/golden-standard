@@ -50,8 +50,9 @@ default_config = ml_collections.FrozenConfigDict(
             use_discounted_mc_rewards=False,  # Whether to use discounted Monte Carlo rewards.
             action_sampling='softmax',
             is_td=False,
+            ensemble= True,  # Whether to use ensemble of critics in GCDQNLSTMAgent.
             lstm_hidden_size=256,  # Hidden size for LSTM in GCDQNLSTMAgent.
-            thinking_steps=3,  # Number of thinking steps for GCDQNLSTMAgent.
+            thinking_steps=2,  # Number of thinking steps for GCDQNLSTMAgent.
             num_layers=2,  # Number of LSTM layers for GCDQNLSTMAgent.
         )
     )
