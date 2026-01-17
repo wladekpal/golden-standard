@@ -55,6 +55,30 @@ def calculate_params(example_batch, config):
             "Effective compute (params reapplied) with thinking_steps "
             f"={int(config.agent['thinking_steps'])}: {effective_params}"
         )
+    
+    if config.agent.agent_name == "gcdqn_interp":
+        # Filter for parameters inside "interp_layers" as these are the ones
+        # reused inside the thinking loop.
+        interp_params = sum(
+            x.size
+            for path, x in flatten_dict(agent.network.params).items()
+            if any("interp_layers" in key for key in path)
+        )
+        
+        # Effective params = Static Params + (Reused Params * Thinking Steps)
+        effective_params = int(num_params - interp_params) + int(interp_params) * int(config.agent["thinking_steps"])
+        
+        wandb.config.update(
+            {
+                "thinking_steps": int(config.agent["thinking_steps"]),
+                "effective_params_reapplied": effective_params,
+            },
+            allow_val_change=True,
+        )
+        print(
+            "Effective compute (params reapplied) with thinking_steps "
+            f"={int(config.agent['thinking_steps'])}: {effective_params}"
+        )
 
 
 def log_gif(original_env, episode_length, prefix_gif, timesteps):
