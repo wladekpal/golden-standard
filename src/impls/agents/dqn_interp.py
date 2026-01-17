@@ -59,7 +59,7 @@ class InterpolationThinkingCritic(nn.Module):
         )
         self.interp_layers = [
             InterpolationThinkingCell(
-                hidden_dim=self.hidden_state_dim,
+                hidden_dim=self.d_model,
                 layer_norm=self.layer_norm
             )
             for _ in range(self.num_layers)
@@ -71,41 +71,6 @@ class InterpolationThinkingCritic(nn.Module):
             bias_init=nn.initializers.zeros,
         )
     
-    def __call__(self, x, normalizer_params=None):
-        if normalizer_params is not None:
-            x = (x - normalizer_params.mean ) / (normalizer_params.std)
-
-        input_shape = x.shape
-        x_flat = x.reshape(-1, input_shape[-1])
-
-        # Embed x
-        x_emb = self.input_embed_layer(x_flat)
-        if self.pre_layer_norm:
-            x_emb = self.input_ln(x_emb)
-
-        # --- The "Thinking" Loop ---
-        batch_size = x_emb.shape[0]
-        
-        # Initialize state
-        c = jnp.zeros((batch_size, self.hidden_state_dim))
-        h = jnp.zeros((batch_size, self.hidden_state_dim))
-                
-        for _ in range(self.thinking_steps):
-            h_block_input = h
-            for layer in self.interp_layers:
-                c, h = layer(c, h, x_emb)
-            h = h_block_input + h
-            
-        # --- Outputs ---
-        # We use the final 'h' state after N thinking steps
-        logits = self.actor_head(h)
-        logits = logits.reshape(input_shape[:-1] + (-1,))
-        
-        value = self.value_head(h)
-        value = value.reshape(input_shape[:-1] + (-1,))
-
-        return distrax.Categorical(logits=logits), jnp.squeeze(value, axis=-1)
-
     def __call__(self, observations, goals=None, actions=None):
         """Forward pass with thinking steps.
         
@@ -136,12 +101,15 @@ class InterpolationThinkingCritic(nn.Module):
             x_emb = self.pre_ln(x_emb)
         
         batch_size = x_emb.shape[0]
-        c = jnp.zeros((batch_size, self.d_model))
-        h = jnp.zeros((batch_size, self.d_model))
-        
-        for t in range(self.thinking_steps):
-            for interp_layer in self.interp_layers:
-                c, h = interp_layer(c, h, x_emb)
+        # Initialize state
+        c = jnp.zeros((batch_size, self.hidden_state_dim))
+        h = jnp.zeros((batch_size, self.hidden_state_dim))
+                
+        for _ in range(self.thinking_steps):
+            h_block_input = h
+            for layer in self.interp_layers:
+                c, h = layer(c, h, x_emb)
+            h = h_block_input + h
         
         # Take last timestep output: (B, d_model)
         final_out = h
