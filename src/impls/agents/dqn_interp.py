@@ -102,8 +102,8 @@ class InterpolationThinkingCritic(nn.Module):
         
         batch_size = x_emb.shape[0]
         # Initialize state
-        c = jnp.zeros((batch_size, self.hidden_state_dim))
-        h = jnp.zeros((batch_size, self.hidden_state_dim))
+        c = jnp.zeros((batch_size, self.d_model))
+        h = jnp.zeros((batch_size, self.d_model))
                 
         for _ in range(self.thinking_steps):
             h_block_input = h
