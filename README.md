@@ -68,19 +68,3 @@ The paper includes `clearn_search`, `crl_search`, `gciql_search`, and `gcdqn`. T
 * [OGBench](https://github.com/seohongpark/ogbench) — benchmark for offline goal-conditioned RL algorithms, which inspired parts of our code structure.
 * [JaxGCRL](https://github.com/MichalBortkiewicz/JaxGCRL) — online goal-conditioned RL benchmark with various algorithms implemented in JAX.
 * [Jumanji](https://github.com/instadeepai/jumanji) — collection of RL environments in JAX; Sokoban inspired aspects of our box-moving environment.
-
-## Citing 📄
-If you use this work, please cite:
-```bibtex
-@inproceedings{anonymous2026temporal,
-  title={Is Temporal Difference Learning the Gold Standard for Stitching in RL?},
-  author={Michał Bortkiewicz and Władysław Pałucki and Benjamin Eysenbach and Mateusz Ostaszewski},
-  year={2026},
-  url={https://michalbortkiewicz.github.io/golden-standard/}
-}
-```
-
-## Questions or issues ❓
-Open an issue on GitHub or contact:
-- Michał Bortkiewicz (michalbortkiewicz8@gmail.com)
-- Władysław Pałucki (w.palucki@uw.edu.pl)
