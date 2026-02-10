@@ -13,6 +13,35 @@ from impls.utils.flax_utils import ModuleDict, TrainState, nonpytree_field
 from impls.utils.networks import GCValue, GCDiscreteActor, default_init, ensemblize, LogParam
 
 
+def cautious_add_decayed_weights(weight_decay: float) -> optax.GradientTransformation:
+    """Cautious weight decay (CWD).
+
+    Applies weight decay only when the update direction and parameter sign align.
+    This matches: x_{t+1} = x_t - lr * (u_t + λ I(u_t ⊙ x_t >= 0) ⊙ x_t).
+    """
+
+    def init_fn(params):
+        del params
+        return optax.EmptyState()
+
+    def update_fn(updates, state, params=None):
+        if params is None:
+            raise ValueError('cautious_add_decayed_weights requires params')
+        if weight_decay == 0.0:
+            return updates, state
+
+        def _apply(u, p):
+            if p is None:
+                return u
+            mask = (u * p) >= 0
+            return u + weight_decay * jnp.where(mask, p, jnp.zeros_like(p))
+
+        new_updates = jax.tree_util.tree_map(_apply, updates, params)
+        return new_updates, state
+
+    return optax.GradientTransformation(init_fn, update_fn)
+
+
 class InterpolationThinkingCell(nn.Module):
     hidden_dim: int
     layer_norm: bool = True
@@ -38,7 +67,14 @@ class InterpolationThinkingCell(nn.Module):
         c_new = c * f + i * (1.0 - f)
         h_new = jnp.tanh(c_new)
 
-        return c_new, h_new
+        gate_stats = {
+            'forget_gate_mean': f.mean(),
+            'forget_gate_std': f.std(),
+            'input_gate_mean': i.mean(),
+            'input_gate_std': i.std(),
+        }
+
+        return c_new, h_new, gate_stats
 
 class InterpolationThinkingCritic(nn.Module):
     d_model: int = 256
@@ -52,11 +88,7 @@ class InterpolationThinkingCritic(nn.Module):
     def setup(self):
         self.input_embed_layer = nn.Dense(self.d_model)
         self.pre_ln = nn.LayerNorm()
-        self.start_token = self.param(
-            'start_token', 
-            nn.initializers.normal(stddev=0.02), 
-            (1, 1, self.d_model)
-        )
+        self.output_ln = nn.LayerNorm()
         self.interp_layers = [
             InterpolationThinkingCell(
                 hidden_dim=self.d_model,
@@ -64,23 +96,25 @@ class InterpolationThinkingCritic(nn.Module):
             )
             for _ in range(self.num_layers)
         ]
-        # Standard initialization for value head
         self.value_head = nn.Dense(
             1,
             kernel_init=nn.initializers.orthogonal(1.0),
             bias_init=nn.initializers.zeros,
         )
     
-    def __call__(self, observations, goals=None, actions=None):
+    def __call__(self, observations, goals=None, actions=None, info=False):
         """Forward pass with thinking steps.
         
         Args:
             observations: Observation tensor of shape (B, obs_dim)
             goals: Goal tensor of shape (B, goal_dim) (optional)
             actions: One-hot encoded actions of shape (B, action_dim)
+            info: If True, return (q_final, diagnostics_dict) with per-step
+                  Q-values, gate stats, and h-norms. If False, return q_final only.
             
         Returns:
-            Q-values: Q(s,a) for the given action, shape (B,)
+            If info=False: q_final shape (B,)
+            If info=True:  (q_final, diag) where diag is a dict.
         """
         # Encode inputs
         if self.gc_encoder is not None:
@@ -95,7 +129,7 @@ class InterpolationThinkingCritic(nn.Module):
         if actions is not None:
             inputs = jnp.concatenate([inputs, actions], axis=-1)
         
-        # Embed input: (B, d_model) -> (B, 1, d_model)
+        # Embed input
         x_emb = self.input_embed_layer(inputs)
         if self.pre_layer_norm:
             x_emb = self.pre_ln(x_emb)
@@ -104,20 +138,50 @@ class InterpolationThinkingCritic(nn.Module):
         # Initialize state
         c = jnp.zeros((batch_size, self.d_model))
         h = jnp.zeros((batch_size, self.d_model))
-                
-        for _ in range(self.thinking_steps):
+
+        q_per_step = []
+        h_norm_per_step = []
+        gate_stats_per_step = []
+
+        for step_idx in range(self.thinking_steps):
             h_block_input = h
-            for layer in self.interp_layers:
-                c, h = layer(c, h, x_emb)
-            h = h_block_input + h
+            c_new, h_new = c, h
+            step_gate_stats = {}
+            for layer_idx, layer in enumerate(self.interp_layers):
+                c_new, h_new, gs = layer(c_new, h_new, x_emb)
+                step_gate_stats[layer_idx] = gs
+            # Residual connection
+            h_new = h_block_input + h_new
+            c, h = c_new, h_new
+
+            # Always compute per-step Q (cheap, shared head) for diagnostics
+            q_k = self.value_head(self.output_ln(h)).squeeze(-1)  # (B,)
+            q_per_step.append(q_k)
+            h_norm_per_step.append(jnp.linalg.norm(h, axis=-1).mean())
+            gate_stats_per_step.append(step_gate_stats)
         
-        # Take last timestep output: (B, d_model)
-        final_out = h
-        
-        # Apply layer norm and get Q-value
-        q_value = self.value_head(final_out).squeeze(-1)  # (B,)
-        
-        return q_value
+        q_final = q_per_step[-1]  # (B,)  — loss is computed only on this
+
+        if not info:
+            return q_final
+
+        # Build diagnostics dict
+        diag = {}
+        q_all = jnp.stack(q_per_step, axis=0)  # (T, B)
+        for k in range(self.thinking_steps):
+            diag[f'q_step_{k}'] = q_per_step[k].mean()
+            diag[f'q_step_{k}_std'] = q_per_step[k].std()
+            diag[f'h_norm_step_{k}'] = h_norm_per_step[k]
+            for layer_idx, gs in gate_stats_per_step[k].items():
+                for stat_name, stat_val in gs.items():
+                    diag[f'layer{layer_idx}_step{k}_{stat_name}'] = stat_val
+        # Inter-step Q deltas
+        if self.thinking_steps > 1:
+            for k in range(1, self.thinking_steps):
+                diag[f'q_delta_{k}'] = (q_per_step[k] - q_per_step[k - 1]).mean()
+                diag[f'q_delta_{k}_abs'] = jnp.abs(q_per_step[k] - q_per_step[k - 1]).mean()
+
+        return q_final, diag
 
 class GCInterpDiscreteCritic(nn.Module):    
     d_model: int = 256
@@ -144,22 +208,21 @@ class GCInterpDiscreteCritic(nn.Module):
             num_layers=self.num_layers,
         )
     
-    def __call__(self, observations, goals=None, actions=None):
+    def __call__(self, observations, goals=None, actions=None, info=False):
         """Forward pass.
         
         Args:
             observations: Observation tensor of shape (B, obs_dim)
             goals: Goal tensor of shape (B, goal_dim) (optional)
             actions: Action indices of shape (B,) - will be converted to one-hot
+            info: If True, return (q_final, diag). Otherwise q_final only.
         
         Returns:
-            If ensemble=True: Q-values with shape (2, B)
-            If ensemble=False: Q-values with shape (B,)
+            With ensemble, info=False: q_final (2, B)
+            With ensemble, info=True: (q_final (2, B), diag (2, dict))
         """
-        # Convert action indices to one-hot encoding (like GCDiscreteCritic)
         actions_onehot = jnp.eye(self.action_dim)[actions]
-        q = self.critic(observations, goals, actions_onehot)
-        return q
+        return self.critic(observations, goals, actions_onehot, info)
 
 
 class GCDQNInterpAgent(flax.struct.PyTreeNode):
@@ -167,57 +230,64 @@ class GCDQNInterpAgent(flax.struct.PyTreeNode):
     network: Any
     config: Any = nonpytree_field()
 
-    def critic_loss(self, batch, grad_params):
-        """Compute the DQN critic loss (discrete actions).
-
-        Assumes:
-         - batch['actions'] contains integer action indices.
-         - critic takes actions as input and returns Q(s,a) scalar(s).
-        """
+    def _compute_target_q(self, batch):
+        """Compute bootstrapping target using target critic at full depth."""
         action_dim = 6
-        
-        # Current Q for taken actions - shape (2, B)
-        q1_a, q2_a = self.network.select('critic')(
-            batch['observations'], batch['value_goals'], batch['actions'], params=grad_params
-        )
-        # Ensure shapes are (batch,)
-        q1_a = jnp.squeeze(q1_a, axis=-1) if q1_a.ndim > 1 else q1_a
-        q2_a = jnp.squeeze(q2_a, axis=-1) if q2_a.ndim > 1 else q2_a
-
-        # Target Q: use target critic to get Q-values for all actions, then take max
-        # vmap over actions like in dqn.py
         all_actions = jnp.tile(jnp.arange(action_dim), (batch['next_observations'].shape[0], 1))  # B x action_dim
+
+        # Target critic with info=False: returns q_final only, shape (action_dim, 2, B) after vmap
         qs = jax.lax.stop_gradient(
             jax.vmap(self.network.select('target_critic'), in_axes=(None, None, 1))(
                 batch['next_observations'], batch['value_goals'], all_actions
             )
-        )  # action_dim x 2 x B
-        qs = qs.mean(axis=1)  # action_dim x B (average over ensemble)
-        qs = qs.transpose(1, 0)  # B x action_dim
-        max_next_q = jnp.max(qs, axis=-1)  # B
+        )  # (action_dim, 2, B)
+        qs = qs.mean(axis=1)  # (action_dim, B)
+        qs = qs.transpose(1, 0)  # (B, action_dim)
+        max_next_q = jnp.max(qs, axis=-1)  # (B,)
 
-        # TD or MC target
         if self.config['use_discounted_mc_rewards']:
             target = batch['rewards']
         else:
             target = batch['rewards'] + self.config['discount'] * batch['masks'] * max_next_q
 
-        # MSE loss on both heads
+        return target
+
+    def critic_loss(self, batch, grad_params, rng=None):
+        """Compute DQN critic loss (single-exit on final thinking step).
+
+        Loss uses only the final-step Q-value. Per-step Q-values and gate
+        statistics are computed under stop_gradient for wandb diagnostics.
+        """
+        action_dim = 6
+
+        # --- Online critic: final-step Q for the taken action ---
+        # info=False: returns q_final only, shape (2, B) with ensemble
+        q_final = self.network.select('critic')(
+            batch['observations'], batch['value_goals'], batch['actions'],
+            params=grad_params,
+        )  # (2, B)
+        q1_a = q_final[0]  # (B,)
+        q2_a = q_final[1]  # (B,)
+
+        # --- Bootstrapping target (full depth, stop-gradient) ---
+        target = self._compute_target_q(batch)  # (B,)
+
+        # --- Simple MSE loss on both ensemble heads ---
         critic_loss = ((q1_a - target) ** 2 + (q2_a - target) ** 2).mean()
 
-        # Entropy regularization for action selection
+        # --- Entropy regularization for action selection ---
         all_actions = jnp.tile(jnp.arange(action_dim), (batch['observations'].shape[0], 1))  # B x action_dim
         current_qs = jax.lax.stop_gradient(
             jax.vmap(self.network.select('critic'), in_axes=(None, None, 1))(
                 batch['observations'],
-                batch['value_goals'],  # <-- was jnp.roll(batch['next_observations'], ...) before -- not sure what is correct
+                batch['value_goals'],
                 all_actions,
             )
-        )  # action_dim x 2 x B
+        )  # (action_dim, 2, B)
         if len(current_qs.shape) == 2:  # Non-ensemble
             current_qs = current_qs[:, None, ...]
-        current_qs = current_qs.mean(axis=1)  # action_dim x B
-        current_qs = current_qs.transpose(1, 0)  # B x action_dim
+        current_qs = current_qs.mean(axis=1)  # (action_dim, B)
+        current_qs = current_qs.transpose(1, 0)  # (B, action_dim)
 
         alpha_temp = self.network.select('alpha_temp')(params=grad_params)
         dist = distrax.Categorical(logits=current_qs / jnp.maximum(1e-6, alpha_temp))
@@ -226,7 +296,18 @@ class GCDQNInterpAgent(flax.struct.PyTreeNode):
 
         total_loss = critic_loss + alpha_temp_loss
 
-        return total_loss, {
+        # --- Diagnostics: per-step Q-values and gate stats (no gradient) ---
+        diag_out = jax.lax.stop_gradient(
+            self.network.select('critic')(
+                batch['observations'], batch['value_goals'], batch['actions'],
+                info=True,
+            )
+        )
+        # diag_out is (q_final, diag_dict) with ensemble: diag_dict values have leading dim 2
+        # We average over ensemble for readable logging
+        diag_dict = diag_out[1]
+
+        info_dict = {
             'critic_loss': critic_loss,
             'q_mean': target.mean(),
             'q_max': target.max(),
@@ -237,12 +318,17 @@ class GCDQNInterpAgent(flax.struct.PyTreeNode):
             'entropy_std': entropy.std(),
             'alpha_temp_loss': alpha_temp_loss,
         }
+        # Merge per-step diagnostics (average over ensemble dim)
+        for k, v in diag_dict.items():
+            info_dict[k] = v.mean() if hasattr(v, 'mean') else v
+
+        return total_loss, info_dict
 
     @jax.jit
     def total_loss(self, batch, grad_params, rng=None):
         """Compute the total loss (only critic loss for DQN)."""
         info = {}
-        critic_loss, critic_info = self.critic_loss(batch, grad_params)
+        critic_loss, critic_info = self.critic_loss(batch, grad_params, rng=rng)
         for k, v in critic_info.items():
             info[f'critic/{k}'] = v
 
@@ -291,7 +377,7 @@ class GCDQNInterpAgent(flax.struct.PyTreeNode):
             jax.vmap(self.network.select('critic'), in_axes=(None, None, 1))(
                 observations, goals, all_actions
             )
-        )  # action_dim x 2 x B
+        )  # (action_dim, 2, B)
         qs = qs.mean(axis=1)  # action_dim x B (average over ensemble)
         qs = qs.transpose(1, 0)  # B x action_dim
 
@@ -336,7 +422,7 @@ class GCDQNInterpAgent(flax.struct.PyTreeNode):
             encoder_module = encoder_modules[config['encoder']]
             encoders['critic'] = GCEncoder(concat_encoder=encoder_module())
 
-        # LSTM-based discrete critic
+        # Interpolation-thinking discrete critic
         critic_def = GCInterpDiscreteCritic(
             d_model=config['lstm_hidden_size'],
             action_dim=action_dim,
@@ -361,7 +447,12 @@ class GCDQNInterpAgent(flax.struct.PyTreeNode):
         network_args = {k: v[1] for k, v in network_info.items()}
 
         network_def = ModuleDict(networks)
-        network_tx = optax.adam(learning_rate=config['lr'])
+        network_tx = optax.chain(
+            optax.clip_by_global_norm(config['max_grad_norm']),
+            optax.scale_by_adam(),
+            cautious_add_decayed_weights(config['weight_decay']),
+            optax.scale(-config['lr']),
+        )
         network_params = network_def.init(init_rng, **network_args)['params']
         network = TrainState.create(network_def, network_params, tx=network_tx)
 
@@ -377,6 +468,8 @@ def get_config():
             # Agent hyperparameters
             agent_name='gcdqn_interp',
             lr=3e-4,
+            weight_decay=1e-4,
+            max_grad_norm=1.0,
             batch_size=1024,
             
             # LSTM architecture

@@ -55,6 +55,8 @@ default_config = ml_collections.FrozenConfigDict(
             lstm_hidden_size=256,  # Hidden size for LSTM in GCDQNLSTMAgent.
             thinking_steps=2,  # Number of thinking steps for GCDQNLSTMAgent.
             num_layers=2,  # Number of LSTM layers for GCDQNLSTMAgent.
+            weight_decay=1e-4,
+            max_grad_norm=1.0,
         )
     )
 
