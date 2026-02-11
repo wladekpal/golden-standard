@@ -48,10 +48,15 @@ class InterpolationThinkingCell(nn.Module):
 
     def setup(self):
         self.recurrence_ln = nn.LayerNorm()
-        self.forget_gate = nn.Dense( self.hidden_dim, bias_init=nn.initializers.constant(1.0) )        
-        self.input_gate = nn.Dense( self.hidden_dim )
+        self.forget_gate = nn.Dense(self.hidden_dim, bias_init=nn.initializers.constant(1.0))
+        self.input_gate = nn.Dense(self.hidden_dim)
+        self.action_film = nn.Dense(2 * self.hidden_dim)
 
-    def __call__(self, c, h, x_context):
+    def __call__(self, c, h, x_context, action_context=None):
+        if action_context is not None:
+            film = self.action_film(action_context)
+            gamma, beta = jnp.split(film, 2, axis=-1)
+            h = h * (1.0 + gamma) + beta
         # Combine static context (x) with dynamic thought (h)
         combined = jnp.concatenate([x_context, h], axis=-1)
 
@@ -73,6 +78,11 @@ class InterpolationThinkingCell(nn.Module):
             'input_gate_mean': i.mean(),
             'input_gate_std': i.std(),
         }
+        if action_context is not None:
+            gate_stats['film_gamma_mean'] = gamma.mean()
+            gate_stats['film_gamma_std'] = gamma.std()
+            gate_stats['film_beta_mean'] = beta.mean()
+            gate_stats['film_beta_std'] = beta.std()
 
         return c_new, h_new, gate_stats
 
@@ -88,6 +98,8 @@ class InterpolationThinkingCritic(nn.Module):
     def setup(self):
         self.input_embed_layer = nn.Dense(self.d_model)
         self.pre_ln = nn.LayerNorm()
+        self.h_ln = nn.LayerNorm()
+        self.residual_ln = nn.LayerNorm()
         self.output_ln = nn.LayerNorm()
         self.interp_layers = [
             InterpolationThinkingCell(
@@ -128,6 +140,7 @@ class InterpolationThinkingCritic(nn.Module):
         # Concatenate action (one-hot encoded)
         if actions is not None:
             inputs = jnp.concatenate([inputs, actions], axis=-1)
+        action_context = actions
         
         # Embed input
         x_emb = self.input_embed_layer(inputs)
@@ -148,10 +161,12 @@ class InterpolationThinkingCritic(nn.Module):
             c_new, h_new = c, h
             step_gate_stats = {}
             for layer_idx, layer in enumerate(self.interp_layers):
-                c_new, h_new, gs = layer(c_new, h_new, x_emb)
+                c_new, h_new, gs = layer(c_new, h_new, x_emb, action_context=action_context)
                 step_gate_stats[layer_idx] = gs
+            h_new = self.h_ln(h_new)
             # Residual connection
             h_new = h_block_input + h_new
+            h_new = self.residual_ln(h_new)
             c, h = c_new, h_new
 
             # Always compute per-step Q (cheap, shared head) for diagnostics
@@ -430,7 +445,7 @@ class GCDQNInterpAgent(flax.struct.PyTreeNode):
             ensemble=config['ensemble'],
             gc_encoder=encoders.get('critic'),
             layer_norm=config['layer_norm'],
-            num_layers=1,
+            num_layers=2,
         )
 
 
