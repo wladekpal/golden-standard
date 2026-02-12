@@ -56,7 +56,7 @@ class LSTMThinkingCritic(nn.Module):
             bias_init=nn.initializers.zeros,
         )
     
-    def __call__(self, observations, goals=None, actions=None):
+    def __call__(self, observations, goals=None, actions=None, info=False):
         """Forward pass with thinking steps.
         
         Args:
@@ -65,7 +65,10 @@ class LSTMThinkingCritic(nn.Module):
             actions: One-hot encoded actions of shape (B, action_dim)
             
         Returns:
-            Q-values: Q(s,a) for the given action, shape (B,)
+            If info=False:
+                Q-values: Q(s,a) for the given action, shape (B,)
+            If info=True:
+                Tuple (q_final, diagnostics_dict)
         """
         # Encode inputs
         if self.gc_encoder is not None:
@@ -95,18 +98,45 @@ class LSTMThinkingCritic(nn.Module):
             x_seq = x_first
 
         lstm_out = x_seq
+        layer_h_norms = []
         for i, (lstm_layer, ln) in enumerate(zip(self.lstm_layers, self.layer_norms)):
             lstm_new = lstm_layer(lstm_out)
             # Residual connection + LayerNorm for better gradient flow
             lstm_out = ln(lstm_out + lstm_new)
+            layer_h_norms.append(jnp.linalg.norm(lstm_out, axis=-1).mean())
         
         # Take last timestep output: (B, d_model)
         final_out = lstm_out[:, -1, :]
-        
-        # Apply layer norm and get Q-value
-        q_value = self.value_head(final_out).squeeze(-1)  # (B,)
-        
-        return q_value
+
+        # Per-step Q-values from the same value head for diagnostics.
+        q_seq = self.value_head(lstm_out).squeeze(-1)  # (B, T)
+        q_value = q_seq[:, -1]  # (B,)
+
+        if not info:
+            return q_value
+
+        h_norm_per_step = jnp.linalg.norm(lstm_out, axis=-1).mean(axis=0)  # (T,)
+
+        diag = {}
+        for k in range(self.thinking_steps):
+            q_k = q_seq[:, k]
+            diag[f'q_step_{k}'] = q_k.mean()
+            diag[f'q_step_{k}_std'] = q_k.std()
+            diag[f'h_norm_step_{k}'] = h_norm_per_step[k]
+
+        if self.thinking_steps > 1:
+            q_deltas = q_seq[:, 1:] - q_seq[:, :-1]
+            for k in range(1, self.thinking_steps):
+                dq = q_deltas[:, k - 1]
+                diag[f'q_delta_{k}'] = dq.mean()
+                diag[f'q_delta_{k}_abs'] = jnp.abs(dq).mean()
+
+        for layer_idx, h_norm in enumerate(layer_h_norms):
+            diag[f'layer{layer_idx}_h_norm_mean'] = h_norm
+
+        diag['final_h_norm'] = jnp.linalg.norm(final_out, axis=-1).mean()
+
+        return q_value, diag
 
 
 class GCLSTMDiscreteCritic(nn.Module):
@@ -140,7 +170,7 @@ class GCLSTMDiscreteCritic(nn.Module):
             num_layers=self.num_layers,
         )
     
-    def __call__(self, observations, goals=None, actions=None):
+    def __call__(self, observations, goals=None, actions=None, info=False):
         """Forward pass.
         
         Args:
@@ -154,7 +184,7 @@ class GCLSTMDiscreteCritic(nn.Module):
         """
         # Convert action indices to one-hot encoding (like GCDiscreteCritic)
         actions_onehot = jnp.eye(self.action_dim)[actions]
-        q = self.critic(observations, goals, actions_onehot)
+        q = self.critic(observations, goals, actions_onehot, info)
         return q
 
 
@@ -229,7 +259,19 @@ class GCDQNLSTMAgent(flax.struct.PyTreeNode):
 
         total_loss = critic_loss + alpha_temp_loss
 
-        return total_loss, {
+        # Diagnostics: per-step Q-values and hidden-state norms (no gradient).
+        diag_out = jax.lax.stop_gradient(
+            self.network.select('critic')(
+                batch['observations'],
+                batch['value_goals'],
+                batch['actions'],
+                info=True,
+                params=grad_params,
+            )
+        )
+        diag_dict = diag_out[1]
+
+        info_dict = {
             'critic_loss': critic_loss,
             'q_mean': target.mean(),
             'q_max': target.max(),
@@ -240,6 +282,11 @@ class GCDQNLSTMAgent(flax.struct.PyTreeNode):
             'entropy_std': entropy.std(),
             'alpha_temp_loss': alpha_temp_loss,
         }
+
+        for k, v in diag_dict.items():
+            info_dict[k] = v.mean() if hasattr(v, 'mean') else v
+
+        return total_loss, info_dict
 
     @jax.jit
     def total_loss(self, batch, grad_params, rng=None):

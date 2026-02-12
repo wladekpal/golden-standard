@@ -70,7 +70,7 @@ run_job() {
     CUDA_VISIBLE_DEVICES="$gpu_id" uv run --active src/train.py \
       env:box-moving \
       --agent.agent_name gcdqn_lstm \
-      --exp.name dqn_lstm_think_${thinking_step}_ts_1_layer_basic \
+      --exp.name dqn_lstm_think_${thinking_step}_ts_1_layer_basic_diagnostics \
       --env.number_of_boxes_max "$number_of_moving_boxes_max" \
       --env.number_of_boxes_min "$number_of_moving_boxes_max" \
       --env.number_of_moving_boxes_max "$number_of_moving_boxes_max" \
