@@ -4,6 +4,7 @@ from impls.agents.crl_search import CRLSearchAgent
 from impls.agents.dqn import GCDQNAgent
 from impls.agents.dqn_lstm import GCDQNLSTMAgent
 from impls.agents.dqn_interp import GCDQNInterpAgent
+from impls.agents.dqn_trm import GCDQNTRMAgent
 from impls.agents.gcbc import GCBCAgent
 from impls.agents.gciql import GCIQLAgent
 from impls.agents.gciql_lstm import GCIQLLSTMAgent
@@ -53,8 +54,10 @@ default_config = ml_collections.FrozenConfigDict(
             is_td=False,
             ensemble= True,  # Whether to use ensemble of critics in GCDQNLSTMAgent.
             lstm_hidden_size=256,  # Hidden size for LSTM in GCDQNLSTMAgent.
+            trm_hidden_size=256,  # Hidden size for TRM in GCDQNTRMAgent.
             thinking_steps=2,  # Number of thinking steps for GCDQNLSTMAgent.
             num_layers=2,  # Number of LSTM layers for GCDQNLSTMAgent.
+            pre_layer_norm=True,
             weight_decay=1e-4,
             max_grad_norm=1.0,
         )
@@ -122,6 +125,13 @@ def create_agent(config: ml_collections.FrozenConfigDict, example_batch: dict, s
         )
     elif config.agent_name == "gcdqn_interp":
         agent = GCDQNInterpAgent.create(
+            seed,
+            example_batch['observations'],
+            example_batch['actions'],
+            config,
+        )
+    elif config.agent_name == "gcdqn_trm":
+        agent = GCDQNTRMAgent.create(
             seed,
             example_batch['observations'],
             example_batch['actions'],

@@ -130,32 +130,33 @@ class TrainState(flax.struct.PyTreeNode):
             **kwargs,
         )
 
-    def apply_loss_fn(self, loss_fn):
+    def apply_loss_fn(self, loss_fn, compute_grad_stats=True):
         """Apply the loss function and return the updated state and info.
 
         It additionally computes the gradient statistics and adds them to the dictionary.
         """
         grads, info = jax.grad(loss_fn, has_aux=True)(self.params)
 
-        grad_max = jax.tree_util.tree_map(jnp.max, grads)
-        grad_min = jax.tree_util.tree_map(jnp.min, grads)
-        grad_norm = jax.tree_util.tree_map(jnp.linalg.norm, grads)
+        if compute_grad_stats:
+            grad_max = jax.tree_util.tree_map(jnp.max, grads)
+            grad_min = jax.tree_util.tree_map(jnp.min, grads)
+            grad_norm = jax.tree_util.tree_map(jnp.linalg.norm, grads)
 
-        grad_max_flat = jnp.concatenate([jnp.reshape(x, -1) for x in jax.tree_util.tree_leaves(grad_max)], axis=0)
-        grad_min_flat = jnp.concatenate([jnp.reshape(x, -1) for x in jax.tree_util.tree_leaves(grad_min)], axis=0)
-        grad_norm_flat = jnp.concatenate([jnp.reshape(x, -1) for x in jax.tree_util.tree_leaves(grad_norm)], axis=0)
+            grad_max_flat = jnp.concatenate([jnp.reshape(x, -1) for x in jax.tree_util.tree_leaves(grad_max)], axis=0)
+            grad_min_flat = jnp.concatenate([jnp.reshape(x, -1) for x in jax.tree_util.tree_leaves(grad_min)], axis=0)
+            grad_norm_flat = jnp.concatenate([jnp.reshape(x, -1) for x in jax.tree_util.tree_leaves(grad_norm)], axis=0)
 
-        final_grad_max = jnp.max(grad_max_flat)
-        final_grad_min = jnp.min(grad_min_flat)
-        final_grad_norm = jnp.linalg.norm(grad_norm_flat, ord=1)
+            final_grad_max = jnp.max(grad_max_flat)
+            final_grad_min = jnp.min(grad_min_flat)
+            final_grad_norm = jnp.linalg.norm(grad_norm_flat, ord=1)
 
-        info.update(
-            {
-                'grad/max': final_grad_max,
-                'grad/min': final_grad_min,
-                'grad/norm': final_grad_norm,
-            }
-        )
+            info.update(
+                {
+                    'grad/max': final_grad_max,
+                    'grad/min': final_grad_min,
+                    'grad/norm': final_grad_norm,
+                }
+            )
 
         return self.apply_gradients(grads=grads), info
 

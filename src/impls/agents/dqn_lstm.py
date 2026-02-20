@@ -98,22 +98,24 @@ class LSTMThinkingCritic(nn.Module):
             x_seq = x_first
 
         lstm_out = x_seq
-        layer_h_norms = []
+        layer_h_norms = [] if info else None
         for i, (lstm_layer, ln) in enumerate(zip(self.lstm_layers, self.layer_norms)):
             lstm_new = lstm_layer(lstm_out)
             # Residual connection + LayerNorm for better gradient flow
             lstm_out = ln(lstm_out + lstm_new)
-            layer_h_norms.append(jnp.linalg.norm(lstm_out, axis=-1).mean())
+            if info:
+                layer_h_norms.append(jnp.linalg.norm(lstm_out, axis=-1).mean())
         
         # Take last timestep output: (B, d_model)
         final_out = lstm_out[:, -1, :]
 
-        # Per-step Q-values from the same value head for diagnostics.
-        q_seq = self.value_head(lstm_out).squeeze(-1)  # (B, T)
-        q_value = q_seq[:, -1]  # (B,)
+        q_value = self.value_head(final_out).squeeze(-1)  # (B,)
 
         if not info:
             return q_value
+
+        # Per-step Q-values from the same value head for diagnostics.
+        q_seq = self.value_head(lstm_out).squeeze(-1)  # (B, T)
 
         h_norm_per_step = jnp.linalg.norm(lstm_out, axis=-1).mean(axis=0)  # (T,)
 
@@ -209,11 +211,13 @@ class GCDQNLSTMAgent(flax.struct.PyTreeNode):
         """
         action_dim = 6
         
-        # Current Q for taken actions - shape (2, B)
-        q1_a, q2_a = self.network.select('critic')(
-            batch['observations'], batch['value_goals'], batch['actions'], params=grad_params
+        # Current Q for taken actions + diagnostics in one pass.
+        q_taken, diag_dict = self.network.select('critic')(
+            batch['observations'], batch['value_goals'], batch['actions'], info=True, params=grad_params
         )
+
         # Ensure shapes are (batch,)
+        q1_a, q2_a = q_taken
         q1_a = jnp.squeeze(q1_a, axis=-1) if q1_a.ndim > 1 else q1_a
         q2_a = jnp.squeeze(q2_a, axis=-1) if q2_a.ndim > 1 else q2_a
 
@@ -258,18 +262,6 @@ class GCDQNLSTMAgent(flax.struct.PyTreeNode):
         alpha_temp_loss = ((entropy + self.config['target_entropy']) ** 2).mean()
 
         total_loss = critic_loss + alpha_temp_loss
-
-        # Diagnostics: per-step Q-values and hidden-state norms (no gradient).
-        diag_out = jax.lax.stop_gradient(
-            self.network.select('critic')(
-                batch['observations'],
-                batch['value_goals'],
-                batch['actions'],
-                info=True,
-                params=grad_params,
-            )
-        )
-        diag_dict = diag_out[1]
 
         info_dict = {
             'critic_loss': critic_loss,
@@ -316,7 +308,9 @@ class GCDQNLSTMAgent(flax.struct.PyTreeNode):
         def loss_fn(grad_params):
             return self.total_loss(batch, grad_params, rng=rng)
 
-        new_network, info = self.network.apply_loss_fn(loss_fn=loss_fn)
+        new_network, info = self.network.apply_loss_fn(
+            loss_fn=loss_fn, compute_grad_stats=True
+        )
         self.target_update(new_network, 'critic')
 
         return self.replace(network=new_network, rng=new_rng), info
@@ -411,7 +405,7 @@ class GCDQNLSTMAgent(flax.struct.PyTreeNode):
         network_args = {k: v[1] for k, v in network_info.items()}
 
         network_def = ModuleDict(networks)
-        network_tx = optax.adam(learning_rate=config['lr'])
+        network_tx = optax.adamw(learning_rate=config['lr'])
         network_params = network_def.init(init_rng, **network_args)['params']
         network = TrainState.create(network_def, network_params, tx=network_tx)
 
@@ -471,6 +465,7 @@ def get_config():
             p_aug=0.0,
             frame_stack=ml_collections.config_dict.placeholder(int),
             ensemble=True,
+            num_layers=1,
         )
     )
     return config
