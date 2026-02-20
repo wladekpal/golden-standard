@@ -16,10 +16,17 @@ from jax import random
 from impls.agents import create_agent
 from envs.block_moving.block_moving_env import BoxMovingEnv
 from envs.block_moving.wrappers import wrap_for_eval, wrap_for_training
-from envs.block_moving.env_types import TimeStep, remove_targets
+from envs.block_moving.env_types import TimeStep, remove_targets, GridStatesEnum
 from config import ROOT_DIR
 from impls.utils.checkpoints import save_agent
 from utils import log_gif, calculate_params
+
+
+GRID_STATE_NORMALIZER = jnp.float32(int(GridStatesEnum.AGENT_ON_BOX_CARRYING_BOX))
+
+
+def normalize_grid_inputs(grid):
+    return grid.astype(jnp.float32) / GRID_STATE_NORMALIZER
 
 
 @functools.partial(jax.jit, static_argnums=(2, 3, 4, 5))
@@ -36,7 +43,9 @@ def collect_data(agent, key, env, num_envs, episode_length, use_targets=False):
         )
 
         actions = agent.sample_actions(
-            state_agent.grid.reshape(num_envs, -1), state_agent.goal.reshape(num_envs, -1), seed=sample_key
+            normalize_grid_inputs(state_agent.grid).reshape(num_envs, -1),
+            normalize_grid_inputs(state_agent.goal).reshape(num_envs, -1),
+            seed=sample_key,
         )
 
         new_state, reward, done, info = env.step(state, actions)
@@ -134,22 +143,18 @@ def create_batch(
 
     # Create valid batch
     batch = {
-        "observations": state.grid.reshape(state.grid.shape[0], -1),
-        "next_observations": next_state.grid.reshape(next_state.grid.shape[0], -1),
+        "observations": normalize_grid_inputs(state.grid).reshape(state.grid.shape[0], -1),
+        "next_observations": normalize_grid_inputs(next_state.grid).reshape(next_state.grid.shape[0], -1),
         "actions": actions.squeeze(),
         "rewards": reward.reshape(reward.shape[0], -1).squeeze(),
         "masks": jnp.ones_like(reward.reshape(reward.shape[0], -1).squeeze()),  # Bootstrap always
-        "value_goals": value_goals.reshape(value_goals.shape[0], -1),
-        "actor_goals": actor_goals.reshape(actor_goals.shape[0], -1),
+        "value_goals": normalize_grid_inputs(value_goals).reshape(value_goals.shape[0], -1),
+        "actor_goals": normalize_grid_inputs(actor_goals).reshape(actor_goals.shape[0], -1),
     }
     return batch
 
 
-def evaluate_agent_in_specific_env(agent, key, jitted_create_batch, config, name, create_gif=False):
-    env_eval = create_env(config.env)
-    env_eval = wrap_for_eval(env_eval)  # Note: Wrap for eval is not using any quarter filtering
-    env_eval.step = jax.jit(jax.vmap(env_eval.step))
-    env_eval.reset = jax.jit(jax.vmap(env_eval.reset))
+def evaluate_agent_in_specific_env(agent, key, jitted_create_batch, config, name, env_eval, create_gif=False):
     prefix = f"eval{name}"
     prefix_gif = f"gif{name}"
 
@@ -206,7 +211,12 @@ def evaluate_agent_in_specific_env(agent, key, jitted_create_batch, config, name
                 f"{prefix}/q_max": loss_info["critic/q_max"],
             }
         )
-    elif config.agent.agent_name == "gcdqn" or config.agent.agent_name == "gcdqn_lstm" or config.agent.agent_name == "gcdqn_interp":
+    elif (
+        config.agent.agent_name == "gcdqn"
+        or config.agent.agent_name == "gcdqn_lstm"
+        or config.agent.agent_name == "gcdqn_interp"
+        or config.agent.agent_name == "gcdqn_trm"
+    ):
         eval_info_tmp.update(
             {
                 f"{prefix}/critic_loss": loss_info["critic/critic_loss"],
@@ -233,7 +243,7 @@ def evaluate_agent_in_specific_env(agent, key, jitted_create_batch, config, name
     return eval_info_tmp, loss_info
 
 
-def evaluate_agent(agent, key, jitted_create_batch, epoch, config):
+def evaluate_agent(agent, key, jitted_create_batch, epoch, config, eval_env_cache):
     """Evaluate agent by running rollouts using collect_data and computing losses."""
 
     eval_configs = [config]
@@ -261,8 +271,22 @@ def evaluate_agent(agent, key, jitted_create_batch, epoch, config):
             eval_names_suff.append("_" + str(number_of_boxes))
 
     for eval_config, eval_name_suff in zip(eval_configs, eval_names_suff):
+        env_cache_key = repr(eval_config.env)
+        if env_cache_key not in eval_env_cache:
+            env_eval = create_env(eval_config.env)
+            env_eval = wrap_for_eval(env_eval)  # Note: Wrap for eval is not using any quarter filtering
+            env_eval.step = jax.jit(jax.vmap(env_eval.step))
+            env_eval.reset = jax.jit(jax.vmap(env_eval.reset))
+            eval_env_cache[env_cache_key] = env_eval
+
         eval_info_tmp, loss_info = evaluate_agent_in_specific_env(
-            agent, key, jitted_create_batch, eval_config, eval_name_suff, create_gif=create_gif
+            agent,
+            key,
+            jitted_create_batch,
+            eval_config,
+            eval_name_suff,
+            eval_env_cache[env_cache_key],
+            create_gif=create_gif,
         )
         eval_info.update(eval_info_tmp)
         if eval_name_suff == "":
@@ -319,17 +343,18 @@ def train(config: Config):
     buffer_state = jax.jit(replay_buffer.init)(key)
 
     example_batch = {
-        "observations": dummy_timestep.grid.reshape(1, -1),  # Add batch dimension
-        "next_observations": dummy_timestep.grid.reshape(1, -1),
+        "observations": normalize_grid_inputs(dummy_timestep.grid).reshape(1, -1),  # Add batch dimension
+        "next_observations": normalize_grid_inputs(dummy_timestep.grid).reshape(1, -1),
         "actions": jnp.ones((1,), dtype=jnp.int8)
         * (env._env.action_space - 1),  # it should be the maximal value of action space
         "rewards": jnp.ones((1,), dtype=jnp.float32),
         "masks": jnp.ones((1,), dtype=jnp.int8),
-        "value_goals": dummy_timestep.grid.reshape(1, -1),
-        "actor_goals": dummy_timestep.grid.reshape(1, -1),
+        "value_goals": normalize_grid_inputs(dummy_timestep.grid).reshape(1, -1),
+        "actor_goals": normalize_grid_inputs(dummy_timestep.grid).reshape(1, -1),
     }
     calculate_params(example_batch, config)
     agent = create_agent(config.agent, example_batch, config.exp.seed)
+    eval_env_cache = {}
 
     @jax.jit
     def update_step(carry, _):
@@ -354,14 +379,14 @@ def train(config: Config):
         return buffer_state, agent, key
 
     # Main training loop with evaluation
-    evaluate_agent(agent, key, jitted_create_batch, 0, config)
+    evaluate_agent(agent, key, jitted_create_batch, 0, config, eval_env_cache)
     save_agent(agent, config, save_dir=run_directory, epoch=0)
 
     for epoch in range(config.exp.epochs):
         for _ in range(config.exp.intervals_per_epoch):
             buffer_state, agent, key = train_interval(buffer_state, agent, key)
 
-        evaluate_agent(agent, key, jitted_create_batch, epoch + 1, config)
+        evaluate_agent(agent, key, jitted_create_batch, epoch + 1, config, eval_env_cache)
         save_agent(agent, config, save_dir=run_directory, epoch=epoch + 1)
 
 
