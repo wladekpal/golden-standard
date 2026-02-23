@@ -20,6 +20,7 @@ dependencies = [
     "tyro>=0.9.26",
     "wandb>=0.19.11",
     "xminigrid>=0.9.1",
+    "brax==0.12.1",
 ]
 
 [dependency-groups]

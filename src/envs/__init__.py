@@ -4,6 +4,8 @@ from .block_moving.env_types import BoxMovingConfig
 from flax.struct import dataclass
 import tyro
 from dataclasses import asdict
+from .arm_envs.arm_envs import ArmEnvsConfig
+from .arm_envs.arm_push import ArmPushEasy
 
 
 # TODO: this is needed, because otherwise tyro doesn't treat legal_envs union as union, but a simple type
@@ -15,6 +17,7 @@ class DummyEnv:
 
 legal_envs = Union[
     Annotated[BoxMovingConfig, tyro.conf.subcommand(name="box_moving")],
+    Annotated[ArmEnvsConfig, tyro.conf.subcommand(name="arm_push")],
     Annotated[DummyEnv, tyro.conf.subcommand(name="dummy")],
 ]
 
@@ -22,5 +25,7 @@ legal_envs = Union[
 def create_env(env_config: legal_envs):
     if isinstance(env_config, BoxMovingConfig):
         return BoxMovingEnv(**asdict(env_config))
+    elif isinstance(env_config, ArmEnvsConfig):
+        return ArmPushEasy(**asdict(env_config))
     else:
         raise ValueError(f"Unknown environment type {type(env_config)}")
