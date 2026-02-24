@@ -17,6 +17,9 @@ from impls.agents import create_agent
 from envs.block_moving.block_moving_env import BoxMovingEnv
 from envs.block_moving.wrappers import wrap_for_eval, wrap_for_training
 from envs.block_moving.env_types import TimeStep, remove_targets
+from envs.arm_envs.arm_envs import ArmEnvsConfig
+from envs.arm_envs.wrappers import arm_wrap_for_eval, arm_wrap_for_training
+from envs.arm_envs.env_types import ArmTimeStep
 from config import ROOT_DIR
 from impls.utils.checkpoints import save_agent
 from utils import log_gif, sample_actions_critic
@@ -152,6 +155,132 @@ def create_batch(
         "actor_goals": actor_goals.reshape(actor_goals.shape[0], -1),
     }
     return batch
+
+
+@functools.partial(jax.jit, static_argnums=(2, 3, 4))
+def collect_data_arm(agent, key, env, num_envs, episode_length):
+    """Collect rollouts for arm environments."""
+
+    def step_fn(carry, _):
+        state, key = carry
+        key, sample_key = jax.random.split(key)
+
+        # Split observation into state and goal components.
+        obs_all = state.obs  # (num_envs, obs_dim)
+        obs = obs_all[:, : env.state_dim]
+        goal = obs_all[:, env.state_dim :]
+
+        actions = agent.sample_actions(obs, goal, seed=sample_key)
+        new_state = env.step(state, actions)
+
+        timestep = ArmTimeStep(
+            obs=obs,
+            action=actions,
+            goal=goal,
+            reward=new_state.reward,
+            success=new_state.metrics["success"],
+            done=new_state.done,
+            truncated=new_state.info["truncated"],
+            steps=state.info["steps"],
+        )
+        return (new_state, key), timestep
+
+    keys = jax.random.split(key, num_envs)
+    state = env.reset(keys)
+    (_, _), timesteps_all = jax.lax.scan(step_fn, (state, key), (), length=episode_length)
+    return timesteps_all
+
+
+def create_batch_arm(
+    timesteps,
+    key,
+    gamma,
+    jitted_flatten_batch,
+    state_dim,
+    goal_indices,
+    completion_goal_indices,
+    goal_reach_thresh,
+    use_discounted_mc_rewards=False,
+):
+    """Create training batch for arm environments."""
+
+    batch_key = key
+    batch_keys = jax.random.split(batch_key, timesteps.obs.shape[0])
+    state, next_state, future_state, goal_index = jitted_flatten_batch(
+        gamma, use_discounted_mc_rewards, timesteps, batch_keys
+    )
+
+    # Observations and goals.
+    obs = state.obs
+    next_obs = next_state.obs
+    goals = future_state.goal
+
+    # Reward: recompute as goal-reaching indicator.
+    current_pos = obs[..., completion_goal_indices]
+    target_pos = goals[..., : current_pos.shape[-1]]
+    dist = jnp.linalg.norm(current_pos - target_pos, axis=-1)
+    reward = (dist < goal_reach_thresh).astype(jnp.float32)
+
+    actions = state.action
+
+    # Flatten env and time dimensions into a single batch.
+    batch_size = obs.shape[0] * obs.shape[1]
+
+    obs_flat = obs.reshape(batch_size, -1)
+    next_obs_flat = next_obs.reshape(batch_size, -1)
+    actions_flat = actions.reshape(batch_size, -1)
+    reward_flat = reward.reshape(batch_size)
+    value_goals_flat = goals.reshape(batch_size, -1)
+    actor_goals_flat = value_goals_flat
+
+    batch = {
+        "observations": obs_flat,
+        "next_observations": next_obs_flat,
+        "actions": actions_flat,
+        "rewards": reward_flat,
+        "masks": jnp.ones_like(reward_flat),
+        "value_goals": value_goals_flat,
+        "actor_goals": actor_goals_flat,
+    }
+    return batch
+
+
+def evaluate_agent_arm(agent, key, jitted_create_batch_arm, epoch, config):
+    """Evaluate agent in an arm environment."""
+
+    env_eval = create_env(config.env)
+    env_eval = arm_wrap_for_eval(env_eval)
+    env_eval.step = jax.jit(jax.vmap(env_eval.step))
+    env_eval.reset = jax.jit(jax.vmap(env_eval.reset))
+
+    data_key, batch_key = jax.random.split(key, 2)
+    timesteps = collect_data_arm(
+        agent,
+        data_key,
+        env_eval,
+        config.exp.num_envs,
+        config.env.episode_length,
+    )
+    # timesteps: (episode_length, num_envs, ...)
+    timesteps = jax.tree_util.tree_map(lambda x: x.swapaxes(1, 0), timesteps)
+
+    valid_batch = jitted_create_batch_arm(timesteps, batch_key)
+    loss, loss_info = agent.total_loss(valid_batch, None)
+
+    # For now, aggregate rewards and successes over the final timestep of each env.
+    final_rewards = timesteps.reward[:, -1]
+    final_success = timesteps.success[:, -1]
+
+    eval_info = {
+        "eval_arm/mean_reward": final_rewards.mean(),
+        "eval_arm/min_reward": final_rewards.min(),
+        "eval_arm/max_reward": final_rewards.max(),
+        "eval_arm/mean_success": final_success.mean(),
+        "eval_arm/total_loss": loss,
+    }
+
+    wandb.log({"epoch": epoch, **eval_info, **loss_info})
+    return eval_info, loss_info
 
 
 def evaluate_agent_in_specific_env(agent, key, jitted_create_batch, config, name, create_gif=False, critic_temp=None):
@@ -307,78 +436,157 @@ def train(config: Config):
     os.makedirs(run_directory, exist_ok=True)
 
     # Create environment and batch functions
-    env = create_env(config.env)
-    env = wrap_for_training(config, env)
-    key = random.PRNGKey(config.exp.seed)
-    env.step = jax.jit(jax.vmap(env.step))
-    env.reset = jax.jit(jax.vmap(env.reset))
-    jitted_flatten_batch = jax.jit(jax.vmap(flatten_batch, in_axes=(None, None, 0, 0)), static_argnums=(0, 1))
-    jitted_create_batch = functools.partial(
-        create_batch,
-        gamma=config.exp.gamma,
-        use_targets=config.exp.use_targets,
-        use_future_and_random_goals=config.exp.use_future_and_random_goals,
-        jitted_flatten_batch=jitted_flatten_batch,
-        use_discounted_mc_rewards=config.agent.use_discounted_mc_rewards,
-    )
+    is_arm = isinstance(config.env, ArmEnvsConfig)
 
-    # Create replay buffer and agent
-    dummy_timestep = env.get_dummy_timestep(key)
-
-    replay_buffer = jit_wrap(
-        TrajectoryUniformSamplingQueue(
-            max_replay_size=config.exp.max_replay_size,
-            dummy_data_sample=dummy_timestep,
-            sample_batch_size=config.exp.batch_size,
-            num_envs=config.exp.num_envs,
-            episode_length=config.env.episode_length,
-        )
-    )
-    buffer_state = jax.jit(replay_buffer.init)(key)
-
-    example_batch = {
-        "observations": dummy_timestep.grid.reshape(1, -1),  # Add batch dimension
-        "next_observations": dummy_timestep.grid.reshape(1, -1),
-        "actions": jnp.ones((1,), dtype=jnp.int8)
-        * (env._env.action_space - 1),  # it should be the maximal value of action space
-        "rewards": jnp.ones((1,), dtype=jnp.float32),
-        "masks": jnp.ones((1,), dtype=jnp.int8),
-        "value_goals": dummy_timestep.grid.reshape(1, -1),
-        "actor_goals": dummy_timestep.grid.reshape(1, -1),
-    }
-    agent = create_agent(config.agent, example_batch, config.exp.seed)
-
-    @jax.jit
-    def update_step(carry, _):
-        buffer_state, agent, key = carry
-        key, batch_key = jax.random.split(key, 2)
-        buffer_state, transitions = replay_buffer.sample(buffer_state)
-        batch = jitted_create_batch(transitions, batch_key)
-        agent, update_info = agent.update(batch)
-        return (buffer_state, agent, key), update_info
-
-    @jax.jit
-    def train_interval(buffer_state, agent, key):
-        key, data_key, up_key = jax.random.split(key, 3)
-        _, _, timesteps = collect_data(
-            agent, data_key, env, config.exp.num_envs, config.env.episode_length, use_targets=config.exp.use_targets
+    if is_arm:
+        env = create_env(config.env)
+        env = arm_wrap_for_training(env)
+        key = random.PRNGKey(config.exp.seed)
+        env.step = jax.jit(jax.vmap(env.step))
+        env.reset = jax.jit(jax.vmap(env.reset))
+        jitted_flatten_batch = jax.jit(jax.vmap(flatten_batch, in_axes=(None, None, 0, 0)), static_argnums=(0, 1))
+        jitted_create_batch_arm = functools.partial(
+            create_batch_arm,
+            gamma=config.exp.gamma,
+            jitted_flatten_batch=jitted_flatten_batch,
+            state_dim=env.state_dim,
+            goal_indices=env.goal_indices,
+            completion_goal_indices=env.completion_goal_indices,
+            goal_reach_thresh=env.goal_reach_thresh,
+            use_discounted_mc_rewards=config.agent.use_discounted_mc_rewards,
         )
 
-        buffer_state = replay_buffer.insert(buffer_state, timesteps)
-        (buffer_state, agent, _), _ = jax.lax.scan(
-            update_step, (buffer_state, agent, up_key), None, length=config.exp.updates_per_rollout
-        )
-        return buffer_state, agent, key
+        # Create replay buffer and agent
+        dummy_timestep = env.get_dummy_arm_timestep(key)
 
-    # Main training loop with evaluation
-    evaluate_agent(agent, key, jitted_create_batch, 0, config)
+        replay_buffer = jit_wrap(
+            TrajectoryUniformSamplingQueue(
+                max_replay_size=config.exp.max_replay_size,
+                dummy_data_sample=dummy_timestep,
+                sample_batch_size=config.exp.batch_size,
+                num_envs=config.exp.num_envs,
+                episode_length=config.env.episode_length,
+            )
+        )
+        buffer_state = jax.jit(replay_buffer.init)(key)
+
+        example_batch = {
+            "observations": dummy_timestep.obs.reshape(1, -1),
+            "next_observations": dummy_timestep.obs.reshape(1, -1),
+            "actions": jnp.zeros((1, env.action_size), dtype=jnp.float32),
+            "rewards": jnp.ones((1,), dtype=jnp.float32),
+            "masks": jnp.ones((1,), dtype=jnp.int8),
+            "value_goals": dummy_timestep.goal.reshape(1, -1),
+            "actor_goals": dummy_timestep.goal.reshape(1, -1),
+        }
+        agent = create_agent(config.agent, example_batch, config.exp.seed)
+    else:
+        env = create_env(config.env)
+        env = wrap_for_training(config, env)
+        key = random.PRNGKey(config.exp.seed)
+        env.step = jax.jit(jax.vmap(env.step))
+        env.reset = jax.jit(jax.vmap(env.reset))
+        jitted_flatten_batch = jax.jit(jax.vmap(flatten_batch, in_axes=(None, None, 0, 0)), static_argnums=(0, 1))
+        jitted_create_batch = functools.partial(
+            create_batch,
+            gamma=config.exp.gamma,
+            use_targets=config.exp.use_targets,
+            use_future_and_random_goals=config.exp.use_future_and_random_goals,
+            jitted_flatten_batch=jitted_flatten_batch,
+            use_discounted_mc_rewards=config.agent.use_discounted_mc_rewards,
+        )
+
+        # Create replay buffer and agent
+        dummy_timestep = env.get_dummy_timestep(key)
+
+        replay_buffer = jit_wrap(
+            TrajectoryUniformSamplingQueue(
+                max_replay_size=config.exp.max_replay_size,
+                dummy_data_sample=dummy_timestep,
+                sample_batch_size=config.exp.batch_size,
+                num_envs=config.exp.num_envs,
+                episode_length=config.env.episode_length,
+            )
+        )
+        buffer_state = jax.jit(replay_buffer.init)(key)
+
+        example_batch = {
+            "observations": dummy_timestep.grid.reshape(1, -1),  # Add batch dimension
+            "next_observations": dummy_timestep.grid.reshape(1, -1),
+            "actions": jnp.ones((1,), dtype=jnp.int8)
+            * (env._env.action_space - 1),  # it should be the maximal value of action space
+            "rewards": jnp.ones((1,), dtype=jnp.float32),
+            "masks": jnp.ones((1,), dtype=jnp.int8),
+            "value_goals": dummy_timestep.grid.reshape(1, -1),
+            "actor_goals": dummy_timestep.grid.reshape(1, -1),
+        }
+        agent = create_agent(config.agent, example_batch, config.exp.seed)
+
+    if is_arm:
+
+        @jax.jit
+        def update_step(carry, _):
+            buffer_state, agent, key = carry
+            key, batch_key = jax.random.split(key, 2)
+            buffer_state, transitions = replay_buffer.sample(buffer_state)
+            batch = jitted_create_batch_arm(transitions, batch_key)
+            agent, update_info = agent.update(batch)
+            return (buffer_state, agent, key), update_info
+
+        @jax.jit
+        def train_interval(buffer_state, agent, key):
+            key, data_key, up_key = jax.random.split(key, 3)
+            timesteps = collect_data_arm(agent, data_key, env, config.exp.num_envs, config.env.episode_length)
+
+            buffer_state = replay_buffer.insert(buffer_state, timesteps)
+            (buffer_state, agent, _), _ = jax.lax.scan(
+                update_step, (buffer_state, agent, up_key), None, length=config.exp.updates_per_rollout
+            )
+            return buffer_state, agent, key
+
+        # Main training loop with evaluation for arm envs
+        evaluate_agent_arm(agent, key, jitted_create_batch_arm, 0, config)
+    else:
+
+        @jax.jit
+        def update_step(carry, _):
+            buffer_state, agent, key = carry
+            key, batch_key = jax.random.split(key, 2)
+            buffer_state, transitions = replay_buffer.sample(buffer_state)
+            batch = jitted_create_batch(transitions, batch_key)
+            agent, update_info = agent.update(batch)
+            return (buffer_state, agent, key), update_info
+
+        @jax.jit
+        def train_interval(buffer_state, agent, key):
+            key, data_key, up_key = jax.random.split(key, 3)
+            _, _, timesteps = collect_data(
+                agent,
+                data_key,
+                env,
+                config.exp.num_envs,
+                config.env.episode_length,
+                use_targets=config.exp.use_targets,
+            )
+
+            buffer_state = replay_buffer.insert(buffer_state, timesteps)
+            (buffer_state, agent, _), _ = jax.lax.scan(
+                update_step, (buffer_state, agent, up_key), None, length=config.exp.updates_per_rollout
+            )
+            return buffer_state, agent, key
+
+        # Main training loop with evaluation for grid envs
+        evaluate_agent(agent, key, jitted_create_batch, 0, config)
     save_agent(agent, config, save_dir=run_directory, epoch=0)
 
     for epoch in range(config.exp.epochs):
         for _ in range(config.exp.intervals_per_epoch):
             buffer_state, agent, key = train_interval(buffer_state, agent, key)
 
-        evaluate_agent(agent, key, jitted_create_batch, epoch + 1, config)
+        if is_arm:
+            evaluate_agent_arm(agent, key, jitted_create_batch_arm, epoch + 1, config)
+        else:
+            evaluate_agent(agent, key, jitted_create_batch, epoch + 1, config)
         save_agent(agent, config, save_dir=run_directory, epoch=epoch + 1)
 
 

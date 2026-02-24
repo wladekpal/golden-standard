@@ -212,7 +212,8 @@ def flatten_batch(gamma, get_mc_discounted_rewards, transition, sample_key):
         discounted_rewards = get_discounted_rewards(steps.squeeze(), rewards.squeeze(), gamma)
         transition = transition.replace(reward=discounted_rewards)
 
-    seq_len = transition.grid.shape[0]
+    # Sequence length along time axis; works for both grid and arm timesteps.
+    seq_len = jax.tree_util.tree_leaves(transition)[0].shape[0]
     arrangement = jnp.arange(seq_len)
     is_future_mask = jnp.array(
         arrangement[:, None] < arrangement[None], dtype=jnp.float32

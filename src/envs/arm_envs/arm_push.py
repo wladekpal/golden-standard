@@ -3,6 +3,7 @@ from brax import base
 from jax import numpy as jnp
 
 from .arm_envs import ArmEnvs
+from .generators import DefaultPushLevelGenerator
 
 """
 Push-Easy: Move a cube from a random location on the blue region to a random goal on the adjacent red region. The regions are very small.
@@ -35,28 +36,12 @@ class ArmPushEasy(ArmEnvs):
         self.cube_noise_scale = 0.1
         self.goal_noise_scale = 0.1
 
-    def _get_initial_state(self, rng):
-        rng, subkey1, subkey2 = jax.random.split(rng, 3)
-        cube_q_xy = self.sys.init_q[:2] + self.cube_noise_scale * jax.random.uniform(subkey1, [2], minval=-1)
-        cube_q_remaining = self.sys.init_q[2:7]
-        target_q = self.sys.init_q[7:14]
-        arm_q_default = jnp.array(
-            [1.571, 0.742, 0, -1.571, 0, 3.054, 1.449, 0.04, 0.04]
-        )  # Start closer to the relevant area
-        arm_q = arm_q_default + self.arm_noise_scale * jax.random.uniform(
-            subkey2, [self.sys.q_size() - 14], minval=-1
+    def _create_level_generator(self):
+        return DefaultPushLevelGenerator(
+            arm_noise_scale=self.arm_noise_scale,
+            cube_noise_scale=self.cube_noise_scale,
+            goal_noise_scale=self.goal_noise_scale,
         )
-
-        q = jnp.concatenate([cube_q_xy] + [cube_q_remaining] + [target_q] + [arm_q])
-        qd = jnp.zeros([self.sys.qd_size()])
-        return q, qd
-
-    def _get_initial_goal(self, pipeline_state: base.State, rng):
-        rng, subkey = jax.random.split(rng)
-        cube_goal_pos = jnp.array([0.1, 0.6, 0.03]) + jnp.array(
-            [self.goal_noise_scale, self.goal_noise_scale, 0]
-        ) * jax.random.uniform(subkey, [3], minval=-1)
-        return cube_goal_pos
 
     def _compute_goal_completion(self, obs, goal):
         # Goal occupancy: is the cube close enough to the goal?
@@ -102,9 +87,7 @@ class ArmPushEasy(ArmEnvs):
             (pipeline_state.qfrc_actuator[:-2]).mean(keepdims=True) * 0.1
         )  # Normalize it from range [-20, 20] to [-2, 2]
 
-        return jnp.concatenate(
-            [q_subset] + [eef_x_pos] + [eef_xd_vel] + [finger_distance] + [gripper_force] + [goal]
-        )
+        return jnp.concatenate([q_subset] + [eef_x_pos] + [eef_xd_vel] + [finger_distance] + [gripper_force] + [goal])
 
     def _get_arm_angles(self, pipeline_state: base.State) -> jax.Array:
         q_indices = jnp.arange(14, 21)

@@ -7,8 +7,6 @@ requires-python = ">=3.11"
 dependencies = [
     "distrax>=0.1.5",
     "flax>=0.8.4",
-    "jax[cuda12]>=0.4.26; platform_system != 'Darwin'",
-    "jax>=0.4.26; platform_system == 'Darwin'",
     "matplotlib>=3.10.3",
     "ml-collections>=1.1.0",
     "moviepy>=2.2.1",
@@ -19,8 +17,10 @@ dependencies = [
     "tqdm>=4.67.1",
     "tyro>=0.9.26",
     "wandb>=0.19.11",
-    "xminigrid>=0.9.1",
     "brax==0.12.1",
+    "mujoco==3.2.7",
+    "mujoco-mjx==3.2.7",
+    "jax[cuda12]==0.4.26",
 ]
 
 [dependency-groups]
@@ -30,6 +30,9 @@ dev = [
     "seaborn>=0.13.2",
     "umap-learn>=0.5.9.post2",
 ]
+
+[tool.uv]
+find-links = [ "https://storage.googleapis.com/jax-releases/jax_cuda_releases.html" ]
 
 [tool.ruff]
 # Max line length for linting and formatting

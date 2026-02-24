@@ -5,14 +5,17 @@ from brax.io import mjcf
 from jax import numpy as jnp
 from dataclasses import dataclass
 
+
 @dataclass
 class ArmEnvsConfig:
-    pass
+    episode_length: int = 150
+
 
 class ArmEnvs(PipelineEnv):
     def __init__(self, backend="mjx", **kwargs):
         # Configure environment information (e.g. env name, noise scale, observation dimension, goal indices) and load XML
         self._set_environment_attributes()
+        self.level_generator = self._create_level_generator()
         xml_path = self._get_xml_path()
         sys = mjcf.load(xml_path)
 
@@ -26,6 +29,9 @@ class ArmEnvs(PipelineEnv):
         )
         self.n_frames = 25
         kwargs["n_frames"] = kwargs.get("n_frames", self.n_frames)
+        config_episode_length = kwargs.pop("episode_length", None)
+        if config_episode_length is not None:
+            self.episode_length = config_episode_length
 
         # Initialize brax PipelineEnv
         if backend != "mjx":
@@ -37,20 +43,18 @@ class ArmEnvs(PipelineEnv):
 
         # Initialize simulator state
         rng, subkey = jax.random.split(rng)
-        q, qd = self._get_initial_state(subkey)  # Injects noise to avoid overfitting/open loop control
+        q, qd = self.level_generator.generate_initial_state(self.sys, subkey)
         pipeline_state = self.pipeline_init(q, qd)
         timestep = 0.0
 
         # Sample a goal and fill info variable
         rng, subkey1, subkey2 = jax.random.split(rng, 3)
-        goal = self._get_initial_goal(pipeline_state, subkey1)
+        goal = self.level_generator.generate_goal(pipeline_state, subkey1)
         pipeline_state = self._update_goal_visualization(pipeline_state, goal)
         info = {
             "goal": goal,
             "timestep": 0.0,
-            "postexplore_timestep": jax.random.uniform(
-                subkey2
-            ),  # Assumes timestep is normalized between 0 and 1
+            "postexplore_timestep": jax.random.uniform(subkey2),  # Assumes timestep is normalized between 0 and 1
         }
 
         # Get components for state (observation, reward, metrics)
@@ -68,9 +72,7 @@ class ArmEnvs(PipelineEnv):
             action = self._convert_action_to_actuator_input_EEF(pipeline_state0, action)
         else:
             arm_angles = self._get_arm_angles(pipeline_state0)
-            action = self._convert_action_to_actuator_input_joint_angle(
-                action, arm_angles, delta_control=False
-            )
+            action = self._convert_action_to_actuator_input_joint_angle(action, arm_angles, delta_control=False)
 
         pipeline_state = self.pipeline_step(pipeline_state0, action)
 
@@ -93,9 +95,7 @@ class ArmEnvs(PipelineEnv):
             left_finger_goal_pos = cube_pos + jnp.array([0.0375, 0, 0])
             right_finger_goal_pos = cube_pos + jnp.array([-0.0375, 0, 0])
             adjusted_goal = (
-                state.info["goal"]
-                .at[:6]
-                .set(jnp.concatenate([left_finger_goal_pos] + [right_finger_goal_pos]))
+                state.info["goal"].at[:6].set(jnp.concatenate([left_finger_goal_pos] + [right_finger_goal_pos]))
             )
             new_state = self.update_goal(new_state, adjusted_goal)
 
@@ -174,9 +174,7 @@ class ArmEnvs(PipelineEnv):
 
         return converted_action
 
-    def _convert_action_to_actuator_input_EEF(
-        self, pipeline_state: base.State, action: jax.Array
-    ) -> jax.Array:
+    def _convert_action_to_actuator_input_EEF(self, pipeline_state: base.State, action: jax.Array) -> jax.Array:
         eef_index = 2
         current_position = pipeline_state.x.pos[eef_index]
         delta_range = 0.2  # Unlike arm angle control which is more complex, if this number is 0.2, an action of +/- 1 simply targets +/- 0.2 distance in position
@@ -210,10 +208,8 @@ class ArmEnvs(PipelineEnv):
         """
         raise NotImplementedError
 
-    def _get_initial_state(self, rng):
-        raise NotImplementedError
-
-    def _get_initial_goal(self, pipeline_state: base.State, rng):
+    def _create_level_generator(self):
+        """Create the level generator that controls starting state and goal distributions."""
         raise NotImplementedError
 
     def _compute_goal_completion(self, obs, goal):
