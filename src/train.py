@@ -16,21 +16,14 @@ from jax import random
 from impls.agents import create_agent
 from envs.block_moving.block_moving_env import BoxMovingEnv
 from envs.block_moving.wrappers import wrap_for_eval, wrap_for_training
-from envs.block_moving.env_types import TimeStep, remove_targets, GridStatesEnum
+from envs.block_moving.env_types import TimeStep, remove_targets
 from config import ROOT_DIR
 from impls.utils.checkpoints import save_agent
+from impls.utils.input_features import encode_grid_inputs
 from utils import log_gif, calculate_params
 
-
-GRID_STATE_NORMALIZER = jnp.float32(int(GridStatesEnum.AGENT_ON_BOX_CARRYING_BOX))
-
-
-def normalize_grid_inputs(grid):
-    return grid.astype(jnp.float32) / GRID_STATE_NORMALIZER
-
-
-@functools.partial(jax.jit, static_argnums=(2, 3, 4, 5))
-def collect_data(agent, key, env, num_envs, episode_length, use_targets=False):
+@functools.partial(jax.jit, static_argnums=(2, 3, 4, 5, 6))
+def collect_data(agent, key, env, num_envs, episode_length, use_targets=False, input_representation="normalized_flat"):
     def step_fn(carry, step_num):
         state, info, key = carry
         key, sample_key = jax.random.split(key)
@@ -43,8 +36,8 @@ def collect_data(agent, key, env, num_envs, episode_length, use_targets=False):
         )
 
         actions = agent.sample_actions(
-            normalize_grid_inputs(state_agent.grid).reshape(num_envs, -1),
-            normalize_grid_inputs(state_agent.goal).reshape(num_envs, -1),
+            encode_grid_inputs(state_agent.grid, input_representation),
+            encode_grid_inputs(state_agent.goal, input_representation),
             seed=sample_key,
         )
 
@@ -100,6 +93,7 @@ def create_batch(
     use_future_and_random_goals,
     jitted_flatten_batch,
     use_discounted_mc_rewards=False,
+    input_representation="normalized_flat",
 ):
     batch_key, sampling_key = jax.random.split(key, 2)
     batch_keys = jax.random.split(batch_key, timesteps.grid.shape[0])
@@ -143,13 +137,13 @@ def create_batch(
 
     # Create valid batch
     batch = {
-        "observations": normalize_grid_inputs(state.grid).reshape(state.grid.shape[0], -1),
-        "next_observations": normalize_grid_inputs(next_state.grid).reshape(next_state.grid.shape[0], -1),
+        "observations": encode_grid_inputs(state.grid, input_representation),
+        "next_observations": encode_grid_inputs(next_state.grid, input_representation),
         "actions": actions.squeeze(),
         "rewards": reward.reshape(reward.shape[0], -1).squeeze(),
         "masks": jnp.ones_like(reward.reshape(reward.shape[0], -1).squeeze()),  # Bootstrap always
-        "value_goals": normalize_grid_inputs(value_goals).reshape(value_goals.shape[0], -1),
-        "actor_goals": normalize_grid_inputs(actor_goals).reshape(actor_goals.shape[0], -1),
+        "value_goals": encode_grid_inputs(value_goals, input_representation),
+        "actor_goals": encode_grid_inputs(actor_goals, input_representation),
     }
     return batch
 
@@ -167,6 +161,7 @@ def evaluate_agent_in_specific_env(agent, key, jitted_create_batch, config, name
         config.exp.num_envs,
         config.env.episode_length,
         use_targets=config.exp.use_targets,
+        input_representation=config.exp.input_representation,
     )
     timesteps = jax.tree_util.tree_map(lambda x: x.swapaxes(1, 0), timesteps)  # Returns N_envs x episode_length x ...
 
@@ -326,6 +321,7 @@ def train(config: Config):
         use_future_and_random_goals=config.exp.use_future_and_random_goals,
         jitted_flatten_batch=jitted_flatten_batch,
         use_discounted_mc_rewards=config.agent.use_discounted_mc_rewards,
+        input_representation=config.exp.input_representation,
     )
 
     # Create replay buffer and agent
@@ -343,14 +339,14 @@ def train(config: Config):
     buffer_state = jax.jit(replay_buffer.init)(key)
 
     example_batch = {
-        "observations": normalize_grid_inputs(dummy_timestep.grid).reshape(1, -1),  # Add batch dimension
-        "next_observations": normalize_grid_inputs(dummy_timestep.grid).reshape(1, -1),
+        "observations": encode_grid_inputs(dummy_timestep.grid[None, ...], config.exp.input_representation),
+        "next_observations": encode_grid_inputs(dummy_timestep.grid[None, ...], config.exp.input_representation),
         "actions": jnp.ones((1,), dtype=jnp.int8)
         * (env._env.action_space - 1),  # it should be the maximal value of action space
         "rewards": jnp.ones((1,), dtype=jnp.float32),
         "masks": jnp.ones((1,), dtype=jnp.int8),
-        "value_goals": normalize_grid_inputs(dummy_timestep.grid).reshape(1, -1),
-        "actor_goals": normalize_grid_inputs(dummy_timestep.grid).reshape(1, -1),
+        "value_goals": encode_grid_inputs(dummy_timestep.grid[None, ...], config.exp.input_representation),
+        "actor_goals": encode_grid_inputs(dummy_timestep.grid[None, ...], config.exp.input_representation),
     }
     calculate_params(example_batch, config)
     agent = create_agent(config.agent, example_batch, config.exp.seed)
@@ -369,7 +365,13 @@ def train(config: Config):
     def train_interval(buffer_state, agent, key):
         key, data_key, up_key = jax.random.split(key, 3)
         _, _, timesteps = collect_data(
-            agent, data_key, env, config.exp.num_envs, config.env.episode_length, use_targets=config.exp.use_targets
+            agent,
+            data_key,
+            env,
+            config.exp.num_envs,
+            config.env.episode_length,
+            use_targets=config.exp.use_targets,
+            input_representation=config.exp.input_representation,
         )
 
         buffer_state = replay_buffer.insert(buffer_state, timesteps)

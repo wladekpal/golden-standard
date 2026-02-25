@@ -6,7 +6,7 @@ GPU_IDS_CSV="${1:-0}"
 grid_size="${2:?Usage: $0 <gpu_ids_csv> <grid_size> <thinking_steps>}"
 
 SEEDS=(1 2 3 4 5)
-MOVING_BOXES_MAX_VALUES=(4 3)
+MOVING_BOXES_MAX_VALUES=(5 6)
 thinking_steps=(2 5 10)
 
 
@@ -72,24 +72,26 @@ run_job() {
     CUDA_VISIBLE_DEVICES="$gpu_id" uv run --active src/train.py \
       env:box-moving \
       --agent.agent_name gcdqn_interp \
-      --exp.name dqn_interp_stabilized_think_${thinking_step}_ts_2_layers_logging_cautious_WD_gr_clip_FILM_new_LN \
+      --exp.name dqn_interp_stabilized_think_${thinking_step}_ts_2_layers_new_emb \
       --env.number_of_boxes_max "$number_of_moving_boxes_max" \
       --env.number_of_boxes_min "$number_of_moving_boxes_max" \
       --env.number_of_moving_boxes_max "$number_of_moving_boxes_max" \
       --env.grid_size "$grid_size" \
       --exp.gamma 0.99 \
-      --env.episode_length 100 \
+      --env.episode_length 150 \
       --exp.seed "$seed" \
       --exp.project "dqn_interp_exact" \
       --exp.epochs 50 \
       --exp.gif_every 10 \
       --agent.alpha 0.1 \
+      --exp.num_envs 512 \
       --exp.max_replay_size 10000 \
       --exp.batch_size 256 \
       --exp.use_future_and_random_goals \
       --exp.eval_special \
       --agent.thinking_steps "$thinking_step" \
-      --env.level_generator variable 
+      --env.level_generator variable \
+      --exp.input_representation one_hot_semantic_flat
   )
 }
 

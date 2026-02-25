@@ -32,6 +32,7 @@ class ExpConfig:
     use_targets: bool = False
     gamma: float = 0.99
     use_future_and_random_goals: bool = False  # noqa: E501 Whether to use environment goals, default - geometric sampling of future states
+    input_representation: Literal["normalized_flat", "one_hot_flat", "one_hot_semantic_flat"] = "normalized_flat"
 
     # Evaluation settings
     eval_different_box_numbers: bool = False
