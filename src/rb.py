@@ -3,8 +3,8 @@ import flax.struct
 import jax
 from jax import flatten_util
 import jax.numpy as jnp
-from envs import BoxPushingEnv
-from envs.block_moving_env import remove_targets
+from envs.block_moving.block_moving_env import BoxMovingEnv
+from envs.block_moving.env_types import remove_targets
 
 
 @flax.struct.dataclass
@@ -213,7 +213,7 @@ def relabel_based_on_goal(transition, goal_to_relabel):
     next_grid = jax.vmap(remove_targets, in_axes=(0))(next_grid)
     goal_to_relabel = remove_targets(goal_to_relabel)
 
-    reward_fn = jax.vmap(BoxPushingEnv.get_reward, in_axes=(0, 0, None))
+    reward_fn = jax.vmap(BoxMovingEnv.get_reward, in_axes=(0, 0, None))
     rewards = reward_fn(next_grid, next_grid, goal_to_relabel)
 
     # Just to make sure we set reward at start state to 0 (because of roll)
@@ -333,7 +333,7 @@ def flatten_batch(gamma, get_mc_discounted_rewards, use_targets, transition, rol
         # And then we take the reward from the timestep corresponding to the state we sampled
         reward = extract_at_indices(discounted_rewards, random_indices)
     else:
-        reward = BoxPushingEnv.get_reward(state.grid, next_state.grid, value_goals)
+        reward = BoxMovingEnv.get_reward(state.grid, next_state.grid, value_goals)
 
     return state, actions, next_state, value_goals, actor_goals, reward
 
