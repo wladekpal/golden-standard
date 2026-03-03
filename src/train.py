@@ -14,7 +14,8 @@ import jax.numpy as jnp
 from jax import random
 
 from impls.agents import create_agent
-from envs.block_moving_env import wrap_for_eval, wrap_for_training, TimeStep, remove_targets
+from envs.block_moving.wrappers import wrap_for_eval, wrap_for_training
+from envs.block_moving.env_types import TimeStep, remove_targets
 from config import ROOT_DIR
 from impls.utils.checkpoints import save_agent
 from utils import log_gif, sample_actions_critic
@@ -163,7 +164,8 @@ def evaluate_agent_in_specific_env(agent, key, jitted_create_batch, config, name
             {
                 f"{prefix}/critic_loss": loss_info["critic/critic_loss"],
                 f"{prefix}/q_mean": loss_info["critic/q_mean"],
-                f"{prefix}/v_mean": loss_info["value/v_mean"],
+                f"{prefix}/q_min": loss_info["critic/q_min"],
+                f"{prefix}/q_max": loss_info["critic/q_max"],
             }
         )
     elif config.agent.agent_name == "gcdqn":
@@ -200,7 +202,7 @@ def evaluate_agent(agent, key, jitted_create_batch, epoch, config):
     eval_names_suff = [""]
 
     eval_info = {"epoch": epoch}
-    create_gif = epoch > 0 and epoch % config.exp.gif_every == 0
+    create_gif = epoch > 0 and epoch % config.exp.gif_every == 0 and config.exp.num_gifs > 0
 
     if config.exp.eval_special:
         special_config = copy.deepcopy(config)

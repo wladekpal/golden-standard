@@ -1,5 +1,6 @@
 from typing import Union, Annotated
-from .block_moving_env import BoxPushingConfig, BoxPushingEnv
+from .block_moving.block_moving_env import BoxMovingEnv
+from .block_moving.env_types import BoxMovingConfig
 from flax.struct import dataclass
 import tyro
 from dataclasses import asdict
@@ -13,13 +14,13 @@ class DummyEnv:
 
 
 legal_envs = Union[
-    Annotated[BoxPushingConfig, tyro.conf.subcommand(name="box_pushing")],
+    Annotated[BoxMovingConfig, tyro.conf.subcommand(name="box_moving")],
     Annotated[DummyEnv, tyro.conf.subcommand(name="dummy")],
 ]
 
 
 def create_env(env_config: legal_envs):
-    if isinstance(env_config, BoxPushingConfig):
-        return BoxPushingEnv(**asdict(env_config))
+    if isinstance(env_config, BoxMovingConfig):
+        return BoxMovingEnv(**asdict(env_config))
     else:
         raise ValueError(f"Unknown environment type {type(env_config)}")

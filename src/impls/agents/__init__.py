@@ -5,8 +5,6 @@ from impls.agents.dqn import GCDQNAgent
 from impls.agents.gcbc import GCBCAgent
 from impls.agents.gciql import GCIQLAgent
 from impls.agents.gciql_search import GCIQLSearchAgent
-from impls.agents.gcivl import GCIVLAgent
-from impls.agents.hiql import HIQLAgent
 from impls.agents.qrl import QRLAgent
 from impls.agents.sac import SACAgent
 import ml_collections
@@ -15,8 +13,6 @@ agents = dict(
     crl=CRLAgent,
     gcbc=GCBCAgent,
     gciql=GCIQLAgent,
-    gcivl=GCIVLAgent,
-    hiql=HIQLAgent,
     qrl=QRLAgent,
     sac=SACAgent,
 )
@@ -48,7 +44,7 @@ default_config = ml_collections.FrozenConfigDict(
             # Dataset hyperparameters.
             use_next_obs=False, #TODO: This is not used anymore, we should remove it 
             target_entropy_multiplier=0.5,  # Multiplier for the target entropy (used in SAC-like agents).
-            target_entropy=-1.1,  # Default target entropy for SAC-like agents (-ln(|A|/2))
+            target_entropy=-1.1,  # Default target entropy for agents (-ln(|A|/2))
             use_discounted_mc_rewards=False,  # Whether to use discounted Monte Carlo rewards.
             action_sampling='softmax',
             is_td=False,

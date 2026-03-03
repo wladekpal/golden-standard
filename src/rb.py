@@ -238,7 +238,14 @@ def get_single_pair_from_every_env(state, next_state, future_state, goal_index, 
         next_state_single = extract_at_indices(next_state, random_indices)  # (batch_size, grid_size, grid_size)
         future_state_single = extract_at_indices(future_state, random_indices)
         goal_index_single = extract_at_indices(goal_index, random_indices)
-        return random_indices,state_single, state_single.action, next_state_single, future_state_single, goal_index_single
+        return (
+            random_indices,
+            state_single,
+            state_single.action,
+            next_state_single,
+            future_state_single,
+            goal_index_single,
+        )
 
     return single_batch_fn(key)
 
@@ -303,8 +310,6 @@ def flatten_batch(gamma, get_mc_discounted_rewards, use_targets, transition, rol
         next_state = next_state.replace(grid=remove_targets(next_state.grid))
         future_state = future_state.replace(grid=remove_targets(future_state.grid))
 
-    # Here we select one of the rolled grids, which is another rollout from batch, as source of random goals
-    rolled_grids_indices = jax.random.randint(sample_key_3, (1,), minval=0, maxval=rolled_grids.shape[0])
     rolled_grids = extract_at_indices(rolled_grids, random_indices)
 
     # Depending on rolling_mask we use either future or random goals

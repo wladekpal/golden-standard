@@ -3,13 +3,14 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from .block_moving_env import AutoResetWrapper, BoxPushingState
+from .block_moving.wrappers import AutoResetWrapper
+from .block_moving.env_types import BoxMovingState
 
 
 def make_state(key, extras=None, grid_size=4):
     if extras is None:
         extras = {}
-    return BoxPushingState(
+    return BoxMovingState(
         key=key,
         grid=jnp.zeros((grid_size, grid_size), dtype=jnp.int8),
         agent_pos=jnp.array([0, 0], dtype=jnp.int32),
