@@ -204,14 +204,11 @@ def segment_ids_per_row(x: jnp.ndarray) -> jnp.ndarray:
     return jnp.cumsum(resets, axis=-1)
 
 
-def relabel_based_on_goal(transition, goal_to_relabel):
+def relabel_based_on_goal(transition, goal_to_relabel, use_targets=True):
     grid = transition.grid  # (seq_len, grid_size, grid_size)
 
     # We roll states, because we want the future state to be equal to goal
     next_grid = jnp.roll(grid, -1, axis=0)
-
-    next_grid = jax.vmap(remove_targets, in_axes=(0))(next_grid)
-    goal_to_relabel = remove_targets(goal_to_relabel)
 
     reward_fn = jax.vmap(BoxMovingEnv.get_reward, in_axes=(0, 0, None))
     rewards = reward_fn(next_grid, next_grid, goal_to_relabel)
@@ -304,13 +301,14 @@ def flatten_batch(gamma, get_mc_discounted_rewards, use_targets, transition, rol
         goal_index,
         sample_key_2,
     )
+    rolled_grids = extract_at_indices(rolled_grids, random_indices)
 
     if not use_targets:
         state = state.replace(grid=remove_targets(state.grid), goal=remove_targets(state.goal))
         next_state = next_state.replace(grid=remove_targets(next_state.grid))
         future_state = future_state.replace(grid=remove_targets(future_state.grid))
+        rolled_grids = remove_targets(rolled_grids)
 
-    rolled_grids = extract_at_indices(rolled_grids, random_indices)
 
     # Depending on rolling_mask we use either future or random goals
     goals = jax.lax.cond(
@@ -325,7 +323,7 @@ def flatten_batch(gamma, get_mc_discounted_rewards, use_targets, transition, rol
 
     if get_mc_discounted_rewards:
         # When using discounted mc rewards, we first relabel the entire trajectory based on sampled goal,
-        relabeled_rewards = relabel_based_on_goal(transition, value_goals)
+        relabeled_rewards = relabel_based_on_goal(transition, value_goals, use_targets=use_targets)
         steps = transition.steps
 
         # Then we compute discounted rewards for the entire trajectory
