@@ -89,9 +89,11 @@ def create_batch(
     rolled_grids = jnp.roll(timesteps.grid, shift=1, axis=0)
     if use_future_and_random_goals:
         batch_half = timesteps.grid.shape[0] // 2
-        rolling_mask = jnp.concatenate([jnp.ones(batch_half), jnp.zeros(timesteps.grid.shape[0] - batch_half)])
+        rolling_mask = jnp.concatenate(
+            [jnp.ones(batch_half, dtype=jnp.bool), jnp.zeros(timesteps.grid.shape[0] - batch_half, dtype=jnp.bool)]
+        )
     else:
-        rolling_mask = jnp.zeros(timesteps.grid.shape[0])
+        rolling_mask = jnp.zeros(timesteps.grid.shape[0], dtype=jnp.bool)
 
     state, actions, next_state, value_goals, actor_goals, reward = jitted_flatten_batch(
         gamma, use_discounted_mc_rewards, use_targets, timesteps, rolled_grids, rolling_mask, batch_keys

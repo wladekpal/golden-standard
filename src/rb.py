@@ -204,7 +204,7 @@ def segment_ids_per_row(x: jnp.ndarray) -> jnp.ndarray:
     return jnp.cumsum(resets, axis=-1)
 
 
-def relabel_based_on_goal(transition, goal_to_relabel, use_targets=True):
+def relabel_based_on_goal(transition, goal_to_relabel):
     grid = transition.grid  # (seq_len, grid_size, grid_size)
 
     # We roll states, because we want the future state to be equal to goal
@@ -227,7 +227,7 @@ def extract_at_indices(data, indices):
 
 @functools.partial(jax.jit)
 def get_single_pair_from_every_env(state, next_state, future_state, goal_index, key):
-    """Sample two random indices and concatenate the results."""
+    """Sample and extract a single index and concatenate the results."""
 
     def single_batch_fn(key):
         random_indices = jax.random.randint(key, (1,), minval=0, maxval=state.grid.shape[0])
@@ -288,7 +288,7 @@ def flatten_batch(gamma, get_mc_discounted_rewards, use_targets, transition, rol
         lambda x: jnp.take(x, goal_index_next_state[:-1], axis=0), transition
     )  # the last goal_index cannot be considered as there is no future.
 
-    goal_index = jax.random.categorical(sample_key_1, jnp.log(probs))
+    goal_index = jax.random.categorical(sample_key_2, jnp.log(probs))
     future_state = jax.tree_util.tree_map(
         lambda x: jnp.take(x, goal_index[:-1], axis=0), transition
     )  # the last goal_index cannot be considered as there is no future.
@@ -299,7 +299,7 @@ def flatten_batch(gamma, get_mc_discounted_rewards, use_targets, transition, rol
         next_state,
         future_state,
         goal_index,
-        sample_key_2,
+        sample_key_3,
     )
     rolled_grids = extract_at_indices(rolled_grids, random_indices)
 
@@ -308,7 +308,6 @@ def flatten_batch(gamma, get_mc_discounted_rewards, use_targets, transition, rol
         next_state = next_state.replace(grid=remove_targets(next_state.grid))
         future_state = future_state.replace(grid=remove_targets(future_state.grid))
         rolled_grids = remove_targets(rolled_grids)
-
 
     # Depending on rolling_mask we use either future or random goals
     goals = jax.lax.cond(
@@ -323,7 +322,7 @@ def flatten_batch(gamma, get_mc_discounted_rewards, use_targets, transition, rol
 
     if get_mc_discounted_rewards:
         # When using discounted mc rewards, we first relabel the entire trajectory based on sampled goal,
-        relabeled_rewards = relabel_based_on_goal(transition, value_goals, use_targets=use_targets)
+        relabeled_rewards = relabel_based_on_goal(transition, value_goals)
         steps = transition.steps
 
         # Then we compute discounted rewards for the entire trajectory

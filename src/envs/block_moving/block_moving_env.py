@@ -201,14 +201,14 @@ class BoxMovingEnv:
         new_grid: jax.Array,
         goal_grid: jax.Array,
     ) -> jax.Array:
-        # To make it work also when goal and new_grid have different target locations, 
+        # To make it work also when goal and new_grid have different target locations,
         # we first remove targets from both, and then we remove agent.
         new_grid_no_targets = remove_targets(new_grid)
         goal_grid_no_targets = remove_targets(goal_grid)
-        
+
         new_final = _REMOVE_AGENT_ARRAY[new_grid_no_targets]
         goal_final = _REMOVE_AGENT_ARRAY[goal_grid_no_targets]
-        
+
         solved = jnp.all(new_final == goal_final).astype(jnp.float32)
         return solved
 
