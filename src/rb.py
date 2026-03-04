@@ -301,13 +301,14 @@ def flatten_batch(gamma, get_mc_discounted_rewards, use_targets, transition, rol
         goal_index,
         sample_key_2,
     )
+    rolled_grids = extract_at_indices(rolled_grids, random_indices)
 
     if not use_targets:
         state = state.replace(grid=remove_targets(state.grid), goal=remove_targets(state.goal))
         next_state = next_state.replace(grid=remove_targets(next_state.grid))
         future_state = future_state.replace(grid=remove_targets(future_state.grid))
+        rolled_grids = remove_targets(rolled_grids)
 
-    rolled_grids = extract_at_indices(rolled_grids, random_indices)
 
     # Depending on rolling_mask we use either future or random goals
     goals = jax.lax.cond(
