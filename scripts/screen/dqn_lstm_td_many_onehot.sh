@@ -7,7 +7,7 @@ GPU_ID=$1
 exclude_dirs=( ".github" ".ruff_cache" "wandb" ".vscode" ".idea" "__pycache__" ".venv" "experiments" ".git" "notebooks" "runs" "notes" ".pytest")
 
 # Experiment name
-exp_name="dqn_lstm_normalize_test"
+exp_name="dqn_lstm_onehot_test"
 
 # Create the main experiments directory if it doesn't exist
 mkdir -p ./experiments
@@ -49,41 +49,42 @@ echo "Running with grid_size: $grid_size, number_of_boxes_min: $number_of_boxes_
 
 
 number_of_boxes=6
+min_number_of_boxes=6
 grid_size=6
 lstm_hidden_size=1024
 
-# Option 3: Without embeddings + thinking (uses /11 normalization via encoder)
-# This uses gc_encoder with normalize encoder, then thinking steps
+# Option: With one-hot encoding + thinking (aggregate first, then thinking steps)
+# This uses one-hot encoder (gc_encoder=OneHotEncoder), aggregates spatial positions, then thinking steps
 for thinking_steps_test in 1
 do
-    for seed in  2
+    for seed in 1 2
     do
         for number_of_moving_boxes_max in 1
         do
             CUDA_VISIBLE_DEVICES=$GPU_ID uv run --active src/train.py \
-            env:box-moving \
-            --agent.agent_name gcdqn_lstm \
-            --exp.name g${grid_size}_normalize1_b${number_of_boxes}_hidden${lstm_hidden_size}_bs1024_lr1e-4_m${number_of_moving_boxes_max}_t${thinking_steps_test} \
-            --env.number_of_boxes_max ${number_of_boxes} \
-            --env.number_of_boxes_min ${number_of_boxes} \
-            --env.number_of_moving_boxes_max ${number_of_moving_boxes_max} \
-            --env.grid_size ${grid_size} \
-            --exp.gamma 0.99 \
-            --env.episode_length 100 \
-            --exp.seed ${seed} \
-            --exp.project "dqn_lstm_aggregate_test" \
-            --exp.epochs 50 \
-            --exp.gif_every 10 \
-            --agent.alpha 0.1 \
-            --exp.max_replay_size 10000 \
-            --exp.batch_size 1024 \
-            --agent.lr 1e-4 \
-            --exp.use_future_and_random_goals \
-            --exp.eval_different_box_numbers \
-            --agent.thinking_steps ${thinking_steps_test} \
-            --agent.lstm_hidden_size ${lstm_hidden_size} \
-            --agent.encoder normalize \
-            --agent.encoder_normalize_value 1.0
+                env:box-moving \
+                --agent.agent_name gcdqn_lstm \
+                --exp.name g${grid_size}_aggregate_b${number_of_boxes}_bs1024_lr1e-4_UTD500_onehot_hidden${lstm_hidden_size}_m${number_of_moving_boxes_max}_t${thinking_steps_test} \
+                --env.number_of_boxes_max ${number_of_boxes} \
+                --env.number_of_boxes_min ${min_number_of_boxes} \
+                --env.number_of_moving_boxes_max ${number_of_moving_boxes_max} \
+                --env.grid_size ${grid_size} \
+                --exp.gamma 0.99 \
+                --env.episode_length 100 \
+                --exp.seed ${seed} \
+                --exp.project "dqn_lstm_aggregate_test" \
+                --exp.epochs 50 \
+                --exp.gif_every 10 \
+                --agent.alpha 0.1 \
+                --exp.max_replay_size 10000 \
+                --exp.batch_size 1024 \
+                --exp.updates_per_rollout 500 \
+                --agent.lr 1e-4 \
+                --exp.use_future_and_random_goals \
+                --exp.eval_different_box_numbers \
+                --agent.thinking_steps ${thinking_steps_test} \
+                --agent.lstm_hidden_size ${lstm_hidden_size} \
+                --agent.encoder onehot
         done
     done
 done

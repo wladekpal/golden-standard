@@ -1,5 +1,5 @@
 import copy
-from typing import Any, Sequence
+from typing import Any, Optional, Sequence
 
 import distrax
 import flax
@@ -8,7 +8,7 @@ import jax
 import jax.numpy as jnp
 import ml_collections
 import optax
-from impls.utils.encoders import GCEncoder, encoder_modules
+from impls.utils.encoders import GCEncoder, encoder_modules, NormalizeEncoder
 from impls.utils.flax_utils import ModuleDict, TrainState, nonpytree_field
 from impls.utils.networks import GCValue, GCDiscreteActor, default_init, ensemblize, LogParam
 
@@ -34,9 +34,20 @@ class LSTMThinkingCritic(nn.Module):
     layer_norm: bool = True
     pre_layer_norm: bool = True
     num_layers: int = 1
+    cell_embed_dim: int = 8  # Embedding dimension for cell types
+    use_position_embedding: bool = True  # Whether to add positional embeddings
     
     def setup(self):
-        self.input_embed_layer = nn.Dense(self.d_model)
+        # State embedding: maps each grid state (0-11) to a dense vector
+        self.state_embedding = nn.Embed(num_embeddings=12, features=self.cell_embed_dim)
+        # Positional embedding: supports up to 10x10 grid (100 positions)
+        if self.use_position_embedding:
+            self.position_embedding = nn.Embed(num_embeddings=100, features=self.cell_embed_dim)
+        # Project each spatial position: (B, grid_size^2, features) -> (B, grid_size^2, d_model)
+        self.input_proj = nn.Dense(self.d_model)  # Project embedded grid to d_model
+        # Learned aggregation: attention-like mechanism to aggregate spatial positions
+        # This is more expressive than mean pooling but faster than sequential processing
+        self.spatial_aggregator = nn.Dense(1)  # Learn attention weights for each position
         self.pre_ln = nn.LayerNorm()
         self.start_token = self.param(
             'start_token', 
@@ -69,30 +80,81 @@ class LSTMThinkingCritic(nn.Module):
         """
         # Encode inputs
         if self.gc_encoder is not None:
-            inputs = self.gc_encoder(observations, goals)
+            inputs = self.gc_encoder(observations, goals)  # Shape depends on encoder:
+            # - NormalizeEncoder: (B, 2*grid_size^2) = (B, 72) for 6x6 grid
+            # - OneHotEncoder: (B, 2*grid_size^2, num_classes) = (B, 72, 12) for 6x6 grid
+            batch_size = inputs.shape[0]
+
+            # Aggregate first, then thinking steps (original approach)
+            # Flatten spatial dimension if 3D (e.g., OneHotEncoder)
+            if len(inputs.shape) == 3:
+                # (B, spatial, features) -> (B, spatial*features)
+                inputs = inputs.reshape((batch_size, -1))
+            # Concatenate action (one-hot encoded)
+            if actions is not None:
+                inputs = jnp.concatenate([inputs, actions], axis=-1)
+            x_emb = self.input_proj(inputs)
+            if self.pre_layer_norm:
+                x_emb = self.pre_ln(x_emb)
+            x_emb = jnp.expand_dims(x_emb, axis=1)
+            
+            # Create sequence with start token for thinking steps (original approach for gc_encoder)
+            x_first = x_emb + self.start_token
+            if self.thinking_steps > 1:
+                x_rest = jnp.tile(x_emb, (1, self.thinking_steps - 1, 1))
+                x_seq = jnp.concatenate([x_first, x_rest], axis=1)
+            else:
+                x_seq = x_first
         else:
-            inputs = [observations]
-            if goals is not None:
-                inputs.append(goals)
-            inputs = jnp.concatenate(inputs, axis=-1)
-        
-        # Concatenate action (one-hot encoded)
-        if actions is not None:
-            inputs = jnp.concatenate([inputs, actions], axis=-1)
-        
-        # Embed input: (B, d_model) -> (B, 1, d_model)
-        x_emb = self.input_embed_layer(inputs)
-        if self.pre_layer_norm:
-            x_emb = self.pre_ln(x_emb)
-        x_emb = jnp.expand_dims(x_emb, axis=1)
-        
-        # Create sequence with start token for first step
-        x_first = x_emb + self.start_token
-        if self.thinking_steps > 1:
-            x_rest = jnp.tile(x_emb, (1, self.thinking_steps - 1, 1))
-            x_seq = jnp.concatenate([x_first, x_rest], axis=1)
-        else:
-            x_seq = x_first
+            # Use embedding table with positional embeddings (like your working approach)
+            batch_size = observations.shape[0]
+            grid_size_sq = observations.shape[1]  # grid_size^2
+            
+            # State embeddings: (B, grid_size^2) -> (B, grid_size^2, cell_embed_dim)
+            obs_state_emb = self.state_embedding(observations.astype(jnp.int32))
+            goal_state_emb = self.state_embedding(goals.astype(jnp.int32)) if goals is not None else None
+            
+            if self.use_position_embedding:
+                positions = jnp.tile(jnp.arange(grid_size_sq), (batch_size, 1))
+                pos_emb = self.position_embedding(jnp.clip(positions, 0, 99))
+                obs_emb = obs_state_emb + pos_emb
+                if goal_state_emb is not None:
+                    goal_emb = goal_state_emb + pos_emb
+                else:
+                    goal_emb = None
+            else:
+                obs_emb = obs_state_emb
+                goal_emb = goal_state_emb
+            
+            if goal_emb is not None:
+                spatial_inputs = jnp.concatenate([obs_emb, goal_emb], axis=1)  # (B, 2*grid_size^2, cell_embed_dim)
+                grid_size_sq_total = grid_size_sq * 2
+            else:
+                spatial_inputs = obs_emb  # (B, grid_size^2, cell_embed_dim)
+                grid_size_sq_total = grid_size_sq
+            
+            if actions is not None:
+                action_expanded = jnp.tile(actions[:, None, :], (1, grid_size_sq_total, 1))
+                spatial_inputs = jnp.concatenate([spatial_inputs, action_expanded], axis=-1)
+            
+            x_spatial = self.input_proj(spatial_inputs)  # (B, grid_size_sq_total, d_model)
+
+            attn_weights = self.spatial_aggregator(x_spatial)  # (B, grid_size_sq_total, 1)
+            attn_weights = jax.nn.softmax(attn_weights, axis=1)  # Normalize across spatial positions
+            x_emb = jnp.sum(x_spatial * attn_weights, axis=1)  # (B, grid_size_sq_total, d_model) -> (B, d_model)
+            
+            # Apply layer norm if needed
+            if self.pre_layer_norm:
+                x_emb = self.pre_ln(x_emb)
+            
+            x_emb = jnp.expand_dims(x_emb, axis=1)  # (B, d_model) -> (B, 1, d_model)
+            
+            x_first = x_emb + self.start_token
+            if self.thinking_steps > 1:
+                x_rest = jnp.tile(x_emb, (1, self.thinking_steps - 1, 1))
+                x_seq = jnp.concatenate([x_first, x_rest], axis=1)
+            else:
+                x_seq = x_first
 
         lstm_out = x_seq
         for i, (lstm_layer, ln) in enumerate(zip(self.lstm_layers, self.layer_norms)):
@@ -100,10 +162,8 @@ class LSTMThinkingCritic(nn.Module):
             # Residual connection + LayerNorm for better gradient flow
             lstm_out = ln(lstm_out + lstm_new)
         
-        # Take last timestep output: (B, d_model)
         final_out = lstm_out[:, -1, :]
         
-        # Apply layer norm and get Q-value
         q_value = self.value_head(final_out).squeeze(-1)  # (B,)
         
         return q_value
@@ -124,6 +184,8 @@ class GCLSTMDiscreteCritic(nn.Module):
     layer_norm: bool = True
     pre_layer_norm: bool = True
     num_layers: int = 1
+    cell_embed_dim: int = 8  # Embedding dimension for cell types
+    use_position_embedding: bool = True  # Whether to add positional embeddings
     
     def setup(self):
         critic_cls = LSTMThinkingCritic
@@ -138,6 +200,8 @@ class GCLSTMDiscreteCritic(nn.Module):
             layer_norm=self.layer_norm,
             pre_layer_norm=self.pre_layer_norm,
             num_layers=self.num_layers,
+            cell_embed_dim=self.cell_embed_dim,
+            use_position_embedding=self.use_position_embedding,
         )
     
     def __call__(self, observations, goals=None, actions=None):
@@ -335,9 +399,15 @@ class GCDQNLSTMAgent(flax.struct.PyTreeNode):
 
         # Define encoders
         encoders = dict()
-        if config['encoder'] is not None:
-            encoder_module = encoder_modules[config['encoder']]
-            encoders['critic'] = GCEncoder(concat_encoder=encoder_module())
+        encoder_name = config.get('encoder') or None  # Convert empty string to None
+        if encoder_name:
+            encoder_module = encoder_modules[encoder_name]
+            # Handle NormalizeEncoder with custom normalize_value if specified
+            if encoder_name == 'normalize' and config.get('encoder_normalize_value') is not None:
+                encoder_instance = NormalizeEncoder(normalize_value=config['encoder_normalize_value'])
+            else:
+                encoder_instance = encoder_module()
+            encoders['critic'] = GCEncoder(concat_encoder=encoder_instance)
 
         # LSTM-based discrete critic
         critic_def = GCLSTMDiscreteCritic(
@@ -348,6 +418,8 @@ class GCDQNLSTMAgent(flax.struct.PyTreeNode):
             gc_encoder=encoders.get('critic'),
             layer_norm=config['layer_norm'],
             num_layers=1,
+            cell_embed_dim=config.get('cell_embed_dim', 8),  # Default to 8 if not specified
+            use_position_embedding=config.get('use_position_embedding', True),  # Default to True
         )
 
 
@@ -385,6 +457,8 @@ def get_config():
             # LSTM architecture
             lstm_hidden_size=64,
             thinking_steps=3,
+            cell_embed_dim=8,  # Embedding dimension for cell types (when using embedding table)
+            use_position_embedding=True,  # Whether to add positional embeddings to grid states
             
             # Legacy MLP dims (for compatibility with value/actor)
             actor_hidden_dims=(512, 512, 512),
@@ -408,7 +482,7 @@ def get_config():
             alpha=0.3,
             const_std=True,
             discrete=True,
-            encoder=ml_collections.config_dict.placeholder(str),
+            encoder="",  # Visual encoder name (empty string = None, 'impala_small', 'normalize', 'passthrough', etc.).
             
             # Dataset hyperparameters
             dataset_class='GCDataset',

@@ -5,6 +5,7 @@ import flax.linen as nn
 import jax.numpy as jnp
 
 from impls.utils.networks import MLP
+from envs.block_moving.env_types import GridStatesEnum
 
 
 class ResnetStack(nn.Module):
@@ -100,6 +101,149 @@ class ImpalaEncoder(nn.Module):
         return out
 
 
+class NormalizeEncoder(nn.Module):
+    """Simple encoder that normalizes grid observations by dividing by normalize_value.
+    
+    This preserves semantic consistency: same value → same representation.
+    Used for grid-based environments where cell values are in range [0, 11].
+    
+    Set normalize_value=1.0 for passthrough (no normalization, just converts to float32).
+    Set normalize_value=11.0 for /11 normalization (values in [0.0, 1.0]).
+    """
+    
+    normalize_value: float = 11.0
+    
+    @nn.compact
+    def __call__(self, x, train=True, cond_var=None):
+        """Normalize input by dividing by normalize_value.
+        
+        Args:
+            x: Input tensor of shape (..., grid_size^2) with integer values [0, 11]
+            train: Unused, kept for compatibility
+            cond_var: Unused, kept for compatibility
+            
+        Returns:
+            Tensor of shape (..., grid_size^2) with float values.
+            If normalize_value=11.0: values in [0.0, 1.0]
+            If normalize_value=1.0: values in [0.0, 11.0] (passthrough)
+        """
+        return x.astype(jnp.float32) / self.normalize_value
+
+
+class OneHotEncoder(nn.Module):
+    """Encoder that converts integer grid observations to one-hot vectors.
+    
+    This preserves semantic consistency: same value → same one-hot representation.
+    Used for grid-based environments where cell values are in range [0, num_classes-1].
+    
+    Args:
+        num_classes: Number of possible integer values (default 12 for grid states [0, 11]).
+                     After remove_targets, only 6 values are used, but we keep 12 for safety.
+    """
+    
+    num_classes: int = 12
+    
+    @nn.compact
+    def __call__(self, x, train=True, cond_var=None):
+        """Convert integer input to one-hot vectors.
+        
+        Args:
+            x: Input tensor of shape (..., grid_size^2) with integer values [0, num_classes-1]
+            train: Unused, kept for compatibility
+            cond_var: Unused, kept for compatibility
+            
+        Returns:
+            Tensor of shape (..., grid_size^2, num_classes) with one-hot vectors.
+            Each spatial position gets a num_classes-dimensional one-hot vector.
+        """
+        # Convert to int32 for indexing
+        x_int = x.astype(jnp.int32)
+        # Clip values to valid range [0, num_classes-1]
+        x_int = jnp.clip(x_int, 0, self.num_classes - 1)
+        # Convert to one-hot: (..., grid_size^2) -> (..., grid_size^2, num_classes)
+        one_hot = jnp.eye(self.num_classes)[x_int]
+        return one_hot.astype(jnp.float32)
+
+
+class OneHotSemanticEncoder(nn.Module):
+    """Encoder that converts integer grid observations to one-hot + semantic channels.
+
+    It appends 4 semantic features per cell:
+      - has_agent
+      - has_box
+      - has_target
+      - carrying_box
+    """
+
+    num_classes: int = 12
+
+    @nn.compact
+    def __call__(self, x, train=True, cond_var=None):
+        """Convert integer input to one-hot + semantic vectors.
+
+        Args:
+            x: Input tensor of shape (..., grid_size^2) with integer values [0, num_classes-1]
+            train: Unused, kept for compatibility
+            cond_var: Unused, kept for compatibility
+
+        Returns:
+            Tensor of shape (..., grid_size^2, num_classes + 4) with one-hot + semantic vectors.
+        """
+        x_int = x.astype(jnp.int32)
+        x_int = jnp.clip(x_int, 0, self.num_classes - 1)
+        one_hot = jnp.eye(self.num_classes)[x_int].astype(jnp.float32)
+
+        cell = x_int
+
+        has_agent = (
+            (cell == int(GridStatesEnum.AGENT))
+            | (cell == int(GridStatesEnum.AGENT_CARRYING_BOX))
+            | (cell == int(GridStatesEnum.AGENT_ON_BOX))
+            | (cell == int(GridStatesEnum.AGENT_ON_TARGET))
+            | (cell == int(GridStatesEnum.AGENT_ON_TARGET_CARRYING_BOX))
+            | (cell == int(GridStatesEnum.AGENT_ON_TARGET_WITH_BOX))
+            | (cell == int(GridStatesEnum.AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX))
+            | (cell == int(GridStatesEnum.AGENT_ON_BOX_CARRYING_BOX))
+        )
+
+        has_box = (
+            (cell == int(GridStatesEnum.BOX))
+            | (cell == int(GridStatesEnum.AGENT_ON_BOX))
+            | (cell == int(GridStatesEnum.AGENT_ON_TARGET_WITH_BOX))
+            | (cell == int(GridStatesEnum.AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX))
+            | (cell == int(GridStatesEnum.BOX_ON_TARGET))
+            | (cell == int(GridStatesEnum.AGENT_ON_BOX_CARRYING_BOX))
+        )
+
+        has_target = (
+            (cell == int(GridStatesEnum.TARGET))
+            | (cell == int(GridStatesEnum.AGENT_ON_TARGET))
+            | (cell == int(GridStatesEnum.AGENT_ON_TARGET_CARRYING_BOX))
+            | (cell == int(GridStatesEnum.AGENT_ON_TARGET_WITH_BOX))
+            | (cell == int(GridStatesEnum.AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX))
+            | (cell == int(GridStatesEnum.BOX_ON_TARGET))
+        )
+
+        carrying_box = (
+            (cell == int(GridStatesEnum.AGENT_CARRYING_BOX))
+            | (cell == int(GridStatesEnum.AGENT_ON_TARGET_CARRYING_BOX))
+            | (cell == int(GridStatesEnum.AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX))
+            | (cell == int(GridStatesEnum.AGENT_ON_BOX_CARRYING_BOX))
+        )
+
+        semantic = jnp.stack(
+            [
+                has_agent.astype(jnp.float32),
+                has_box.astype(jnp.float32),
+                has_target.astype(jnp.float32),
+                carrying_box.astype(jnp.float32),
+            ],
+            axis=-1,
+        )
+
+        return jnp.concatenate([one_hot, semantic], axis=-1)
+
+
 class GCEncoder(nn.Module):
     """Helper module to handle inputs to goal-conditioned networks.
 
@@ -141,4 +285,8 @@ encoder_modules = {
     'impala_debug': functools.partial(ImpalaEncoder, num_blocks=1, stack_sizes=(4, 4)),
     'impala_small': functools.partial(ImpalaEncoder, num_blocks=1),
     'impala_large': functools.partial(ImpalaEncoder, stack_sizes=(64, 128, 128), mlp_hidden_dims=(1024,)),
+    'normalize': NormalizeEncoder,
+    'passthrough': functools.partial(NormalizeEncoder, normalize_value=1.0),
+    'onehot': OneHotEncoder,
+    'onehot_semantic': OneHotSemanticEncoder,
 }
