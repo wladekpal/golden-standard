@@ -5,8 +5,8 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "distrax>=0.1.5",
-    "flax>=0.8.4",
+    "distrax",
+    "flax",
     "matplotlib>=3.10.3",
     "ml-collections>=1.1.0",
     "moviepy>=2.2.1",
@@ -15,12 +15,12 @@ dependencies = [
     "pytest>=8.4.1",
     "ruff>=0.11.11",
     "tqdm>=4.67.1",
-    "tyro>=0.9.26",
+    "tyro==0.9.26",
     "wandb>=0.19.11",
-    "brax==0.12.1",
+    "brax==0.14.2",
     "mujoco==3.2.7",
     "mujoco-mjx==3.2.7",
-    "jax[cuda12]==0.4.26",
+    "jax[cuda12]",
 ]
 
 [dependency-groups]
@@ -31,8 +31,6 @@ dev = [
     "umap-learn>=0.5.9.post2",
 ]
 
-[tool.uv]
-find-links = [ "https://storage.googleapis.com/jax-releases/jax_cuda_releases.html" ]
 
 [tool.ruff]
 # Max line length for linting and formatting
