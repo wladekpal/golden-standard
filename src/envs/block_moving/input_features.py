@@ -1,10 +1,7 @@
 import jax
 import jax.numpy as jnp
 
-try:
-    from envs.block_moving.env_types import GridStatesEnum
-except ModuleNotFoundError:
-    from ...envs.block_moving.env_types import GridStatesEnum
+from envs.block_moving.env_types import GridStatesEnum
 
 
 GRID_STATE_NORMALIZER = jnp.float32(int(GridStatesEnum.AGENT_ON_BOX_CARRYING_BOX))
@@ -17,6 +14,9 @@ def _to_one_hot(grid: jax.Array) -> jax.Array:
 
 
 def encode_grid_inputs(grid: jax.Array, representation: str = "normalized_flat") -> jax.Array:
+    if representation == "raw_flat":
+        return grid.astype(jnp.float32).reshape(grid.shape[0], -1)
+
     if representation == "normalized_flat":
         return (grid.astype(jnp.float32) / GRID_STATE_NORMALIZER).reshape(grid.shape[0], -1)
 
@@ -24,5 +24,5 @@ def encode_grid_inputs(grid: jax.Array, representation: str = "normalized_flat")
         return _to_one_hot(grid).reshape(grid.shape[0], -1)
 
     raise ValueError(
-        f"Unknown input representation: {representation}. Supported: normalized_flat, one_hot_flat"
+        f"Unknown input representation: {representation}. Supported: raw_flat, normalized_flat, one_hot_flat"
     )
