@@ -50,9 +50,9 @@ echo "Running with grid_size: $grid_size, number_of_boxes_min: $number_of_boxes_
 
 for seed in 1 2
 do
-    for number_of_boxes in 4 3
+    for number_of_boxes in 3
     do
-        for input_representation in one_hot_flat normalized_flat
+        for input_representation in one_hot_flat
         do
           CUDA_VISIBLE_DEVICES=$GPU_ID uv run --active src/train.py \
           env:box-moving \
@@ -71,6 +71,7 @@ do
           --agent.alpha 0.1 \
           --exp.max_replay_size 10000 \
           --exp.batch_size 256 \
+          --exp.num_envs 256 \
           --exp.use_future_and_random_goals \
           --exp.eval_special \
           --env.level_generator variable \
