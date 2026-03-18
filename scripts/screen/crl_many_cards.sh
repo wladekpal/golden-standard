@@ -19,13 +19,12 @@ case "${use_discounted_mc_rewards,,}" in
 esac
 
 grid_size=5
-number_of_boxes=4
+number_of_boxes=3
 SEEDS=(1 2 3)
-MOVING_BOXES_MAX_VALUES=(3)
-LEARNING_RATES=(0.0001 0.0003 0.001)
+MOVING_BOXES_MAX_VALUES=(2)
+LEARNING_RATES=(0.0001 0.0003 )
 DISCOUNTS=(0.9 0.95 0.99)
-BATCH_SIZES=(32 128 256)
-
+BATCH_SIZES=(32 256)
 
 IFS=',' read -r -a GPU_IDS <<< "$GPU_IDS_CSV"
 
