@@ -35,6 +35,7 @@ class ExpConfig:
 
     # Evaluation settings
     eval_different_box_numbers: bool = False
+    eval_box_numbers: tuple[int, ...] = ()
     eval_special: bool = False
     """In addition to standard evaluation also evaluate in 'special' mode. The specifics of special mode depend on level generator used."""
 

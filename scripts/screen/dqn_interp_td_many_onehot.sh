@@ -19,32 +19,30 @@ export UV_CACHE_DIR="$SCRATCH/.cache"
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
 export WANDB_DIR="$SCRATCH/wandb"
 
+exclude_dirs=( ".github" ".ruff_cache" "wandb" ".vscode" ".idea" "__pycache__" ".venv" "experiments" ".git" "notebooks" "runs" "notes" ".pytest")
+
 # Go to project directory on SCRATCH
 cd "$SCRATCH/golden-standard"
 echo "Current path: '$(pwd)'"
 
-
 echo "Running with grid_size: $grid_size, number_of_boxes_min: $number_of_boxes_min, number_of_boxes_max: $number_of_boxes_max"
 
-
-number_of_boxes=6
+eval_boxes=4
 grid_size=6
-cell_embed_dim=8
 lstm_hidden_size=1024
+thinking_steps_test=1
 
-# Option 1: With embeddings + thinking (aggregate first, then thinking steps)
-# This uses embedding table (gc_encoder=None), aggregates spatial positions, then thinking steps
-for thinking_steps_test in 1
+# Option: With one-hot encoding + interpolation-thinking critic
+for number_of_boxes in 6
 do
     for seed in 1 2
     do
         for number_of_moving_boxes_max in 1
         do
-            # Test WITHOUT positional embeddings (to test if they're causing the learning issue)
             uv run src/train.py \
                 env:box-moving \
-                --agent.agent_name gcdqn_lstm \
-                --exp.name g${grid_size}_aggregate_b${number_of_boxes}_bs1024_lr1e-4_embed${cell_embed_dim}_nopos_hidden${lstm_hidden_size}_m${number_of_moving_boxes_max}_t${thinking_steps_test} \
+                --agent.agent_name gcdqn_interp \
+                --exp.name g${grid_size}_interp_generalize${eval_boxes}_b${number_of_boxes}_bs1024_lr1e-4_onehot_hidden${lstm_hidden_size}_m${number_of_moving_boxes_max}_t${thinking_steps_test} \
                 --env.number_of_boxes_max ${number_of_boxes} \
                 --env.number_of_boxes_min ${number_of_boxes} \
                 --env.number_of_moving_boxes_max ${number_of_moving_boxes_max} \
@@ -60,12 +58,13 @@ do
                 --exp.max_replay_size 10000 \
                 --exp.batch_size 1024 \
                 --agent.lr 1e-4 \
+                --exp.updates_per_rollout 1000 \
                 --exp.use_future_and_random_goals \
                 --exp.eval_different_box_numbers \
+                --exp.eval_box_numbers ${eval_boxes} \
                 --agent.thinking_steps ${thinking_steps_test} \
-                --agent.cell_embed_dim ${cell_embed_dim} \
                 --agent.lstm_hidden_size ${lstm_hidden_size} \
-                --agent.no-use-position-embedding
+                --agent.encoder onehot
         done
     done
 done

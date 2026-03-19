@@ -3,6 +3,7 @@ from impls.agents.crl import CRLAgent
 from impls.agents.crl_search import CRLSearchAgent
 from impls.agents.dqn import GCDQNAgent
 from impls.agents.dqn_lstm import GCDQNLSTMAgent
+from impls.agents.dqn_interp import GCDQNInterpAgent
 from impls.agents.gcbc import GCBCAgent
 from impls.agents.gciql import GCIQLAgent
 from impls.agents.gciql_lstm import GCIQLLSTMAgent
@@ -108,6 +109,13 @@ def create_agent(config: ml_collections.FrozenConfigDict, example_batch: dict, s
         )
     elif config.agent_name == "gcdqn_lstm":
         agent = GCDQNLSTMAgent.create(
+            seed,
+            example_batch['observations'],
+            example_batch['actions'],
+            config,
+        )
+    elif config.agent_name == "gcdqn_interp":
+        agent = GCDQNInterpAgent.create(
             seed,
             example_batch['observations'],
             example_batch['actions'],

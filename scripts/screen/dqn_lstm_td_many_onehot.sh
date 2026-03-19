@@ -1,87 +1,73 @@
-#!/bin/bash
+#!/bin/bash -l
 
-GPU_ID=$1
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=64G
+#SBATCH --gres=gpu:1
+#SBATCH --time=48:00:00
+#SBATCH --account=plgbro4ppo-gpu-gh200
+#SBATCH --partition=plgrid-gpu-gh200
+#SBATCH --output=slurm_output/train-%j.out
+
+ml ML-bundle/24.06a
+unset LD_LIBRARY_PATH
+ml libffi/3.4.4
+
+export UV_PROJECT_ENVIRONMENT="$SCRATCH/golden-standard/.venv"
+export UV_CACHE_DIR="$SCRATCH/.cache"
+export XLA_PYTHON_CLIENT_PREALLOCATE=false
+export WANDB_DIR="$SCRATCH/wandb"
 
 
 
 exclude_dirs=( ".github" ".ruff_cache" "wandb" ".vscode" ".idea" "__pycache__" ".venv" "experiments" ".git" "notebooks" "runs" "notes" ".pytest")
 
-# Experiment name
-exp_name="dqn_lstm_onehot_test"
-
-# Create the main experiments directory if it doesn't exist
-mkdir -p ./experiments
-
-# Create a temporary directory with the experiment name within ./experiments
-# TODO: tmp dir should be created for every seed different configuration?
-timestamp=$(date +"%Y%m%d_%H%M%S")
-temp_dir="./experiments/${exp_name}_${timestamp}"
-mkdir -p "$temp_dir"
-
-
-# Create the rsync exclude options
-exclude_opts=""
-for dir in "${exclude_dirs[@]}"; do
-  exclude_opts+="--exclude=${dir} "
-done
-
-# Copy all necessary files to the temporary directory, excluding specified directories
-eval rsync -av $exclude_opts ./ "$temp_dir"
-
-# Use the .venv from the original root directory, but do NOT copy it into the temp dir
-VENV_PATH="$(cd "$(dirname "$0")/../.." && pwd)/.venv"
-echo "VENV_PATH: $VENV_PATH"
-if [ -d "$VENV_PATH" ]; then
-  echo "VENV_PATH found"
-  export VIRTUAL_ENV="$VENV_PATH"
-  export PATH="$VENV_PATH/bin:$PATH"
-  source "$VENV_PATH/bin/activate"
-else
-  echo "Warning: .venv not found in project root. Please ensure your virtual environment is set up."
-fi
-
-# Change to the temporary directory
-cd "$temp_dir"
+# Go to project directory on SCRATCH
+cd "$SCRATCH/golden-standard"
 echo "Current path: '$(pwd)'"
 
 
 echo "Running with grid_size: $grid_size, number_of_boxes_min: $number_of_boxes_min, number_of_boxes_max: $number_of_boxes_max"
 
 
-number_of_boxes=6
-min_number_of_boxes=6
+
+eval_boxes=6
 grid_size=6
-lstm_hidden_size=1024
+lstm_hidden_size=2048
+thinking_steps_test=3
 
 # Option: With one-hot encoding + thinking (aggregate first, then thinking steps)
 # This uses one-hot encoder (gc_encoder=OneHotEncoder), aggregates spatial positions, then thinking steps
-for thinking_steps_test in 1
+for number_of_boxes in 1
 do
     for seed in 1 2
     do
-        for number_of_moving_boxes_max in 1
-        do
-            CUDA_VISIBLE_DEVICES=$GPU_ID uv run --active src/train.py \
+                for number_of_moving_boxes_max in 1 
+                do
+            uv run src/train.py \
                 env:box-moving \
                 --agent.agent_name gcdqn_lstm \
-                --exp.name g${grid_size}_aggregate_b${number_of_boxes}_bs1024_lr1e-4_UTD500_onehot_hidden${lstm_hidden_size}_m${number_of_moving_boxes_max}_t${thinking_steps_test} \
+                --exp.name g${grid_size}_generalize${eval_boxes}_b${number_of_boxes}_bs1024_lr1e-4_onehot_hidden${lstm_hidden_size}_m${number_of_moving_boxes_max}_t${thinking_steps_test} \
                 --env.number_of_boxes_max ${number_of_boxes} \
-                --env.number_of_boxes_min ${min_number_of_boxes} \
+                --env.number_of_boxes_min ${number_of_boxes} \
                 --env.number_of_moving_boxes_max ${number_of_moving_boxes_max} \
                 --env.grid_size ${grid_size} \
                 --exp.gamma 0.99 \
                 --env.episode_length 100 \
                 --exp.seed ${seed} \
                 --exp.project "dqn_lstm_aggregate_test" \
+                --exp.save_dir "$SCRATCH/golden-standard/runs" \
                 --exp.epochs 50 \
                 --exp.gif_every 10 \
                 --agent.alpha 0.1 \
                 --exp.max_replay_size 10000 \
                 --exp.batch_size 1024 \
-                --exp.updates_per_rollout 500 \
+                --exp.updates_per_rollout 1000 \
                 --agent.lr 1e-4 \
                 --exp.use_future_and_random_goals \
                 --exp.eval_different_box_numbers \
+                --exp.eval_box_numbers ${eval_boxes} \
                 --agent.thinking_steps ${thinking_steps_test} \
                 --agent.lstm_hidden_size ${lstm_hidden_size} \
                 --agent.encoder onehot

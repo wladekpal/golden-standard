@@ -206,7 +206,11 @@ def evaluate_agent_in_specific_env(agent, key, jitted_create_batch, config, name
                 f"{prefix}/q_max": loss_info["critic/q_max"],
             }
         )
-    elif config.agent.agent_name == "gcdqn" or config.agent.agent_name == "gcdqn_lstm":
+    elif (
+        config.agent.agent_name == "gcdqn"
+        or config.agent.agent_name == "gcdqn_lstm"
+        or config.agent.agent_name == "gcdqn_interp"
+    ):
         eval_info_tmp.update(
             {
                 f"{prefix}/critic_loss": loss_info["critic/critic_loss"],
@@ -249,13 +253,14 @@ def evaluate_agent(agent, key, jitted_create_batch, epoch, config):
         eval_names_suff.append("_special")
 
     if config.exp.eval_different_box_numbers:
-        for number_of_boxes in [config.env.number_of_boxes_max]:
+        if len(config.exp.eval_box_numbers) == 0:
+            raise ValueError("exp.eval_box_numbers must be provided when exp.eval_different_box_numbers is enabled")
+        for number_of_boxes in config.exp.eval_box_numbers:
             new_config = copy.deepcopy(config)
             new_config.env = dataclasses.replace(
                 new_config.env,
                 number_of_boxes_min=number_of_boxes,
                 number_of_boxes_max=number_of_boxes,
-                number_of_moving_boxes_max=number_of_boxes,
             )
             eval_configs.append(new_config)
             eval_names_suff.append("_" + str(number_of_boxes))
