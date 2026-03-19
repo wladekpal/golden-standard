@@ -118,7 +118,6 @@ run_job() {
       --exp.max_replay_size 10000 \
       --exp.batch_size "$batch_size" \
       --exp.num_envs 256 \
-      --exp.use_future_and_random_goals \
       "${discounted_mc_flag[@]}" \
       --exp.eval-different-box-numbers
   )
