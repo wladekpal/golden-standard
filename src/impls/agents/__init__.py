@@ -47,7 +47,6 @@ default_config = ml_collections.FrozenConfigDict(
             target_entropy=-1.1,  # Default target entropy for agents (-ln(|A|/2))
             use_discounted_mc_rewards=False,  # Whether to use discounted Monte Carlo rewards.
             action_sampling='softmax',
-            is_td=False,
         )
     )
 

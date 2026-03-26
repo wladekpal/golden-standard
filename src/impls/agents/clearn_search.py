@@ -27,7 +27,7 @@ class ClearnSearchAgent(flax.struct.PyTreeNode):
         )
         obj_neg = jax.nn.log_sigmoid(-random_values)
         
-        if self.config['is_td']:
+        if not self.config['use_discounted_mc_rewards']: # TD version
             next_values = self.network.select('critic')(
                batch['observations'], batch['next_observations'], batch['actions'], params=grad_params
             )
@@ -46,7 +46,7 @@ class ClearnSearchAgent(flax.struct.PyTreeNode):
                 + obj_neg
                 + gamma * obj_c
             )
-        else:
+        else: # MC version
             future_values = self.network.select('critic')(
                 batch['observations'], batch['value_goals'], batch['actions'], params=grad_params
             )
