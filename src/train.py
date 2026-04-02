@@ -270,7 +270,7 @@ def train(config: Config):
     )
     jitted_create_batch = functools.partial(
         create_batch,
-        gamma=config.exp.gamma,
+        gamma=config.agent.discount,
         use_targets=config.exp.use_targets,
         use_future_and_random_goals=config.exp.use_future_and_random_goals,
         jitted_flatten_batch=jitted_flatten_batch,
@@ -285,7 +285,7 @@ def train(config: Config):
         TrajectoryUniformSamplingQueue(
             max_replay_size=config.exp.max_replay_size,
             dummy_data_sample=dummy_timestep,
-            sample_batch_size=config.exp.batch_size,
+            sample_batch_size=config.agent.batch_size,
             num_envs=config.exp.num_envs,
             episode_length=config.env.episode_length,
         )
@@ -340,6 +340,6 @@ def train(config: Config):
 
 if __name__ == "__main__":
     args = tyro.cli(Config, config=(tyro.conf.ConsolidateSubcommandArgs,))
-    if args.exp.batch_size > args.exp.num_envs:
+    if args.agent.batch_size > args.exp.num_envs:
         raise ValueError("Batch size has to be less than or equal to number of environments")
     train(args)

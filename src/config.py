@@ -18,14 +18,13 @@ class ExpConfig:
     entity: str | None = None
 
     # Replay buffer and batch size and seed
-    num_envs: int = 1024
-    batch_size: int = 1024
+    num_envs: int = 256
     seed: int = 0
     max_replay_size: int = 10000
 
     # Number of updates etc
     epochs: int = 10
-    intervals_per_epoch: int = 100
+    intervals_per_epoch: int = 10
     updates_per_rollout: int = 1000
     input_representation: Literal["raw_flat", "normalized_flat", "one_hot_flat"] = "raw_flat"
 
