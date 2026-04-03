@@ -19,7 +19,7 @@ from envs.block_moving.env_types import TimeStep, remove_targets
 from envs.block_moving.input_features import encode_grid_inputs
 from config import ROOT_DIR
 from impls.utils.checkpoints import save_agent
-from utils import log_gif, sample_actions_critic
+from utils import log_gif
 
 
 @functools.partial(jax.jit, static_argnums=(2, 3, 4, 5, 6))
@@ -75,8 +75,7 @@ def create_batch(
     use_discounted_mc_rewards=False,
     input_representation="normalized_flat",
 ):
-    batch_key, sampling_key = jax.random.split(key, 2)
-    batch_keys = jax.random.split(batch_key, timesteps.grid.shape[0])
+    batch_keys = jax.random.split(key, timesteps.grid.shape[0])
 
     # Since flatten_batch is vmapped and we don't have access to whole batch inside, we need to roll the grids here,
     # to provide source of random targets.
@@ -93,21 +92,43 @@ def create_batch(
     state, actions, next_state, value_goals, actor_goals, reward = jitted_flatten_batch(
         gamma, use_discounted_mc_rewards, use_targets, timesteps, rolled_grids, rolling_mask, batch_keys
     )
+    flat_rewards = reward.reshape(reward.shape[0], -1).squeeze()
 
     # Create valid batch
     batch = {
         "observations": encode_grid_inputs(state.grid, input_representation),
         "next_observations": encode_grid_inputs(next_state.grid, input_representation),
         "actions": actions.squeeze(),
-        "rewards": reward.reshape(reward.shape[0], -1).squeeze(),
-        "masks": jnp.ones_like(reward.reshape(reward.shape[0], -1).squeeze()),  # Bootstrap always
+        "rewards": flat_rewards,
+        "masks": jnp.ones_like(flat_rewards),  # Bootstrap always
         "value_goals": encode_grid_inputs(value_goals, input_representation),
         "actor_goals": encode_grid_inputs(actor_goals, input_representation),
     }
     return batch
 
 
-def evaluate_agent_in_specific_env(agent, key, jitted_create_batch, config, name, create_gif=False, critic_temp=None):
+CRITIC_LOSS_AGENTS = {"gciql", "gciql_search", "gcdqn", "clearn_search"}
+
+
+def get_agent_specific_eval_metrics(prefix, loss_info, agent_name):
+    if agent_name in {"crl", "crl_search"}:
+        return {
+            f"{prefix}/contrastive_loss": loss_info["critic/contrastive_loss"],
+            f"{prefix}/cat_acc": loss_info["critic/categorical_accuracy"],
+        }
+
+    if agent_name in CRITIC_LOSS_AGENTS:
+        return {
+            f"{prefix}/critic_loss": loss_info["critic/critic_loss"],
+            f"{prefix}/q_mean": loss_info["critic/q_mean"],
+            f"{prefix}/q_min": loss_info["critic/q_min"],
+            f"{prefix}/q_max": loss_info["critic/q_max"],
+        }
+
+    raise ValueError(f"Unknown agent name {agent_name}")
+
+
+def evaluate_agent_in_specific_env(agent, key, jitted_create_batch, config, name, create_gif=False):
     env_eval = create_env(config.env)
     env_eval = wrap_for_eval(env_eval)  # Note: Wrap for eval is not using any quarter filtering
     env_eval.step = jax.jit(jax.vmap(env_eval.step))
@@ -149,42 +170,7 @@ def evaluate_agent_in_specific_env(agent, key, jitted_create_batch, config, name
         f"{prefix}/mean_ep_len": timesteps.steps[truncated_mask].mean(),
         f"{prefix}/total_loss": loss,
     }
-    if config.agent.agent_name == "crl" or config.agent.agent_name == "crl_search":
-        eval_info_tmp.update(
-            {
-                f"{prefix}/contrastive_loss": loss_info["critic/contrastive_loss"],
-                f"{prefix}/cat_acc": loss_info["critic/categorical_accuracy"],
-            }
-        )
-    elif config.agent.agent_name == "gciql" or config.agent.agent_name == "gciql_search":
-        eval_info_tmp.update(
-            {
-                f"{prefix}/critic_loss": loss_info["critic/critic_loss"],
-                f"{prefix}/q_mean": loss_info["critic/q_mean"],
-                f"{prefix}/q_min": loss_info["critic/q_min"],
-                f"{prefix}/q_max": loss_info["critic/q_max"],
-            }
-        )
-    elif config.agent.agent_name == "gcdqn":
-        eval_info_tmp.update(
-            {
-                f"{prefix}/critic_loss": loss_info["critic/critic_loss"],
-                f"{prefix}/q_mean": loss_info["critic/q_mean"],
-                f"{prefix}/q_min": loss_info["critic/q_min"],
-                f"{prefix}/q_max": loss_info["critic/q_max"],
-            }
-        )
-    elif config.agent.agent_name == "clearn_search":
-        eval_info_tmp.update(
-            {
-                f"{prefix}/critic_loss": loss_info["critic/critic_loss"],
-                f"{prefix}/q_mean": loss_info["critic/q_mean"],
-                f"{prefix}/q_min": loss_info["critic/q_min"],
-                f"{prefix}/q_max": loss_info["critic/q_max"],
-            }
-        )
-    else:
-        raise ValueError(f"Unknown agent name {config.agent.agent_name}")
+    eval_info_tmp.update(get_agent_specific_eval_metrics(prefix, loss_info, config.agent.agent_name))
 
     if create_gif:
         log_gif(env_eval, config.env.episode_length, prefix_gif, timesteps)
@@ -227,23 +213,10 @@ def evaluate_agent(agent, key, jitted_create_batch, epoch, config):
         if eval_name_suff == "":
             eval_info.update(loss_info)
 
-        # With critic softmax(Q) actions:
-        eval_info_tmp, loss_info = evaluate_agent_in_specific_env(
-            agent,
-            key,
-            jitted_create_batch,
-            eval_config,
-            eval_name_suff + "soft_q",
-            create_gif=create_gif,
-            critic_temp=1.0,
-        )
-        eval_info.update(eval_info_tmp)
-
     wandb.log(eval_info)
 
 
-def train(config: Config):
-    # Create dirs, init wandb
+def init_wandb_and_run_directory(config: Config):
     wandb_config = copy.deepcopy(config)
     wandb_config.agent = dict(wandb_config.agent)
     wandb.init(
@@ -253,22 +226,28 @@ def train(config: Config):
         entity=config.exp.entity,
         mode=config.exp.mode,
     )
+
     if config.exp.save_dir is None:
         run_directory = os.path.join(ROOT_DIR, "runs", config.exp.name)
     else:
         run_directory = os.path.join(config.exp.save_dir, config.exp.name)
     os.makedirs(run_directory, exist_ok=True)
+    return run_directory
 
-    # Create environment and batch functions
+
+def build_training_env(config: Config):
     env = create_env(config.env)
     env = wrap_for_training(config, env)
-    key = random.PRNGKey(config.exp.seed)
     env.step = jax.jit(jax.vmap(env.step))
     env.reset = jax.jit(jax.vmap(env.reset))
+    return env
+
+
+def build_jitted_create_batch(config: Config):
     jitted_flatten_batch = jax.jit(
         jax.vmap(flatten_batch, in_axes=(None, None, None, 0, 0, 0, 0)), static_argnums=(0, 1, 2)
     )
-    jitted_create_batch = functools.partial(
+    return functools.partial(
         create_batch,
         gamma=config.agent.discount,
         use_targets=config.exp.use_targets,
@@ -278,9 +257,9 @@ def train(config: Config):
         input_representation=config.exp.input_representation,
     )
 
-    # Create replay buffer and agent
-    dummy_timestep = env.get_dummy_timestep(key)
 
+def build_replay_buffer_and_agent(config: Config, env, key):
+    dummy_timestep = env.get_dummy_timestep(key)
     replay_buffer = jit_wrap(
         TrajectoryUniformSamplingQueue(
             max_replay_size=config.exp.max_replay_size,
@@ -303,7 +282,10 @@ def train(config: Config):
         "actor_goals": encode_grid_inputs(dummy_timestep.grid[None, ...], config.exp.input_representation),
     }
     agent = create_agent(config.agent, example_batch, config.exp.seed)
+    return replay_buffer, buffer_state, agent
 
+
+def make_update_step(replay_buffer, jitted_create_batch):
     @jax.jit
     def update_step(carry, _):
         buffer_state, agent, key = carry
@@ -313,11 +295,21 @@ def train(config: Config):
         agent, update_info = agent.update(batch)
         return (buffer_state, agent, key), update_info
 
+    return update_step
+
+
+def make_train_interval(config: Config, env, replay_buffer, update_step):
     @jax.jit
     def train_interval(buffer_state, agent, key):
         key, data_key, up_key = jax.random.split(key, 3)
         _, _, timesteps = collect_data(
-            agent, data_key, env, config.exp.num_envs, config.env.episode_length, use_targets=config.exp.use_targets, input_representation=config.exp.input_representation,
+            agent,
+            data_key,
+            env,
+            config.exp.num_envs,
+            config.env.episode_length,
+            use_targets=config.exp.use_targets,
+            input_representation=config.exp.input_representation,
         )
 
         buffer_state = replay_buffer.insert(buffer_state, timesteps)
@@ -326,13 +318,45 @@ def train(config: Config):
         )
         return buffer_state, agent, key
 
+    return train_interval
+
+
+def make_train_epoch(config: Config, train_interval):
+    @jax.jit
+    def train_epoch(buffer_state, agent, key):
+        def interval_step(carry, _):
+            next_buffer_state, next_agent, next_key = train_interval(*carry)
+            return (next_buffer_state, next_agent, next_key), None
+
+        (buffer_state, agent, key), _ = jax.lax.scan(
+            interval_step,
+            (buffer_state, agent, key),
+            None,
+            length=config.exp.intervals_per_epoch,
+        )
+        return buffer_state, agent, key
+
+    return train_epoch
+
+
+def train(config: Config):
+    run_directory = init_wandb_and_run_directory(config)
+
+    # Create environment and training utilities
+    key = random.PRNGKey(config.exp.seed)
+    env = build_training_env(config)
+    jitted_create_batch = build_jitted_create_batch(config)
+    replay_buffer, buffer_state, agent = build_replay_buffer_and_agent(config, env, key)
+    update_step = make_update_step(replay_buffer, jitted_create_batch)
+    train_interval = make_train_interval(config, env, replay_buffer, update_step)
+    train_epoch = make_train_epoch(config, train_interval)
+
     # Main training loop with evaluation
     evaluate_agent(agent, key, jitted_create_batch, 0, config)
     save_agent(agent, config, save_dir=run_directory, epoch=0)
 
     for epoch in range(config.exp.epochs):
-        for _ in range(config.exp.intervals_per_epoch):
-            buffer_state, agent, key = train_interval(buffer_state, agent, key)
+        buffer_state, agent, key = train_epoch(buffer_state, agent, key)
 
         evaluate_agent(agent, key, jitted_create_batch, epoch + 1, config)
         save_agent(agent, config, save_dir=run_directory, epoch=epoch + 1)
