@@ -20,7 +20,11 @@ dependencies = [
     "tqdm>=4.67.1",
     "tyro>=0.9.26",
     "wandb>=0.19.11",
-    "xminigrid>=0.9.1",
+    "aiofiles==25.1.0",
+    "ipywidgets==8.1.8",
+    "jupyterlab-widgets==3.0.16",
+    "nvidia-cuda-cccl-cu12==12.9.27",
+    "nvidia-cuda-nvrtc-cu12==12.9.86",
 ]
 
 [dependency-groups]
