@@ -1,5 +1,6 @@
 import jax
 import jax.numpy as jnp
+from functools import partial
 from ott.geometry import geometry
 from ott.tools.unreg import hungarian
 
@@ -165,6 +166,166 @@ def solve_state(state: jnp.ndarray):
         current_pos = goal
 
     return actions
+
+
+def _append_repeated_action(
+    actions: jnp.ndarray,
+    idx: jnp.ndarray,
+    action: jnp.ndarray,
+    count: jnp.ndarray,
+    *,
+    max_actions: int,
+    max_repeat: int,
+) -> tuple[jnp.ndarray, jnp.ndarray]:
+    count = jnp.maximum(count.astype(jnp.int32), 0)
+    for _ in range(max_repeat):
+        should_add = count > 0
+        write_ok = should_add & (idx < max_actions)
+
+        def _write(a: jnp.ndarray) -> jnp.ndarray:
+            return a.at[idx].set(action)
+
+        actions = jax.lax.cond(write_ok, _write, lambda a: a, actions)
+        idx = idx + should_add.astype(jnp.int32)
+        count = jnp.maximum(count - 1, 0)
+
+    return actions, idx
+
+
+def _append_manhattan_actions(
+    actions: jnp.ndarray,
+    idx: jnp.ndarray,
+    src: jnp.ndarray,
+    dst: jnp.ndarray,
+    *,
+    max_actions: int,
+    max_move: int,
+) -> tuple[jnp.ndarray, jnp.ndarray]:
+    delta = dst - src
+    up = jnp.maximum(-delta[0], 0)
+    down = jnp.maximum(delta[0], 0)
+    left = jnp.maximum(-delta[1], 0)
+    right = jnp.maximum(delta[1], 0)
+
+    actions, idx = _append_repeated_action(
+        actions, idx, jnp.int8(0), up, max_actions=max_actions, max_repeat=max_move
+    )
+    actions, idx = _append_repeated_action(
+        actions, idx, jnp.int8(1), down, max_actions=max_actions, max_repeat=max_move
+    )
+    actions, idx = _append_repeated_action(
+        actions, idx, jnp.int8(2), left, max_actions=max_actions, max_repeat=max_move
+    )
+    actions, idx = _append_repeated_action(
+        actions, idx, jnp.int8(3), right, max_actions=max_actions, max_repeat=max_move
+    )
+
+    return actions, idx
+
+
+@partial(jax.jit, static_argnames=("max_boxes", "max_actions", "max_move"))
+def solve_state_padded(
+    state: jnp.ndarray,
+    *,
+    max_boxes: int = 16,
+    max_actions: int = 512,
+    max_move: int = 16,
+) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """Vmappable planner that returns padded actions and true action count.
+
+    This planner is intended for batched resets where the agent is not carrying
+    a box. It keeps the OT assignment step and emits fixed-shape action arrays.
+    """
+    agent_positions = jnp.argwhere(jnp.isin(state, actor_states), size=1, fill_value=0)
+    agent_position = agent_positions[0]
+
+    box_mask = jnp.isin(state, box_states)
+    goal_mask = jnp.isin(state, target_states)
+
+    box_positions = jnp.argwhere(box_mask, size=max_boxes, fill_value=0)
+    goal_positions = jnp.argwhere(goal_mask, size=max_boxes, fill_value=0)
+
+    n_boxes = jnp.minimum(box_mask.sum(), max_boxes).astype(jnp.int32)
+    n_goals = jnp.minimum(goal_mask.sum(), max_boxes).astype(jnp.int32)
+    matched = jnp.minimum(n_boxes, n_goals)
+
+    row_valid = jnp.arange(max_boxes, dtype=jnp.int32) < n_boxes
+    col_valid = jnp.arange(max_boxes, dtype=jnp.int32) < n_goals
+    valid_pairs = row_valid[:, None] & col_valid[None, :]
+
+    cost = manhattan_cost_matrix(box_positions, goal_positions)
+    large_cost = jnp.array(1e4, dtype=cost.dtype)
+    cost = jnp.where(valid_pairs, cost, large_cost)
+
+    _, out = hungarian(geometry.Geometry(cost_matrix=cost))
+    row_idx, col_idx = out.paired_indices
+    assignment = jnp.zeros((max_boxes,), dtype=jnp.int32)
+    assignment = assignment.at[row_idx.astype(jnp.int32)].set(col_idx.astype(jnp.int32))
+
+    actions = jnp.full((max_actions,), jnp.int8(-1), dtype=jnp.int8)
+    idx = jnp.array(0, dtype=jnp.int32)
+    current_pos = agent_position
+
+    for i in range(max_boxes):
+        goal_i = assignment[i]
+        can_use = (i < matched) & (goal_i < n_goals)
+
+        box_pos = box_positions[i]
+        goal_pos = goal_positions[goal_i]
+
+        def _do_pair(carry: tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]):
+            acts, ptr, cur = carry
+            acts, ptr = _append_manhattan_actions(
+                acts, ptr, cur, box_pos, max_actions=max_actions, max_move=max_move
+            )
+            acts, ptr = _append_repeated_action(
+                acts,
+                ptr,
+                jnp.int8(4),
+                jnp.array(1, dtype=jnp.int32),
+                max_actions=max_actions,
+                max_repeat=1,
+            )
+            acts, ptr = _append_manhattan_actions(
+                acts, ptr, box_pos, goal_pos, max_actions=max_actions, max_move=max_move
+            )
+            acts, ptr = _append_repeated_action(
+                acts,
+                ptr,
+                jnp.int8(5),
+                jnp.array(1, dtype=jnp.int32),
+                max_actions=max_actions,
+                max_repeat=1,
+            )
+            return acts, ptr, goal_pos
+
+        actions, idx, current_pos = jax.lax.cond(
+            can_use,
+            _do_pair,
+            lambda carry: carry,
+            (actions, idx, current_pos),
+        )
+
+    return actions, idx
+
+
+@partial(jax.jit, static_argnames=("max_boxes", "max_actions", "max_move"))
+def solve_state_vmapped(
+    states: jnp.ndarray,
+    *,
+    max_boxes: int = 16,
+    max_actions: int = 512,
+    max_move: int = 16,
+) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """Vmapped padded solve_state over a batch of state grids."""
+
+    fn = partial(
+        solve_state_padded,
+        max_boxes=max_boxes,
+        max_actions=max_actions,
+        max_move=max_move,
+    )
+    return jax.vmap(fn)(states)
 
 
 def calculate_optimal_q_value_and_traj(env: BoxMovingEnv, state: BoxMovingState, discount=0.99):

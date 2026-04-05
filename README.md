@@ -46,6 +46,63 @@ Options are grouped by prefixes:
 * `env.` - Environment settings (difficulty, goal/start distributions, number of boxes, grid size, etc.). See `BoxMovingConfig` in `./src/envs/block_moving/env_types.py`.
 * `actor.` - Algorithm settings (learning rates, batch sizes, network architectures, and algorithm choices). See `./src/impls/agents/__init__.py`.
 
+# Expert Dataset Collection 📦
+
+You can generate expert offline datasets with:
+
+```bash
+uv run scripts/gather_expert_dataset.py --help
+```
+
+## Basic example
+
+```bash
+uv run scripts/gather_expert_dataset.py \
+  --output-path data/expert_default_6x6_6boxes_100traj.npy \
+  --num-trajectories 100 \
+  --level-generator default \
+  --grid-size 6 \
+  --number-of-boxes-min 6 \
+  --number-of-boxes-max 6 \
+  --number-of-moving-boxes-max 6
+```
+
+## Parallel collection with equal trajectory length
+
+`scripts/gather_expert_dataset.py` supports parallel environment rollout via vmapped planning:
+
+- `--parallel-envs`: number of environments collected in parallel.
+- `--fixed-length`: stored trajectory length in transitions. Every trajectory in the saved dataset is padded to this exact length.
+
+Example:
+
+```bash
+uv run scripts/gather_expert_dataset.py \
+  --output-path data/expert_default_6x6_6boxes_100traj_parallel10_fixed300.npy \
+  --num-trajectories 100 \
+  --level-generator default \
+  --grid-size 6 \
+  --number-of-boxes-min 6 \
+  --number-of-boxes-max 6 \
+  --number-of-moving-boxes-max 6 \
+  --parallel-envs 10 \
+  --fixed-length 300
+```
+
+## Runtime verbosity
+
+The collector now prints detailed runtime progress by default:
+
+- startup configuration
+- JIT warmup time
+- per-batch progress (accepted/skipped/success/elapsed)
+- final summary
+
+Useful controls:
+
+- `--log-every N` to print progress every `N` batches (default: `1`)
+- `--quiet` to suppress progress logs
+
 # Environment 🕹️
 
 The Box Moving environment is a grid-world where an agent moves boxes to target locations. It supports different grid sizes, numbers of boxes, and difficulty levels. While simple conceptually, complexity grows rapidly with grid size and box count, making it well suited for testing stitching capabilities.
