@@ -261,6 +261,7 @@ def evaluate_agent(agent, key, jitted_create_batch, epoch, config):
                 new_config.env,
                 number_of_boxes_min=number_of_boxes,
                 number_of_boxes_max=number_of_boxes,
+                number_of_moving_boxes_max=number_of_boxes,
             )
             eval_configs.append(new_config)
             eval_names_suff.append("_" + str(number_of_boxes))
