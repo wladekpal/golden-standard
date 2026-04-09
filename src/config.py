@@ -26,7 +26,7 @@ class ExpConfig:
     epochs: int = 10
     intervals_per_epoch: int = 10
     updates_per_rollout: int = 1000
-    input_representation: Literal["raw_flat", "normalized_flat", "one_hot_flat"] = "raw_flat"
+    input_representation: Literal["raw_flat", "normalized_flat", "one_hot_flat", "factored_flat"] = "raw_flat"
 
     # Miscellaneous
     use_targets: bool = False
