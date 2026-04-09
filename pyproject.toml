@@ -25,6 +25,7 @@ dependencies = [
     "jupyterlab-widgets==3.0.16",
     "nvidia-cuda-cccl-cu12==12.9.27",
     "nvidia-cuda-nvrtc-cu12==12.9.86",
+    "tensorflow-probability>=0.25.0",
 ]
 
 [dependency-groups]
