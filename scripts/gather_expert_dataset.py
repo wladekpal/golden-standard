@@ -218,6 +218,7 @@ def rollout_expert_batch_vmapped(
     batch_size = len(seeds)
     keys = jnp.stack([jax.random.PRNGKey(int(s)) for s in seeds], axis=0)
     states, _ = reset_batch(keys)
+    padding_rng = np.random.default_rng(int(seeds[0]))
 
     actions_padded, planned_lengths = solve_state_vmapped(
         states.grid,
@@ -230,23 +231,29 @@ def rollout_expert_batch_vmapped(
 
     grids = np.zeros((batch_size, fixed_length, env.grid_size, env.grid_size), dtype=np.int8)
     next_grids = np.zeros_like(grids)
-    actions = np.full((batch_size, fixed_length), -1, dtype=np.int8)
+    actions = padding_rng.integers(0, 6, size=(batch_size, fixed_length), dtype=np.int8)
+    post_goal_actions = padding_rng.integers(0, 4, size=(batch_size, fixed_length), dtype=np.int8)
     rewards = np.zeros((batch_size, fixed_length), dtype=np.float32)
     dones = np.zeros((batch_size, fixed_length), dtype=np.bool_)
     truncs = np.zeros((batch_size, fixed_length), dtype=np.bool_)
 
     current = states
     active = jnp.ones((batch_size,), dtype=jnp.bool_)
+    goal_reached = jnp.asarray(current.success, dtype=jnp.bool_)
     effective_steps = np.zeros((batch_size,), dtype=np.int32)
 
     for t in range(fixed_length):
         current_grid = current.grid
         grids[:, t] = np.asarray(current_grid, dtype=np.int8)
 
-        valid = active & (t < planned_lengths)
+        planner_valid = active & (~goal_reached) & (t < planned_lengths)
+        post_goal_valid = active & goal_reached
+        valid = planner_valid | post_goal_valid
 
         if bool(jnp.any(valid)):
-            action_t = jnp.where(valid, actions_padded[:, t], jnp.zeros((batch_size,), dtype=jnp.int8))
+            action_t = jnp.where(valid, actions[:, t], jnp.zeros((batch_size,), dtype=jnp.int8))
+            action_t = jnp.where(post_goal_valid, post_goal_actions[:, t], action_t)
+            action_t = jnp.where(planner_valid, actions_padded[:, t], action_t)
             action_t = jnp.asarray(action_t, dtype=jnp.int8)
             nxt, reward_t, done_t, info_t = step_batch(current, action_t)
             done_t = jnp.asarray(done_t, dtype=jnp.bool_)
@@ -255,8 +262,7 @@ def rollout_expert_batch_vmapped(
             next_grid = jnp.where(valid[:, None, None], nxt.grid, current_grid)
             next_grids[:, t] = np.asarray(next_grid, dtype=np.int8)
 
-            padded_action = jnp.full((batch_size,), jnp.int8(-1), dtype=jnp.int8)
-            actions[:, t] = np.asarray(jnp.where(valid, action_t, padded_action), dtype=np.int8)
+            actions[:, t] = np.asarray(jnp.where(valid, action_t, actions[:, t]), dtype=np.int8)
             rewards[:, t] = np.asarray(jnp.where(valid, reward_t, jnp.float32(0.0)), dtype=np.float32)
             inactive = jnp.logical_not(active)
             dones[:, t] = np.asarray(jnp.where(valid, done_t, inactive), dtype=np.bool_)
@@ -268,12 +274,14 @@ def rollout_expert_batch_vmapped(
                 current,
             )
             active = jnp.where(valid, ~done_t, active)
+            step_goal_reached = jnp.asarray(jnp.where(valid, reward_t, jnp.float32(0.0)), dtype=jnp.bool_)
+            goal_reached = jnp.logical_or(goal_reached, step_goal_reached)
             effective_steps += np.asarray(valid, dtype=np.int32)
         else:
             next_grids[:, t] = np.asarray(current_grid, dtype=np.int8)
             dones[:, t] = np.asarray(jnp.logical_not(active), dtype=np.bool_)
 
-    successes = np.asarray(current.success, dtype=np.bool_)
+    successes = np.asarray(goal_reached, dtype=np.bool_)
     planned_lengths_np = np.asarray(planned_lengths, dtype=np.int32)
 
     out: list[dict[str, Any]] = []
