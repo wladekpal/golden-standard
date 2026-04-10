@@ -23,6 +23,25 @@ def jit_wrap(buffer):
     return buffer
 
 
+@functools.partial(jax.jit, static_argnames=("rows", "cols"))
+def _create_consecutive_index_matrix(rows, cols, min_val, max_val, rng_key):
+    rng_key, subkey = jax.random.split(rng_key)
+    start_values = jax.random.randint(subkey, shape=(rows,), minval=min_val, maxval=max_val)
+    col_offsets = jnp.arange(cols)
+    return start_values[:, jnp.newaxis] + col_offsets
+
+
+@jax.jit
+def _take_rows_at_indices(arr_2d, indices):
+    return jnp.take(arr_2d, indices, axis=0, mode="wrap")
+
+
+@jax.jit
+def _sample_sequence_batch(buffer_data, env_indices, index_matrix):
+    take_rows_vmapped = jax.vmap(_take_rows_at_indices, in_axes=(1, 0))
+    return take_rows_vmapped(buffer_data[:, env_indices, :], index_matrix)
+
+
 class TrajectoryUniformSamplingQueue:
     """
     Base class for limited-size FIFO reply buffers.
@@ -102,18 +121,18 @@ class TrajectoryUniformSamplingQueue:
         update = self._flatten_fn(samples)  # Updates has shape (unroll_len, num_envs, self._data_shape[-1])
         data = buffer_state.data  # shape = (max_replay_size, num_envs, data_size)
 
-        # If needed, roll the buffer to make sure there's enough space to fit
-        # `update` after the current position.
+        # If there is not enough trailing room to write `update`, roll the queue left
+        # so insertion remains a single contiguous write.
         position = buffer_state.insert_position
         roll = jnp.minimum(0, len(data) - position - len(update))
-        data = jax.lax.cond(roll, lambda: jnp.roll(data, roll, axis=0), lambda: data)
+        data = jax.lax.cond(roll < 0, lambda x: jnp.roll(x, roll, axis=0), lambda x: x, data)
         position = position + roll
 
         # Update the buffer and the control numbers.
         data = jax.lax.dynamic_update_slice_in_dim(data, update, position, axis=0)
-        position = (
-            (position + len(update)) % (len(data) + 1)
-        )  # so whenever roll happens, position becomes len(data), else it is increased by len(update), what is the use of doing % (len(data) + 1)??
+        # `insert_position` can take values in [0, len(data)] so that when a roll happens,
+        # writing can end at exactly len(data) before wrapping on the next insert.
+        position = (position + len(update)) % (len(data) + 1)
 
         return buffer_state.replace(
             data=data,
@@ -131,29 +150,15 @@ class TrajectoryUniformSamplingQueue:
                 f"Data shape expected by the replay buffer ({self._data_shape}) does "
                 f"not match the shape of the buffer state ({buffer_state.data.shape})"
             )
-        key, sample_key, shuffle_key = jax.random.split(buffer_state.key, 3)
+        key, sample_key, _ = jax.random.split(buffer_state.key, 3)
         # Note: this is the number of envs to sample but it can be modified if there is OOM
-        shape = self._sample_batch_size
+        batch_size = self._sample_batch_size
 
         # Sampling envs idxs
-        envs_idxs = jax.random.choice(sample_key, jnp.arange(self.num_envs), shape=(shape,), replace=False)
+        envs_idxs = jax.random.choice(sample_key, jnp.arange(self.num_envs), shape=(batch_size,), replace=False)
 
-        @functools.partial(jax.jit, static_argnames=("rows", "cols"))
-        def create_matrix(rows, cols, min_val, max_val, rng_key):
-            rng_key, subkey = jax.random.split(rng_key)
-            start_values = jax.random.randint(subkey, shape=(rows,), minval=min_val, maxval=max_val)
-            row_indices = jnp.arange(cols)
-            matrix = start_values[:, jnp.newaxis] + row_indices
-            return matrix
-
-        @jax.jit
-        def create_batch(arr_2d, indices):
-            return jnp.take(arr_2d, indices, axis=0, mode="wrap")
-
-        create_batch_vmaped = jax.vmap(create_batch, in_axes=(1, 0))
-
-        matrix = create_matrix(
-            shape,
+        index_matrix = _create_consecutive_index_matrix(
+            batch_size,
             self.episode_length,
             buffer_state.sample_position,
             buffer_state.insert_position - self.episode_length,
@@ -161,15 +166,11 @@ class TrajectoryUniformSamplingQueue:
         )
 
         """
-        The function create_batch will be called for every envs_idxs of buffer_state.data and every row of matrix.
-        Because every row of matrix has consecutive indices of self.episode_length, for every
-        envs_idx of envs_idxs, we will sample a random self.episode_length length sequence from 
-        buffer_state.data[:, envs_idx, :]. But I don't think the code ensures that this sequence 
-        won't be across episodes?
-
-        flatten_batch takes care of this
+        The sampled index matrix contains consecutive indices of self.episode_length.
+        For each sampled env index we extract one random contiguous sequence.
+        Sequence boundaries can cross episodes; flatten_batch handles trajectory masking.
         """
-        batch = create_batch_vmaped(buffer_state.data[:, envs_idxs, :], matrix)
+        batch = _sample_sequence_batch(buffer_state.data, envs_idxs, index_matrix)
         transitions = self._unflatten_fn(batch)
         return buffer_state.replace(key=key), transitions
 
