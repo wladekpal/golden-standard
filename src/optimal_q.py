@@ -178,17 +178,17 @@ def _append_repeated_action(
     max_repeat: int,
 ) -> tuple[jnp.ndarray, jnp.ndarray]:
     count = jnp.maximum(count.astype(jnp.int32), 0)
-    for _ in range(max_repeat):
-        should_add = count > 0
-        write_ok = should_add & (idx < max_actions)
 
-        def _write(a: jnp.ndarray) -> jnp.ndarray:
-            return a.at[idx].set(action)
+    def _body(_, carry):
+        acts, ptr, cnt = carry
+        should_add = cnt > 0
+        write_ok = should_add & (ptr < max_actions)
+        acts = acts.at[ptr].set(jnp.where(write_ok, action, acts[ptr]))
+        ptr = ptr + should_add.astype(jnp.int32)
+        cnt = jnp.maximum(cnt - 1, 0)
+        return acts, ptr, cnt
 
-        actions = jax.lax.cond(write_ok, _write, lambda a: a, actions)
-        idx = idx + should_add.astype(jnp.int32)
-        count = jnp.maximum(count - 1, 0)
-
+    actions, idx, _ = jax.lax.fori_loop(0, max_repeat, _body, (actions, idx, count))
     return actions, idx
 
 
@@ -266,14 +266,15 @@ def solve_state_padded(
     idx = jnp.array(0, dtype=jnp.int32)
     current_pos = agent_position
 
-    for i in range(max_boxes):
+    def _process_box(i, carry):
+        acts, ptr, cur = carry
         goal_i = assignment[i]
         can_use = (i < matched) & (goal_i < n_goals)
 
         box_pos = box_positions[i]
         goal_pos = goal_positions[goal_i]
 
-        def _do_pair(carry: tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]):
+        def _do_pair(carry):
             acts, ptr, cur = carry
             acts, ptr = _append_manhattan_actions(
                 acts, ptr, cur, box_pos, max_actions=max_actions, max_move=max_move
@@ -299,12 +300,16 @@ def solve_state_padded(
             )
             return acts, ptr, goal_pos
 
-        actions, idx, current_pos = jax.lax.cond(
+        return jax.lax.cond(
             can_use,
             _do_pair,
             lambda carry: carry,
-            (actions, idx, current_pos),
+            (acts, ptr, cur),
         )
+
+    actions, idx, current_pos = jax.lax.fori_loop(
+        0, max_boxes, _process_box, (actions, idx, current_pos)
+    )
 
     return actions, idx
 
