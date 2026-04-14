@@ -17,7 +17,6 @@ class ExpConfig:
     mode: str = "online"
     entity: str | None = None
 
-    # Replay buffer and batch size and seed
     num_envs: int = 256
     seed: int = 0
     max_replay_size: int = 10000
@@ -30,7 +29,6 @@ class ExpConfig:
 
     # Miscellaneous
     use_targets: bool = False
-    gamma: float = 0.99
     use_future_and_random_goals: bool = False  # noqa: E501 Whether to use environment goals, default - geometric sampling of future states
 
     # Evaluation settings

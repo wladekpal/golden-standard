@@ -107,7 +107,7 @@ def create_batch(
     return batch
 
 
-CRITIC_LOSS_AGENTS = {"gciql", "gciql_search", "gcdqn", "clearn_search"}
+CRITIC_LOSS_AGENTS = {"gciql", "gciql_search", "gcdqn", "gcdqn_transformer", "clearn_search"}
 
 
 def get_agent_specific_eval_metrics(prefix, loss_info, agent_name):
