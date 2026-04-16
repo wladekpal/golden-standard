@@ -107,11 +107,11 @@ def create_batch(
     return batch
 
 
-CRITIC_LOSS_AGENTS = {"gciql", "gciql_search", "gcdqn", "gcdqn_transformer", "clearn_search"}
+CRITIC_LOSS_AGENTS = {"gciql", "gciql_search", "gcdqn", "gcdqn_cnn", "gcdqn_transformer", "clearn_search"}
 
 
 def get_agent_specific_eval_metrics(prefix, loss_info, agent_name):
-    if agent_name in {"crl", "crl_search"}:
+    if agent_name in {"crl", "crl_search", "crl_search_cnn"}:
         return {
             f"{prefix}/contrastive_loss": loss_info["critic/contrastive_loss"],
             f"{prefix}/cat_acc": loss_info["critic/categorical_accuracy"],

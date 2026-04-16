@@ -24,7 +24,7 @@ SEEDS=(1 2)
 MOVING_BOXES_MAX_VALUES=(2)
 LEARNING_RATES=(0.0003)
 DISCOUNTS=(0.99)
-BATCH_SIZES=(32)
+BATCH_SIZES=(256)
 
 IFS=',' read -r -a GPU_IDS <<< "$GPU_IDS_CSV"
 
@@ -39,7 +39,7 @@ for dir in "${exclude_dirs[@]}"; do
 done
 
 # Experiment name
-exp_name="dqn_transformer_${grid_size}"
+exp_name="dqn_cnn_${grid_size}"
 
 # Create the main experiments directory if it doesn't exist
 EXPERIMENTS_DIR="$ROOT_DIR/experiments"
@@ -70,7 +70,7 @@ run_job() {
   local batch_size="$6"
 
   local job_id="seed${seed}_mov${number_of_moving_boxes_max}_lr${learning_rate}_disc${discount}_bs${batch_size}_gpu${gpu_id}"
-  local run_exp_name="dqn_after_profiling_${learning_rate}_lr_${discount}_gamma_${batch_size}_bs"
+  local run_exp_name="dqn_cnn_${learning_rate}_lr_${discount}_gamma_${batch_size}_bs"
   local discounted_mc_flag=()
 
   local temp_dir
@@ -95,7 +95,7 @@ run_job() {
 
     CUDA_VISIBLE_DEVICES="$gpu_id" uv run --active src/train.py \
       env:box-moving \
-      --agent.agent_name gcdqn_transformer \
+      --agent.agent_name gcdqn_cnn \
       --exp.name "$run_exp_name" \
       --env.number_of_boxes_max "$number_of_boxes" \
       --env.number_of_boxes_min "$number_of_boxes" \
@@ -112,7 +112,7 @@ run_job() {
       --exp.max_replay_size 10000 \
       --agent.batch_size "$batch_size" \
       --exp.num_envs 256 \
-      --exp.input_representation "one_hot_flat" \
+      --exp.input_representation "factored_flat" \
       --exp.use_future_and_random_goals \
       --env.level_generator "variable" \
       --exp.eval_special
