@@ -111,7 +111,7 @@ CRITIC_LOSS_AGENTS = {"gciql", "gciql_search", "gcdqn", "gcdqn_cnn", "gcdqn_tran
 
 
 def get_agent_specific_eval_metrics(prefix, loss_info, agent_name):
-    if agent_name in {"crl", "crl_search", "crl_search_cnn"}:
+    if agent_name in {"crl", "crl_search", "crl_search_cnn", "crl_search_transformer"}:
         return {
             f"{prefix}/contrastive_loss": loss_info["critic/contrastive_loss"],
             f"{prefix}/cat_acc": loss_info["critic/categorical_accuracy"],
