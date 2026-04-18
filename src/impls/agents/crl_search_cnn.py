@@ -75,6 +75,7 @@ class FactorizedGridCNNFeature(nn.Module):
     conv_channels: Sequence[int] = (8, 16, 16)
     kernel_size: int = 3
     dense_dim: int = 256
+    layer_norm: bool = True
 
     def _to_grid(self, flat_inputs: jax.Array) -> jax.Array:
         grid = flat_inputs.reshape(flat_inputs.shape[0], self.grid_size, self.grid_size, FACTORED_BITS)
@@ -93,10 +94,14 @@ class FactorizedGridCNNFeature(nn.Module):
                 padding="SAME",
                 name=f"conv_{idx}",
             )(x)
+            if self.layer_norm:
+                x = nn.LayerNorm(name=f"conv_ln_{idx}")(x)
             x = nn.gelu(x)
 
         x = x.mean(axis=(1, 2))
         x = nn.Dense(self.dense_dim, name="dense_head")(x)
+        if self.layer_norm:
+            x = nn.LayerNorm(name="dense_ln")(x)
         x = nn.gelu(x)
         return x
 
@@ -121,6 +126,7 @@ class GCDiscreteBilinearCNNCritic(nn.Module):
             conv_channels=self.conv_channels,
             kernel_size=self.kernel_size,
             dense_dim=self.dense_dim,
+            layer_norm=self.layer_norm,
             name="shared_encoder",
         )
 

@@ -86,6 +86,7 @@ class FactorizedGridCNNQ(nn.Module):
     conv_channels: Sequence[int] = (64, 128, 128)
     kernel_size: int = 3
     dense_dim: int = 256
+    layer_norm: bool = True
     use_goals: bool = True
 
     def _to_grid(self, flat_inputs: jax.Array) -> jax.Array:
@@ -112,10 +113,14 @@ class FactorizedGridCNNQ(nn.Module):
                 padding="SAME",
                 name=f"conv_{idx}",
             )(x)
+            if self.layer_norm:
+                x = nn.LayerNorm(name=f"conv_ln_{idx}")(x)
             x = nn.gelu(x)
 
         x = x.mean(axis=(1, 2))
         x = nn.Dense(self.dense_dim, name="dense_head")(x)
+        if self.layer_norm:
+            x = nn.LayerNorm(name="dense_ln")(x)
         x = nn.gelu(x)
         q_values = nn.Dense(self.action_dim, name="q_head")(x)
         return q_values
@@ -127,6 +132,7 @@ class CNNDiscreteCritic(nn.Module):
     conv_channels: Sequence[int] = (64, 128, 128)
     kernel_size: int = 3
     dense_dim: int = 256
+    layer_norm: bool = True
     use_goals: bool = True
     ensemble: bool = True
     ensemble_size: int = 2
@@ -142,6 +148,7 @@ class CNNDiscreteCritic(nn.Module):
             conv_channels=self.conv_channels,
             kernel_size=self.kernel_size,
             dense_dim=self.dense_dim,
+            layer_norm=self.layer_norm,
             use_goals=self.use_goals,
         )
 
@@ -296,6 +303,7 @@ class GCDQNCNNAgent(struct.PyTreeNode):
         if critic_ensemble_size < 1:
             raise ValueError(f"critic_ensemble_size must be >= 1, got {critic_ensemble_size}.")
 
+        layer_norm = _get_bool(cfg, "layer_norm", True)
         use_goals = _get_bool(cfg, "cnn_use_goals", True)
         cfg["cnn_grid_size"] = grid_size
 
@@ -309,6 +317,7 @@ class GCDQNCNNAgent(struct.PyTreeNode):
             conv_channels=conv_channels,
             kernel_size=kernel_size,
             dense_dim=dense_dim,
+            layer_norm=layer_norm,
             use_goals=use_goals,
             ensemble=critic_ensemble_size > 1,
             ensemble_size=critic_ensemble_size,
@@ -373,7 +382,7 @@ def get_config():
             action_sampling="softmax",
             epsilon=0.1,
             cnn_use_goals=True,
-            cnn_conv_channels=(64, 128, 128),
+            cnn_conv_channels=(8, 16, 64),
             cnn_kernel_size=3,
             cnn_dense_dim=256,
             critic_ensemble_size=2,
