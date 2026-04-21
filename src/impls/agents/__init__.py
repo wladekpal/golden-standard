@@ -7,6 +7,7 @@ from impls.agents.dqn_cnn import GCDQNCNNAgent
 from impls.agents.dqn import GCDQNAgent
 from impls.agents.dqn_transformer import GCDQNTransformerAgent
 from impls.agents.gcbc import GCBCAgent
+from impls.agents.gcbc_cnn import GCBCCNNAgent
 from impls.agents.gciql import GCIQLAgent
 from impls.agents.gciql_search import GCIQLSearchAgent
 from impls.agents.qrl import QRLAgent
@@ -19,6 +20,7 @@ agents = dict(
     crl_search_cnn=CRLSearchCNNAgent,
     crl_search_transformer=CRLSearchTransformerAgent,
     gcbc=GCBCAgent,
+    gcbc_cnn=GCBCCNNAgent,
     gciql=GCIQLAgent,
     gcdqn=GCDQNAgent,
     gcdqn_cnn=GCDQNCNNAgent,
@@ -93,6 +95,20 @@ def create_agent(config: ml_collections.FrozenConfigDict, example_batch: dict, s
             example_batch['actions'],
             config,
             example_batch['value_goals'],
+        )
+    elif config.agent_name == "gcbc":
+        agent = GCBCAgent.create(
+            seed,
+            example_batch['observations'],
+            example_batch['actions'],
+            config,
+        )
+    elif config.agent_name == "gcbc_cnn":
+        agent = GCBCCNNAgent.create(
+            seed,
+            example_batch['observations'],
+            example_batch['actions'],
+            config,
         )
     elif config.agent_name == "gciql":
         agent = GCIQLAgent.create(

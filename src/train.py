@@ -117,6 +117,12 @@ def get_agent_specific_eval_metrics(prefix, loss_info, agent_name):
             f"{prefix}/cat_acc": loss_info["critic/categorical_accuracy"],
         }
 
+    if agent_name in {"gcbc", "gcbc_cnn"}:
+        return {
+            f"{prefix}/actor_loss": loss_info["actor/actor_loss"],
+            f"{prefix}/bc_log_prob": loss_info["actor/bc_log_prob"],
+        }
+
     if agent_name in CRITIC_LOSS_AGENTS:
         return {
             f"{prefix}/critic_loss": loss_info["critic/critic_loss"],
