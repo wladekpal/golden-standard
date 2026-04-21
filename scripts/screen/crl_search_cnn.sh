@@ -18,11 +18,11 @@ case "${use_discounted_mc_rewards,,}" in
     ;;
 esac
 
-grid_size=5
-number_of_boxes=4
-SEEDS=(1 2 3)
-MOVING_BOXES_MAX_VALUES=(1 2 3)
-LEARNING_RATES=(0.0003)
+grid_size=6
+number_of_boxes=2
+SEEDS=(1 2)
+MOVING_BOXES_MAX_VALUES=(2)
+LEARNING_RATES=(0.001)
 DISCOUNTS=(0.99)
 BATCH_SIZES=(256)
 
@@ -70,7 +70,7 @@ run_job() {
   local batch_size="$6"
 
   local job_id="seed${seed}_mov${number_of_moving_boxes_max}_lr${learning_rate}_disc${discount}_bs${batch_size}_gpu${gpu_id}"
-  local run_exp_name="crl_search_cnn_5x5_4boxes_entropy_v_g_long_${learning_rate}_lr_${discount}_gamma_${batch_size}_bs"
+  local run_exp_name="crl_search_cnn_6x6_2boxes_entropy_v_g_long_ln_${learning_rate}_lr_${discount}_gamma_${batch_size}_bs"
   local discounted_mc_flag=()
 
   local temp_dir
@@ -99,13 +99,13 @@ run_job() {
       --exp.name "$run_exp_name" \
       --env.number_of_boxes_max "$number_of_boxes" \
       --env.number_of_boxes_min "$number_of_boxes" \
-      --env.number_of_moving_boxes_max "$number_of_moving_boxes_max" \
+      --env.number_of_moving_boxes_max "$number_of_boxes" \
       --env.grid_size "$grid_size" \
       --agent.lr "$learning_rate" \
       --agent.discount "$discount" \
       --env.episode_length 100 \
       --exp.seed "$seed" \
-      --exp.project "crl_cnn_generalized" \
+      --exp.project "dqn_transformer_exact" \
       --exp.epochs 500 \
       --exp.gif_every 10 \
       --agent.alpha 0.1 \
@@ -113,7 +113,8 @@ run_job() {
       --agent.batch_size "$batch_size" \
       --exp.num_envs 256 \
       --exp.input_representation "factored_flat" \
-      --exp.eval-different-box-numbers
+      --env.level_generator "variable" \
+      --exp.eval_special
   )
 }
 

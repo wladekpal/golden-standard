@@ -18,10 +18,10 @@ case "${use_discounted_mc_rewards,,}" in
     ;;
 esac
 
-grid_size=8
-number_of_boxes=6
+GRID_SIZES=(8 10 12)
+NUMBER_OF_BOXES_VALUES=(6 8 10 12)
 SEEDS=(1 2)
-MOVING_BOXES_MAX_VALUES=(2)
+MOVING_BOXES_MAX_VALUES=(1 2)
 LEARNING_RATES=(0.0003)
 DISCOUNTS=(0.99)
 BATCH_SIZES=(256)
@@ -39,7 +39,7 @@ for dir in "${exclude_dirs[@]}"; do
 done
 
 # Experiment name
-exp_name="dqn_cnn_${grid_size}"
+exp_name="dqn_cnn"
 
 # Create the main experiments directory if it doesn't exist
 EXPERIMENTS_DIR="$ROOT_DIR/experiments"
@@ -49,12 +49,16 @@ timestamp=$(date +"%Y%m%d_%H%M%S")
 
 # Create an array of all job combinations
 JOBS=()
-for seed in "${SEEDS[@]}"; do
-  for number_of_moving_boxes_max in "${MOVING_BOXES_MAX_VALUES[@]}"; do
-    for learning_rate in "${LEARNING_RATES[@]}"; do
-      for discount in "${DISCOUNTS[@]}"; do
-        for batch_size in "${BATCH_SIZES[@]}"; do
-          JOBS+=("$seed:$number_of_moving_boxes_max:$learning_rate:$discount:$batch_size")
+for grid_size in "${GRID_SIZES[@]}"; do
+  for number_of_boxes in "${NUMBER_OF_BOXES_VALUES[@]}"; do
+    for seed in "${SEEDS[@]}"; do
+      for number_of_moving_boxes_max in "${MOVING_BOXES_MAX_VALUES[@]}"; do
+        for learning_rate in "${LEARNING_RATES[@]}"; do
+          for discount in "${DISCOUNTS[@]}"; do
+            for batch_size in "${BATCH_SIZES[@]}"; do
+              JOBS+=("$grid_size:$number_of_boxes:$seed:$number_of_moving_boxes_max:$learning_rate:$discount:$batch_size")
+            done
+          done
         done
       done
     done
@@ -63,18 +67,20 @@ done
 
 run_job() {
   local gpu_id="$1"
-  local seed="$2"
-  local number_of_moving_boxes_max="$3"
-  local learning_rate="$4"
-  local discount="$5"
-  local batch_size="$6"
+  local grid_size="$2"
+  local number_of_boxes="$3"
+  local seed="$4"
+  local number_of_moving_boxes_max="$5"
+  local learning_rate="$6"
+  local discount="$7"
+  local batch_size="$8"
 
-  local job_id="seed${seed}_mov${number_of_moving_boxes_max}_lr${learning_rate}_disc${discount}_bs${batch_size}_gpu${gpu_id}"
-  local run_exp_name="dqn_cnn_${learning_rate}_lr_${discount}_gamma_${batch_size}_bs"
+  local job_id="grid${grid_size}_boxes${number_of_boxes}_seed${seed}_mov${number_of_moving_boxes_max}_lr${learning_rate}_disc${discount}_bs${batch_size}_gpu${gpu_id}"
+  local run_exp_name="dqn_cnn_grid_${grid_size}_boxes${number_of_boxes}_mov${number_of_moving_boxes_max}_lr${learning_rate}_disc${discount}_bs${batch_size}_gpu${gpu_id}"
   local discounted_mc_flag=()
 
   local temp_dir
-  temp_dir="$(mktemp -d "$EXPERIMENTS_DIR/${exp_name}_${grid_size}_${timestamp}_${job_id}_XXXX")"
+  temp_dir="$(mktemp -d "$EXPERIMENTS_DIR/${exp_name}_${timestamp}_${job_id}_XXXX")"
 
   echo "Creating temp dir: $temp_dir"
   rsync -a "${exclude_opts[@]}" "$ROOT_DIR/" "$temp_dir/"
@@ -99,14 +105,14 @@ run_job() {
       --exp.name "$run_exp_name" \
       --env.number_of_boxes_max "$number_of_boxes" \
       --env.number_of_boxes_min "$number_of_boxes" \
-      --env.number_of_moving_boxes_max "$number_of_boxes" \
+      --env.number_of_moving_boxes_max "$number_of_moving_boxes_max" \
       --env.grid_size "$grid_size" \
       --agent.lr "$learning_rate" \
       --agent.discount "$discount" \
       --env.episode_length 100 \
       --exp.seed "$seed" \
-      --exp.project "dqn_transformer_exact" \
-      --exp.epochs 50 \
+      --exp.project "dqn_cnn_generalized" \
+      --exp.epochs 100 \
       --exp.gif_every 10 \
       --agent.alpha 0.1 \
       --exp.max_replay_size 10000 \
@@ -114,8 +120,9 @@ run_job() {
       --exp.num_envs 256 \
       --exp.input_representation "factored_flat" \
       --exp.use_future_and_random_goals \
-      --env.level_generator "variable" \
-      --exp.eval_special
+      --exp.eval-different-box-numbers
+      # --env.level_generator "variable" \
+      # --exp.eval_special
   )
 }
 
@@ -159,17 +166,19 @@ gpu_job_count() {
 
 launch_job_on_gpu() {
   local gpu_index="$1"
-  local seed="$2"
-  local number_of_moving_boxes_max="$3"
-  local learning_rate="$4"
-  local discount="$5"
-  local batch_size="$6"
+  local grid_size="$2"
+  local number_of_boxes="$3"
+  local seed="$4"
+  local number_of_moving_boxes_max="$5"
+  local learning_rate="$6"
+  local discount="$7"
+  local batch_size="$8"
 
   local current_jobs
   current_jobs="$(gpu_job_count "$gpu_index")"
 
-  echo "[scheduler] Launching job ${job_index}/${#JOBS[@]} on GPU ${GPU_IDS[$gpu_index]} (seed=${seed}, mov=${number_of_moving_boxes_max}, lr=${learning_rate}, discount=${discount}, bs=${batch_size}, slot=$((current_jobs + 1))/${MAX_JOBS_PER_GPU})"
-  run_job "${GPU_IDS[$gpu_index]}" "$seed" "$number_of_moving_boxes_max" "$learning_rate" "$discount" "$batch_size" &
+  echo "[scheduler] Launching job ${job_index}/${#JOBS[@]} on GPU ${GPU_IDS[$gpu_index]} (grid=${grid_size}, boxes=${number_of_boxes}, seed=${seed}, mov=${number_of_moving_boxes_max}, lr=${learning_rate}, discount=${discount}, bs=${batch_size}, slot=$((current_jobs + 1))/${MAX_JOBS_PER_GPU})"
+  run_job "${GPU_IDS[$gpu_index]}" "$grid_size" "$number_of_boxes" "$seed" "$number_of_moving_boxes_max" "$learning_rate" "$discount" "$batch_size" &
   GPU_PID_LISTS[$gpu_index]="${GPU_PID_LISTS[$gpu_index]} $!"
   GPU_PID_LISTS[$gpu_index]="${GPU_PID_LISTS[$gpu_index]# }"
 }
@@ -194,8 +203,8 @@ while [ "$job_index" -lt "${#JOBS[@]}" ]; do
     continue
   fi
 
-  IFS=':' read -r seed number_of_moving_boxes_max learning_rate discount batch_size <<< "${JOBS[$job_index]}"
-  launch_job_on_gpu "$free_gpu_index" "$seed" "$number_of_moving_boxes_max" "$learning_rate" "$discount" "$batch_size"
+  IFS=':' read -r grid_size number_of_boxes seed number_of_moving_boxes_max learning_rate discount batch_size <<< "${JOBS[$job_index]}"
+  launch_job_on_gpu "$free_gpu_index" "$grid_size" "$number_of_boxes" "$seed" "$number_of_moving_boxes_max" "$learning_rate" "$discount" "$batch_size"
   job_index=$((job_index + 1))
 done
 
