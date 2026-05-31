@@ -1,16 +1,11 @@
 import jax
 import jax.numpy as jnp
 import pytest
-import sys
-import os
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
-# adjust the import to where your module actually lives
-from .block_moving_env import BoxMovingEnv
-from .generators import DefaultLevelGenerator, create_solved_state, VariableQuarterGenerator
-from .env_types import calculate_number_of_boxes, GridStatesEnum, BoxMovingState, remove_targets
-from .wrappers import AutoResetWrapper, QuarterFilter
+from envs.block_moving.block_moving_env import BoxMovingEnv
+from envs.block_moving.generators import DefaultLevelGenerator, create_solved_state, VariableQuarterGenerator
+from envs.block_moving.env_types import calculate_number_of_boxes, GridStatesEnum, BoxMovingState, remove_targets
+from envs.block_moving.wrappers import AutoResetWrapper, QuarterFilter
 
 
 def test_remove_targets_mapping_all_values():
@@ -80,7 +75,8 @@ def test_quarter_generator_box_and_target_counts(seed):
         number_of_boxes_min=3,
         number_of_boxes_max=3,
         quarter_size=2,
-        number_of_moving_boxes_max=1,
+        # VariableQuarterGenerator requires all boxes to move, i.e. moving == max.
+        number_of_moving_boxes_max=3,
         special=False,
     )
     key = jax.random.PRNGKey(seed)

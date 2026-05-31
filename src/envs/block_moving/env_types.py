@@ -74,6 +74,7 @@ REMOVE_AGENT_DICT = {
     int(GridStatesEnum.AGENT_ON_BOX_CARRYING_BOX): int(GridStatesEnum.BOX),  # noqa: E501 agent standing on a box (and also carrying one) -> box stays
 }
 
+# Placing an agent (not carrying a box) onto an agent-free cell.
 ADD_AGENT_DICT = {
     int(GridStatesEnum.EMPTY): int(GridStatesEnum.AGENT),  # empty -> agent
     int(GridStatesEnum.BOX): int(GridStatesEnum.AGENT_ON_BOX),  # box -> agent on box
@@ -81,40 +82,70 @@ ADD_AGENT_DICT = {
     int(GridStatesEnum.BOX_ON_TARGET): int(GridStatesEnum.AGENT_ON_TARGET_WITH_BOX),  # noqa: E501 box on target -> agent on that box+target
 }
 
-EMPTY_VAL = int(GridStatesEnum.EMPTY)
-max_key = max(REMOVE_AGENT_DICT.keys())
-_REMOVE_AGENT_ARRAY = jnp.array([REMOVE_AGENT_DICT.get(i, EMPTY_VAL) for i in range(max_key + 1)], dtype=jnp.int8)
-_ADD_AGENT_ARRAY = jnp.array([ADD_AGENT_DICT.get(i, EMPTY_VAL) for i in range(max_key + 1)], dtype=jnp.int8)
+# Placing an agent that *is* carrying a box onto an agent-free cell.
+ADD_AGENT_CARRYING_DICT = {
+    int(GridStatesEnum.EMPTY): int(GridStatesEnum.AGENT_CARRYING_BOX),
+    int(GridStatesEnum.BOX): int(GridStatesEnum.AGENT_ON_BOX_CARRYING_BOX),
+    int(GridStatesEnum.TARGET): int(GridStatesEnum.AGENT_ON_TARGET_CARRYING_BOX),
+    int(GridStatesEnum.BOX_ON_TARGET): int(GridStatesEnum.AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX),
+}
 
-
+# Pick up the box the agent is standing on (only valid while not already carrying).
 PICK_UP_DICT = {
     int(GridStatesEnum.AGENT_ON_BOX): int(GridStatesEnum.AGENT_CARRYING_BOX),
     int(GridStatesEnum.AGENT_ON_TARGET_WITH_BOX): int(GridStatesEnum.AGENT_ON_TARGET_CARRYING_BOX),
 }
 
+# Put the carried box down onto the current cell (inverse of pick up).
 PUT_DOWN_DICT = {v: k for k, v in PICK_UP_DICT.items()}
 
-EMPTY_VAL = int(GridStatesEnum.EMPTY)
-max_key = max(REMOVE_TARGETS_DICT.keys())
-# array size must be max_key + 1 so that numeric enum values are usable as indices
-_MAPPING_ARRAY = jnp.array([REMOVE_TARGETS_DICT.get(i, EMPTY_VAL) for i in range(max_key + 1)], dtype=jnp.int8)
+
+_NUM_STATES = int(GridStatesEnum.AGENT_ON_BOX_CARRYING_BOX) + 1
+
+
+def _lookup_array(mapping: dict[int, int], identity: bool = False) -> jax.Array:
+    """Build an int8 lookup table indexed by grid-state value.
+
+    Cells absent from `mapping` map to themselves when `identity` is set,
+    otherwise to EMPTY. This lets `array[grid]` replace nested cond/switch logic.
+    """
+    default = (lambda i: i) if identity else (lambda i: int(GridStatesEnum.EMPTY))
+    return jnp.array([mapping.get(i, default(i)) for i in range(_NUM_STATES)], dtype=jnp.int8)
+
+
+def _valid_mask(keys) -> jax.Array:
+    """Boolean table that is True exactly for the given grid-state values."""
+    keys = {int(k) for k in keys}
+    return jnp.array([i in keys for i in range(_NUM_STATES)], dtype=jnp.bool_)
+
+
+_REMOVE_AGENT_ARRAY = _lookup_array(REMOVE_AGENT_DICT)
+_ADD_AGENT_ARRAY = _lookup_array(ADD_AGENT_DICT)
+_ADD_AGENT_CARRYING_ARRAY = _lookup_array(ADD_AGENT_CARRYING_DICT)
+_MAPPING_ARRAY = _lookup_array(REMOVE_TARGETS_DICT)
+
+_PICK_UP_ARRAY = _lookup_array(PICK_UP_DICT, identity=True)
+_PICK_UP_VALID = _valid_mask(PICK_UP_DICT.keys())
+_PUT_DOWN_ARRAY = _lookup_array(PUT_DOWN_DICT, identity=True)
+_PUT_DOWN_VALID = _valid_mask(PUT_DOWN_DICT.keys())
 
 
 @jax.jit
 def remove_targets(grid_state: jax.Array) -> jax.Array:
     """Project grid states with targets to states without targets using a pre-built mapping array."""
-    # ensure integer indexing dtype
     return _MAPPING_ARRAY[grid_state.astype(jnp.int8)]
 
 
-ACTIONS = {
-    0: (jnp.int8(-1), jnp.int8(0)),  # UP
-    1: (jnp.int8(1), jnp.int8(0)),  # DOWN
-    2: (jnp.int8(0), jnp.int8(-1)),  # LEFT
-    3: (jnp.int8(0), jnp.int8(1)),  # RIGHT
-    4: None,  # PICK_UP
-    5: None,  # PUT_DOWN
-}
+# Row/column deltas for the four movement actions; pick up / put down do not move.
+_ACTION_DELTAS = jnp.array(
+    [
+        [-1, 0],  # UP
+        [1, 0],  # DOWN
+        [0, -1],  # LEFT
+        [0, 1],  # RIGHT
+    ],
+    dtype=jnp.int8,
+)
 
 
 @dataclass
