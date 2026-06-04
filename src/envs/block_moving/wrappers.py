@@ -4,21 +4,17 @@ import jax.numpy as jnp
 from typing import Tuple, Dict, Any
 
 
-class Wrapper(BoxMovingEnv):
+class Wrapper:
+    """Base environment wrapper. Any attribute not overridden is delegated to the wrapped env."""
+
     def __init__(self, env: BoxMovingEnv):
         self._env = env
-        # Copy attributes from wrapped environment
-        for attr in [
-            "grid_size",
-            "episode_length",
-            "number_of_boxes_min",
-            "number_of_boxes_max",
-            "number_of_moving_boxes_max",
-            "action_space",
-            "level_generator",
-        ]:
-            if hasattr(env, attr):
-                setattr(self, attr, getattr(env, attr))
+
+    def __getattr__(self, name):
+        # Only reached for attributes/methods not defined on the wrapper itself.
+        if name == "_env":
+            raise AttributeError(name)
+        return getattr(self._env, name)
 
     def reset(self, key: jax.Array) -> Tuple[BoxMovingState, Dict[str, Any]]:
         return self._env.reset(key)
@@ -58,7 +54,7 @@ class AutoResetWrapper(Wrapper):
         return state, reward, done, info
 
     def get_dummy_timestep(self, key):
-        default_dummy_timestep = super().get_dummy_timestep(key)
+        default_dummy_timestep = self._env.get_dummy_timestep(key)
         return default_dummy_timestep.replace(extras={**default_dummy_timestep.extras, "reset": jnp.bool_(False)})
 
 

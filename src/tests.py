@@ -1,4 +1,4 @@
-from .rb import get_discounted_rewards
+from rb import get_discounted_rewards
 import jax.numpy as jnp
 
 

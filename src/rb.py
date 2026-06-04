@@ -1,7 +1,7 @@
 import functools
+from typing import Any
 import flax.struct
 import jax
-from jax import flatten_util
 import jax.numpy as jnp
 from envs.block_moving.block_moving_env import BoxMovingEnv
 from envs.block_moving.env_types import remove_targets
@@ -11,7 +11,9 @@ from envs.block_moving.env_types import remove_targets
 class ReplayBufferState:
     """Contains data related to a replay buffer."""
 
-    data: jnp.ndarray
+    # `data` is a pytree mirroring the stored sample, each leaf shaped
+    # (max_replay_size, num_envs, *leaf_shape) and kept in its native dtype.
+    data: Any
     insert_position: jnp.ndarray
     sample_position: jnp.ndarray
     key: jnp.ndarray
@@ -32,14 +34,14 @@ def _create_consecutive_index_matrix(rows, cols, min_val, max_val, rng_key):
 
 
 @jax.jit
-def _take_rows_at_indices(arr_2d, indices):
-    return jnp.take(arr_2d, indices, axis=0, mode="wrap")
-
-
-@jax.jit
 def _sample_sequence_batch(buffer_data, env_indices, index_matrix):
-    take_rows_vmapped = jax.vmap(_take_rows_at_indices, in_axes=(1, 0))
-    return take_rows_vmapped(buffer_data[:, env_indices, :], index_matrix)
+    """Gather one contiguous sequence per sampled env from every leaf of the buffer pytree.
+
+    Each leaf has shape ``(max_replay_size, num_envs, *leaf_shape)``; the returned leaf has
+    shape ``(batch_size, episode_length, *leaf_shape)``.
+    """
+    take_rows = jax.vmap(lambda arr, idx: jnp.take(arr, idx, axis=0, mode="wrap"), in_axes=(1, 0))
+    return jax.tree_util.tree_map(lambda leaf: take_rows(leaf[:, env_indices], index_matrix), buffer_data)
 
 
 class TrajectoryUniformSamplingQueue:
@@ -62,21 +64,24 @@ class TrajectoryUniformSamplingQueue:
         num_envs: int,
         episode_length: int,
     ):
-        self._flatten_fn = jax.vmap(jax.vmap(lambda x: flatten_util.ravel_pytree(x)[0]))
-        dummy_flatten, self._unflatten_fn = flatten_util.ravel_pytree(dummy_data_sample)
-        self._unflatten_fn = jax.vmap(jax.vmap(self._unflatten_fn))
-        data_size = len(dummy_flatten)
-
-        self._data_shape = (max_replay_size, num_envs, data_size)
-        self._data_dtype = dummy_flatten.dtype
+        # Store the buffer as a pytree of native-dtype arrays (int8 grids stay int8) rather than
+        # one ravel_pytree-flattened array, which would upcast everything to float32 (~4x memory).
+        # A single dummy sample defines the per-leaf shape and dtype of stored data; inserts are
+        # reshaped and cast to match it (see insert_internal).
+        self._dummy = dummy_data_sample
+        self.max_replay_size = max_replay_size
         self._sample_batch_size = sample_batch_size
         self._size = 0
         self.num_envs = num_envs
         self.episode_length = episode_length
 
     def init(self, key):
+        data = jax.tree_util.tree_map(
+            lambda x: jnp.zeros((self.max_replay_size, self.num_envs) + x.shape, x.dtype),
+            self._dummy,
+        )
         return ReplayBufferState(
-            data=jnp.zeros(self._data_shape, self._data_dtype),
+            data=data,
             sample_position=jnp.zeros((), jnp.int32),
             insert_position=jnp.zeros((), jnp.int32),
             key=key,
@@ -91,13 +96,13 @@ class TrajectoryUniformSamplingQueue:
         """Checks whether insert operation can be performed."""
         assert isinstance(shards, int), "This method should not be JITed."
         insert_size = jax.tree_util.tree_flatten(samples)[0][0].shape[0] // shards
-        if self._data_shape[0] < insert_size:
+        if self.max_replay_size < insert_size:
             raise ValueError(
                 "Trying to insert a batch of samples larger than the maximum replay"
                 f" size. num_samples: {insert_size}, max replay size"
-                f" {self._data_shape[0]}"
+                f" {self.max_replay_size}"
             )
-        self._size = min(self._data_shape[0], self._size + insert_size)
+        self._size = min(self.max_replay_size, self._size + insert_size)
 
     def check_can_sample(self, buffer_state, shards):
         """Checks whether sampling can be performed. Do not JIT this method."""
@@ -107,32 +112,42 @@ class TrajectoryUniformSamplingQueue:
 
         Args:
           buffer_state: Buffer state
-          samples: Sample to insert with a leading batch size.
+          samples: Sample to insert with a leading (unroll_len, num_envs) batch.
 
         Returns:
           New buffer state.
         """
-        if buffer_state.data.shape != self._data_shape:
-            raise ValueError(
-                f"buffer_state.data.shape ({buffer_state.data.shape}) "
-                f"doesn't match the expected value ({self._data_shape})"
-            )
-
-        update = self._flatten_fn(samples)  # Updates has shape (unroll_len, num_envs, self._data_shape[-1])
-        data = buffer_state.data  # shape = (max_replay_size, num_envs, data_size)
+        # Reshape each inserted leaf's trailing dims to the stored per-element shape
+        # (e.g. scalar fields are stored as shape (1,)) and cast it to the stored dtype.
+        # The dtype cast canonicalizes to the dummy sample's dtype, matching the previous
+        # ravel_pytree-based layout (which round-tripped every leaf through the dummy dtype).
+        update = jax.tree_util.tree_map(
+            lambda x, ref: x.reshape(x.shape[0], x.shape[1], *ref.shape).astype(ref.dtype),
+            samples,
+            self._dummy,
+        )
+        data = buffer_state.data  # pytree, each leaf (max_replay_size, num_envs, *leaf_shape)
+        unroll_len = jax.tree_util.tree_leaves(update)[0].shape[0]
 
         # If there is not enough trailing room to write `update`, roll the queue left
         # so insertion remains a single contiguous write.
         position = buffer_state.insert_position
-        roll = jnp.minimum(0, len(data) - position - len(update))
-        data = jax.lax.cond(roll < 0, lambda x: jnp.roll(x, roll, axis=0), lambda x: x, data)
+        roll = jnp.minimum(0, self.max_replay_size - position - unroll_len)
+        data = jax.lax.cond(
+            roll < 0,
+            lambda d: jax.tree_util.tree_map(lambda x: jnp.roll(x, roll, axis=0), d),
+            lambda d: d,
+            data,
+        )
         position = position + roll
 
         # Update the buffer and the control numbers.
-        data = jax.lax.dynamic_update_slice_in_dim(data, update, position, axis=0)
-        # `insert_position` can take values in [0, len(data)] so that when a roll happens,
-        # writing can end at exactly len(data) before wrapping on the next insert.
-        position = (position + len(update)) % (len(data) + 1)
+        data = jax.tree_util.tree_map(
+            lambda d, u: jax.lax.dynamic_update_slice_in_dim(d, u, position, axis=0), data, update
+        )
+        # `insert_position` can take values in [0, max_replay_size] so that when a roll happens,
+        # writing can end at exactly max_replay_size before wrapping on the next insert.
+        position = (position + unroll_len) % (self.max_replay_size + 1)
 
         return buffer_state.replace(
             data=data,
@@ -145,11 +160,6 @@ class TrajectoryUniformSamplingQueue:
         return self.sample_internal(buffer_state)
 
     def sample_internal(self, buffer_state):
-        if buffer_state.data.shape != self._data_shape:
-            raise ValueError(
-                f"Data shape expected by the replay buffer ({self._data_shape}) does "
-                f"not match the shape of the buffer state ({buffer_state.data.shape})"
-            )
         key, sample_key, _ = jax.random.split(buffer_state.key, 3)
         # Note: this is the number of envs to sample but it can be modified if there is OOM
         batch_size = self._sample_batch_size
@@ -170,8 +180,7 @@ class TrajectoryUniformSamplingQueue:
         For each sampled env index we extract one random contiguous sequence.
         Sequence boundaries can cross episodes; flatten_batch handles trajectory masking.
         """
-        batch = _sample_sequence_batch(buffer_state.data, envs_idxs, index_matrix)
-        transitions = self._unflatten_fn(batch)
+        transitions = _sample_sequence_batch(buffer_state.data, envs_idxs, index_matrix)
         return buffer_state.replace(key=key), transitions
 
     def size(self, buffer_state: ReplayBufferState) -> int:

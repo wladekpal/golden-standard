@@ -45,3 +45,12 @@ exclude = [
     "notebooks/",
     "*.ipynb",
 ]
+
+[tool.pytest.ini_options]
+# `src` is the source root (scripts run as `uv run src/train.py`), so put it on
+# the path and let test modules use the same absolute imports as the rest of the code.
+pythonpath = ["src"]
+testpaths = ["src"]
+# Test files in this repo are named `tests.py` / `tests_*.py`, not `test_*.py`.
+python_files = ["test_*.py", "tests.py", "tests_*.py"]
+addopts = "--import-mode=importlib"

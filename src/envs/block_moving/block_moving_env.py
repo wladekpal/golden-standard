@@ -9,10 +9,14 @@ from .env_types import (
     BoxMovingState,
     GridStatesEnum,
     remove_targets,
-    ACTIONS,
+    _ACTION_DELTAS,
     _REMOVE_AGENT_ARRAY,
-    PICK_UP_DICT,
-    PUT_DOWN_DICT,
+    _ADD_AGENT_ARRAY,
+    _ADD_AGENT_CARRYING_ARRAY,
+    _PICK_UP_ARRAY,
+    _PICK_UP_VALID,
+    _PUT_DOWN_ARRAY,
+    _PUT_DOWN_VALID,
 )
 from .generators import DefaultLevelGenerator, VariableQuarterGenerator
 
@@ -84,8 +88,6 @@ class BoxMovingEnv:
 
         # Increment steps
         new_steps = state.steps + 1
-
-        reward = 0.0
         done = False
 
         # Use jax.lax.switch instead of if-elif to handle traced arrays
@@ -136,63 +138,26 @@ class BoxMovingEnv:
     def handle_movement(self, state: BoxMovingState, action: int) -> Tuple[jax.Array, bool]:
         row, col = state.agent_pos[0], state.agent_pos[1]
         grid = state.grid
-        dr, dc = ACTIONS[action]
-        new_row = row + dr
-        new_col = col + dc
+        new_row = row + _ACTION_DELTAS[action, 0]
+        new_col = col + _ACTION_DELTAS[action, 1]
 
-        # Check bounds and collision
+        # Moves off the board are rejected; the destination cell is always agent-free.
         valid_move = (new_row >= 0) & (new_row < self.grid_size) & (new_col >= 0) & (new_col < self.grid_size)
 
         def move_valid():
-            # Remove the agent from old position on the grid
+            # Remove the agent from its old cell, then drop it (with or without box) on the destination.
             grid_after_clear = grid.at[row, col].set(_REMOVE_AGENT_ARRAY[grid[row, col]])
-
-            possible_fields_after_clear = jnp.array(
-                [
-                    GridStatesEnum.BOX,
-                    GridStatesEnum.TARGET,
-                    GridStatesEnum.BOX_ON_TARGET,
-                    GridStatesEnum.EMPTY,
-                ]
-            )
-
-            # Check if agent is on box, target, or empty cell, after move
-            cleared_field_type = (
-                (grid_after_clear[new_row, new_col] == possible_fields_after_clear).astype(jnp.int8).argmax()
-            )
-
-            # Place the agent in the new position on the grid, depending on whether it is carrying a box or not
-            new_field_with_agent = jax.lax.cond(
-                state.agent_has_box,
-                lambda: jax.lax.switch(
-                    cleared_field_type,
-                    [
-                        lambda: GridStatesEnum.AGENT_ON_BOX_CARRYING_BOX,  # Agent on box carrying box
-                        lambda: GridStatesEnum.AGENT_ON_TARGET_CARRYING_BOX,  # Agent on target carrying box
-                        lambda: GridStatesEnum.AGENT_ON_TARGET_WITH_BOX_CARRYING_BOX,  # Agent on box on target carrying box
-                        lambda: GridStatesEnum.AGENT_CARRYING_BOX,  # Agent on empty cell carrying box
-                    ],
-                ),
-                lambda: jax.lax.switch(
-                    cleared_field_type,
-                    [
-                        lambda: GridStatesEnum.AGENT_ON_BOX,  # Agent on box
-                        lambda: GridStatesEnum.AGENT_ON_TARGET,  # Agent on target
-                        lambda: GridStatesEnum.AGENT_ON_TARGET_WITH_BOX,  # Agent on box on target
-                        lambda: GridStatesEnum.AGENT,  # Agent on empty cell
-                    ],
-                ),
+            dest_cell = grid_after_clear[new_row, new_col]
+            new_field_with_agent = jnp.where(
+                state.agent_has_box, _ADD_AGENT_CARRYING_ARRAY[dest_cell], _ADD_AGENT_ARRAY[dest_cell]
             )
             new_grid = grid_after_clear.at[new_row, new_col].set(new_field_with_agent)
-
             return jnp.array([new_row, new_col]), new_grid, state.agent_has_box
 
         def move_invalid():
             return state.agent_pos, grid, state.agent_has_box
 
-        new_pos, new_grid, new_agent_has_box = jax.lax.cond(valid_move, move_valid, move_invalid)
-
-        return new_pos, new_grid, new_agent_has_box
+        return jax.lax.cond(valid_move, move_valid, move_invalid)
 
     @staticmethod
     @jax.jit
@@ -213,56 +178,19 @@ class BoxMovingEnv:
         return solved
 
     def _handle_pickup(self, state: BoxMovingState) -> Tuple[jax.Array, bool]:
-        """Handle pickup action using PICK_UP_DICT mapping (JAX-friendly)."""
-
+        """Pick up the box under the agent (no-op unless standing on a box, not yet carrying)."""
         row, col = state.agent_pos[0], state.agent_pos[1]
-        current_cell = state.grid[row, col]
-
-        # prepare jax arrays of keys and values from the mapping
-        keys = jnp.array(list(PICK_UP_DICT.keys()), dtype=state.grid.dtype)
-        vals = jnp.array(list(PICK_UP_DICT.values()), dtype=state.grid.dtype)
-
-        # boolean mask of which key (if any) matches current_cell
-        matches = keys == current_cell
-        any_match = jnp.any(matches)
-
-        def pickup_valid():
-            # index of the (first) matching key
-            idx = jnp.argmax(matches)
-            new_state_val = vals[idx]
-            new_grid = state.grid.at[row, col].set(new_state_val)
-            return new_grid, True
-
-        def pickup_invalid():
-            return state.grid, state.agent_has_box
-
-        new_grid, new_agent_has_box = jax.lax.cond(any_match, pickup_valid, pickup_invalid)
+        cell = state.grid[row, col]
+        new_grid = state.grid.at[row, col].set(_PICK_UP_ARRAY[cell])
+        new_agent_has_box = state.agent_has_box | _PICK_UP_VALID[cell]
         return new_grid, new_agent_has_box
 
     def _handle_putdown(self, state: BoxMovingState) -> Tuple[jax.Array, bool]:
-        """Handle putdown action using PUT_DOWN_DICT mapping (JAX-friendly)."""
-
+        """Put the carried box down on the current cell (no-op unless carrying)."""
         row, col = state.agent_pos[0], state.agent_pos[1]
-        current_cell = state.grid[row, col]
-
-        # prepare jax arrays of keys and values from the mapping
-        keys = jnp.array(list(PUT_DOWN_DICT.keys()), dtype=state.grid.dtype)
-        vals = jnp.array(list(PUT_DOWN_DICT.values()), dtype=state.grid.dtype)
-
-        # boolean mask of which key (if any) matches current_cell
-        matches = keys == current_cell
-        any_match = jnp.any(matches)
-
-        def putdown_valid():
-            idx = jnp.argmax(matches)
-            new_state_val = vals[idx]
-            new_grid = state.grid.at[row, col].set(new_state_val)
-            return new_grid, False
-
-        def putdown_invalid():
-            return state.grid, state.agent_has_box
-
-        new_grid, new_agent_has_box = jax.lax.cond(any_match, putdown_valid, putdown_invalid)
+        cell = state.grid[row, col]
+        new_grid = state.grid.at[row, col].set(_PUT_DOWN_ARRAY[cell])
+        new_agent_has_box = state.agent_has_box & ~_PUT_DOWN_VALID[cell]
         return new_grid, new_agent_has_box
 
     def play_game(self, key: jax.Array):
