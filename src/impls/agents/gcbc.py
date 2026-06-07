@@ -7,7 +7,7 @@ import ml_collections
 import optax
 from impls.utils.encoders import GCEncoder, encoder_modules
 from impls.utils.flax_utils import ModuleDict, TrainState, nonpytree_field
-from impls.utils.networks import GCActor, GCDiscreteActor
+from impls.utils.networks import GCActor, GCDiscreteActor, GCDiscreteUniversalTransformerActor
 
 
 class GCBCAgent(flax.struct.PyTreeNode):
@@ -110,15 +110,41 @@ class GCBCAgent(flax.struct.PyTreeNode):
             encoder_module = encoder_modules[config['encoder']]
             encoders['actor'] = GCEncoder(concat_encoder=encoder_module())
 
+        actor_arch = config.get('actor_arch', 'mlp')
+
         # Define actor network.
         if config['discrete']:
-            actor_def = GCDiscreteActor(
-                hidden_dims=config['actor_hidden_dims'],
-                action_dim=action_dim,
-                gc_encoder=encoders.get('actor'),
-                net_arch=config['net_arch'],
-            )
+            if actor_arch == 'universal_transformer':
+                if config['encoder'] is not None:
+                    raise ValueError("GCBC universal transformer actor expects flat grid inputs and does not use encoders.")
+                action_dim = int(action_dim)
+                num_heads = int(config['transformer_num_heads'])
+                d_model = int(config['transformer_d_model'])
+                if d_model % num_heads != 0:
+                    raise ValueError(
+                        f"transformer_d_model ({d_model}) must be divisible by transformer_num_heads ({num_heads})."
+                    )
+                actor_def = GCDiscreteUniversalTransformerActor(
+                    action_dim=action_dim,
+                    cell_dim=int(config['transformer_cell_dim']),
+                    d_model=d_model,
+                    num_heads=num_heads,
+                    thinking_steps=int(config['transformer_thinking_steps']),
+                    mlp_dim=int(config['transformer_mlp_dim']),
+                    pool=config['transformer_pool'],
+                    token_mode=config['transformer_token_mode'],
+                    token_subgrid=int(config['transformer_token_subgrid']),
+                )
+            else:
+                actor_def = GCDiscreteActor(
+                    hidden_dims=config['actor_hidden_dims'],
+                    action_dim=action_dim,
+                    gc_encoder=encoders.get('actor'),
+                    net_arch=config['net_arch'],
+                )
         else:
+            if actor_arch == 'universal_transformer':
+                raise ValueError("GCBC universal transformer actor supports only discrete action spaces.")
             actor_def = GCActor(
                 hidden_dims=config['actor_hidden_dims'],
                 action_dim=action_dim,
@@ -150,10 +176,20 @@ def get_config():
             lr=3e-4,  # Learning rate.
             batch_size=1024,  # Batch size.
             actor_hidden_dims=(512, 512, 512),  # Actor network hidden dimensions.
+            actor_arch='mlp',  # Actor architecture ('mlp' or 'universal_transformer').
+            net_arch='mlp',  # MLP network architecture ('mlp' or 'res_block').
             discount=0.99,  # Discount factor (unused by default; can be used for geometric goal sampling in GCDataset).
             const_std=True,  # Whether to use constant standard deviation for the actor.
             discrete=False,  # Whether the action space is discrete.
             encoder=ml_collections.config_dict.placeholder(str),  # Visual encoder name (None, 'impala_small', etc.).
+            transformer_cell_dim=12,  # Channels per one-hot grid cell.
+            transformer_d_model=128,
+            transformer_num_heads=4,
+            transformer_thinking_steps=1,
+            transformer_mlp_dim=256,
+            transformer_pool='cls',
+            transformer_token_mode='paired',
+            transformer_token_subgrid=1,
             # Dataset hyperparameters.
             dataset_class='GCDataset',  # Dataset class name.
             value_p_curgoal=0.0,  # Unused (defined for compatibility with GCDataset).

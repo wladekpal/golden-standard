@@ -386,6 +386,125 @@ class GCDiscreteCritic(GCValue):
         return super().__call__(observations, goals, actions)
 
 
+class TransformerEncoderBlock(nn.Module):
+    """Pre-LN transformer encoder block."""
+
+    d_model: int
+    num_heads: int
+    mlp_dim: int
+
+    @nn.compact
+    def __call__(self, x):
+        h = nn.LayerNorm()(x)
+        h = nn.MultiHeadDotProductAttention(num_heads=self.num_heads, qkv_features=self.d_model)(h, h)
+        x = x + h
+
+        h = nn.LayerNorm()(x)
+        h = nn.Dense(self.mlp_dim, kernel_init=default_init())(h)
+        h = nn.gelu(h)
+        h = nn.Dense(self.d_model, kernel_init=default_init())(h)
+        return x + h
+
+
+def _patchify(flat, cell_dim, subgrid):
+    """Reshape a flattened one-hot grid into non-overlapping patch tokens."""
+    batch_shape = flat.shape[:-1]
+    nb = len(batch_shape)
+    num_cells = flat.shape[-1] // cell_dim
+    grid_size = int(round(num_cells**0.5))
+    if grid_size * grid_size != num_cells:
+        raise ValueError(f"Observation with {num_cells} cells is not a square grid.")
+    if grid_size % subgrid != 0:
+        raise ValueError(f"Grid size {grid_size} is not divisible by token_subgrid {subgrid}.")
+
+    patch_grid_size = grid_size // subgrid
+    x = flat.reshape(*batch_shape, patch_grid_size, subgrid, patch_grid_size, subgrid, cell_dim).astype(jnp.float32)
+    perm = (*range(nb), nb, nb + 2, nb + 1, nb + 3, nb + 4)
+    x = jnp.transpose(x, perm)
+    return x.reshape(*batch_shape, patch_grid_size * patch_grid_size, subgrid * subgrid * cell_dim)
+
+
+class UniversalTransformerEncoder(nn.Module):
+    """Transformer encoder that reuses one block for multiple thinking steps."""
+
+    d_model: int
+    num_heads: int
+    mlp_dim: int
+    thinking_steps: int = 1
+
+    def setup(self):
+        self.loop_block = TransformerEncoderBlock(
+            d_model=self.d_model,
+            num_heads=self.num_heads,
+            mlp_dim=self.mlp_dim,
+        )
+
+    def __call__(self, x):
+        for _ in range(self.thinking_steps):
+            x = self.loop_block(x)
+        return x
+
+
+class GCDiscreteUniversalTransformerActor(nn.Module):
+    """Goal-conditioned discrete actor with a universal transformer over grid tokens."""
+
+    action_dim: int
+    cell_dim: int = 12
+    d_model: int = 128
+    num_heads: int = 4
+    thinking_steps: int = 1
+    mlp_dim: int = 256
+    pool: str = "cls"
+    token_mode: str = "paired"
+    token_subgrid: int = 1
+    final_fc_init_scale: float = 1e-2
+
+    @nn.compact
+    def __call__(self, observations, goals=None, goal_encoded=False, temperature=1.0):
+        del goal_encoded
+        batch_shape = observations.shape[:-1]
+        obs_tokens = _patchify(observations, self.cell_dim, self.token_subgrid)
+        if goals is None:
+            goals = observations
+        goal_tokens = _patchify(goals, self.cell_dim, self.token_subgrid)
+        num_tokens = obs_tokens.shape[-2]
+
+        if self.token_mode == "paired":
+            tokens = jnp.concatenate([obs_tokens, goal_tokens], axis=-1)
+            x = nn.Dense(self.d_model, kernel_init=default_init())(tokens)
+            pos_emb = self.param("pos_emb", nn.initializers.normal(0.02), (num_tokens, self.d_model))
+            x = x + pos_emb
+        elif self.token_mode == "separate":
+            embed = nn.Dense(self.d_model, kernel_init=default_init())
+            pos_emb = self.param("pos_emb", nn.initializers.normal(0.02), (num_tokens, self.d_model))
+            seg_obs = self.param("seg_obs", nn.initializers.normal(0.02), (self.d_model,))
+            seg_goal = self.param("seg_goal", nn.initializers.normal(0.02), (self.d_model,))
+            x = jnp.concatenate([embed(obs_tokens) + pos_emb + seg_obs, embed(goal_tokens) + pos_emb + seg_goal], axis=-2)
+        else:
+            raise ValueError(f"Unknown token_mode {self.token_mode}")
+
+        cls = self.param("cls_token", nn.initializers.normal(0.02), (self.d_model,))
+        cls = jnp.broadcast_to(cls, (*batch_shape, 1, self.d_model))
+        x = jnp.concatenate([cls, x], axis=-2)
+        x = UniversalTransformerEncoder(
+            d_model=self.d_model,
+            num_heads=self.num_heads,
+            mlp_dim=self.mlp_dim,
+            thinking_steps=self.thinking_steps,
+        )(x)
+        x = nn.LayerNorm()(x)
+
+        if self.pool == "cls":
+            pooled = x[..., 0, :]
+        elif self.pool == "mean":
+            pooled = x.mean(axis=-2)
+        else:
+            raise ValueError(f"Unknown pool {self.pool}")
+
+        logits = nn.Dense(self.action_dim, kernel_init=default_init(self.final_fc_init_scale))(pooled)
+        return distrax.Categorical(logits=logits / jnp.maximum(1e-6, temperature))
+
+
 class GCBilinearValue(nn.Module):
     """Goal-conditioned bilinear value/critic function.
 

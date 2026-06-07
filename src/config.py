@@ -32,6 +32,8 @@ class ExpConfig:
     use_targets: bool = False
     gamma: float = 0.99
     use_future_and_random_goals: bool = False  # noqa: E501 Whether to use environment goals, default - geometric sampling of future states
+    save_every: int = 0
+    """Checkpoint interval in epochs. A value <= 0 saves only epoch 0 and the final epoch."""
 
     # Evaluation settings
     eval_different_box_numbers: bool = False

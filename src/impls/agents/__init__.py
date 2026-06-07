@@ -26,6 +26,7 @@ default_config = ml_collections.FrozenConfigDict(
             batch_size=256,  # Batch size.
             actor_hidden_dims=(256, 256),  # Actor network hidden dimensions.
             value_hidden_dims=(256, 256),  # Value network hidden dimensions.
+            actor_arch='mlp',  # Actor architecture for GCBC ('mlp' or 'universal_transformer').
             latent_dim=64,
             net_arch='mlp',
             layer_norm=True,  # Whether to use layer normalization.
@@ -47,6 +48,14 @@ default_config = ml_collections.FrozenConfigDict(
             target_entropy=-1.1,  # Default target entropy for agents (-ln(|A|/2))
             use_discounted_mc_rewards=False,  # Whether to use discounted Monte Carlo rewards.
             action_sampling='softmax',
+            transformer_cell_dim=12,  # Channels per one-hot grid cell.
+            transformer_d_model=128,
+            transformer_num_heads=4,
+            transformer_thinking_steps=1,
+            transformer_mlp_dim=256,
+            transformer_pool='cls',
+            transformer_token_mode='paired',
+            transformer_token_subgrid=1,
         )
     )
 
