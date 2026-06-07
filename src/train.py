@@ -2,6 +2,7 @@ import tyro
 from config import Config
 from envs import create_env
 import functools
+import json
 import os
 import wandb
 import dataclasses
@@ -11,6 +12,7 @@ from rb import TrajectoryUniformSamplingQueue, jit_wrap, flatten_batch
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 from jax import random
 
 from impls.agents import create_agent
@@ -134,6 +136,26 @@ def get_agent_specific_eval_metrics(prefix, loss_info, agent_name):
     raise ValueError(f"Unknown agent name {agent_name}")
 
 
+def json_ready(value):
+    value = jax.device_get(value)
+    if isinstance(value, dict):
+        return {k: json_ready(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [json_ready(v) for v in value]
+    if isinstance(value, np.ndarray):
+        return value.item() if value.shape == () else value.tolist()
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return str(value)
+
+
+def append_metrics_jsonl(run_directory, metrics):
+    with open(os.path.join(run_directory, "metrics.jsonl"), "a") as f:
+        f.write(json.dumps(json_ready(metrics), sort_keys=True) + "\n")
+
+
 def evaluate_agent_in_specific_env(agent, key, jitted_create_batch, config, name, create_gif=False):
     env_eval = create_env(config.env)
     env_eval = wrap_for_eval(env_eval)  # Note: Wrap for eval is not using any quarter filtering
@@ -220,6 +242,7 @@ def evaluate_agent(agent, key, jitted_create_batch, epoch, config):
             eval_info.update(loss_info)
 
     wandb.log(eval_info)
+    return eval_info
 
 
 def init_wandb_and_run_directory(config: Config):
@@ -358,14 +381,19 @@ def train(config: Config):
     train_epoch = make_train_epoch(config, train_interval)
 
     # Main training loop with evaluation
-    evaluate_agent(agent, key, jitted_create_batch, 0, config)
+    eval_info = evaluate_agent(agent, key, jitted_create_batch, 0, config)
+    append_metrics_jsonl(run_directory, eval_info)
     save_agent(agent, config, save_dir=run_directory, epoch=0)
 
     for epoch in range(config.exp.epochs):
         buffer_state, agent, key = train_epoch(buffer_state, agent, key)
 
-        evaluate_agent(agent, key, jitted_create_batch, epoch + 1, config)
-        save_agent(agent, config, save_dir=run_directory, epoch=epoch + 1)
+        epoch_num = epoch + 1
+        eval_info = evaluate_agent(agent, key, jitted_create_batch, epoch_num, config)
+        append_metrics_jsonl(run_directory, eval_info)
+        save_interval = config.exp.save_every
+        if epoch_num == config.exp.epochs or (save_interval > 0 and epoch_num % save_interval == 0):
+            save_agent(agent, config, save_dir=run_directory, epoch=epoch_num)
 
 
 if __name__ == "__main__":
