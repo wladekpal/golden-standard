@@ -124,6 +124,12 @@ def get_agent_specific_eval_metrics(prefix, loss_info, agent_name):
             f"{prefix}/q_min": loss_info["critic/q_min"],
             f"{prefix}/q_max": loss_info["critic/q_max"],
         }
+    
+    if agent_name in {"gcbc"}:
+        return {
+            f"{prefix}/actor_loss": loss_info["actor/actor_loss"],
+            f"{prefix}/bc_log_prob": loss_info["actor/bc_log_prob"],
+        }
 
     raise ValueError(f"Unknown agent name {agent_name}")
 

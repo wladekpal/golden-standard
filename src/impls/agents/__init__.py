@@ -96,6 +96,13 @@ def create_agent(config: ml_collections.FrozenConfigDict, example_batch: dict, s
             example_batch['actions'],
             config,
         )
+    elif config.agent_name == "gcbc":
+        agent = GCBCAgent.create(
+            seed,
+            example_batch['observations'],
+            example_batch['actions'],
+            config,
+        )
     else:
         raise ValueError(f"Unknown agent class {config.agent_name}")
 
