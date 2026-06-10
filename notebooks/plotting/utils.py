@@ -69,8 +69,9 @@ def aggregate_data_from_wandb(
         epoch = create_rliable_compatible_data(history, 'epoch')
 
         grouping_param = grouping_func(run.config)
-        data[grouping_param].append(scores)
-        epochs[grouping_param].append(epoch)
+        if grouping_param in data:
+            data[grouping_param].append(scores)
+            epochs[grouping_param].append(epoch)
 
 
 
