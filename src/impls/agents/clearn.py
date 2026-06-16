@@ -183,8 +183,12 @@ class ClearnAgent(flax.struct.PyTreeNode):
         goals=None,
         seed=None,
         temperature=1.0,
+        action_masks=None,
     ):
-        dist = self.network.select('actor')(observations, goals, temperature=temperature)
+        actor_kwargs = dict(temperature=temperature)
+        if self.config['discrete']:
+            actor_kwargs['action_masks'] = action_masks
+        dist = self.network.select('actor')(observations, goals, **actor_kwargs)
         actions = dist.sample(seed=seed)
         if not self.config['discrete']:
             actions = jnp.clip(actions, -1, 1)
@@ -211,7 +215,7 @@ class ClearnAgent(flax.struct.PyTreeNode):
 
         ex_goals = ex_observations
         if config['discrete']:
-            action_dim = ex_actions.max() + 1
+            action_dim = int(config.get('action_dim') or (ex_actions.max() + 1))
         else:
             action_dim = ex_actions.shape[-1]
 

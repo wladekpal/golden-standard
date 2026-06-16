@@ -5,6 +5,7 @@ import flax
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
+from impls.utils.action_utils import mask_logits
 
 
 def default_init(scale=1.0):
@@ -239,6 +240,7 @@ class GCActor(nn.Module):
         goals=None,
         goal_encoded=False,
         temperature=1.0,
+        action_masks=None,
     ):
         """Return the action distribution.
 
@@ -302,6 +304,7 @@ class GCDiscreteActor(nn.Module):
         goals=None,
         goal_encoded=False,
         temperature=1.0,
+        action_masks=None,
     ):
         """Return the action distribution.
 
@@ -320,7 +323,7 @@ class GCDiscreteActor(nn.Module):
             inputs = jnp.concatenate(inputs, axis=-1)
         outputs = self.actor_net(inputs)
 
-        logits = self.logit_net(outputs)
+        logits = mask_logits(self.logit_net(outputs), action_masks)
 
         distribution = distrax.Categorical(logits=logits / jnp.maximum(1e-6, temperature))
 
@@ -460,7 +463,7 @@ class GCDiscreteUniversalTransformerActor(nn.Module):
     final_fc_init_scale: float = 1e-2
 
     @nn.compact
-    def __call__(self, observations, goals=None, goal_encoded=False, temperature=1.0):
+    def __call__(self, observations, goals=None, goal_encoded=False, temperature=1.0, action_masks=None):
         del goal_encoded
         batch_shape = observations.shape[:-1]
         obs_tokens = _patchify(observations, self.cell_dim, self.token_subgrid)
@@ -501,7 +504,7 @@ class GCDiscreteUniversalTransformerActor(nn.Module):
         else:
             raise ValueError(f"Unknown pool {self.pool}")
 
-        logits = nn.Dense(self.action_dim, kernel_init=default_init(self.final_fc_init_scale))(pooled)
+        logits = mask_logits(nn.Dense(self.action_dim, kernel_init=default_init(self.final_fc_init_scale))(pooled), action_masks)
         return distrax.Categorical(logits=logits / jnp.maximum(1e-6, temperature))
 
 

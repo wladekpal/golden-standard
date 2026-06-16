@@ -8,6 +8,7 @@ import optax
 import distrax
 import flax.linen as nn
 from impls.utils.encoders import GCEncoder, encoder_modules
+from impls.utils.action_utils import all_actions, discrete_action_dim, mask_logits, sample_uniform_actions
 from impls.utils.flax_utils import ModuleDict, TrainState, nonpytree_field
 from impls.utils.networks import GCActor, GCBilinearValue, GCDiscreteActor, GCDiscreteBilinearCritic, LogParam
 
@@ -59,14 +60,15 @@ class CRLSearchAgent(flax.struct.PyTreeNode):
         def value_transform(x):
             return jnp.log(jnp.maximum(x, 1e-6))
         
-        all_actions = jnp.tile(jnp.arange(6), (batch['observations'].shape[0], 1))  # B x 6
+        action_dim = discrete_action_dim(self.config)
+        candidate_actions = all_actions(batch['observations'].shape[0], action_dim)
         qs = jax.lax.stop_gradient(
-            jax.vmap(self.network.select("critic"), in_axes=(None, None, 1))(batch['observations'], jnp.roll(batch['next_observations'], shift=1, axis=0), all_actions)
-        )  # 6 x 2 x B
+            jax.vmap(self.network.select("critic"), in_axes=(None, None, 1))(batch['observations'], jnp.roll(batch['next_observations'], shift=1, axis=0), candidate_actions)
+        )  # A x 2 x B
         if len(qs.shape) == 2:  # Non-ensemble.
             qs = qs[:, None, ...]
-        qs = qs.mean(axis=1)  # 6 x B
-        qs = qs.transpose(1, 0) # B x 6
+        qs = qs.mean(axis=1)  # A x B
+        qs = mask_logits(qs.transpose(1, 0), batch.get('action_masks')) # B x A
         qs = value_transform(qs)
 
         alpha_temp = self.network.select('alpha_temp')(params=grad_params)
@@ -124,6 +126,7 @@ class CRLSearchAgent(flax.struct.PyTreeNode):
         goals=None,
         seed=None,
         temperature=1.0,
+        action_masks=None,
     ):
         """
         Returns integer action indices. Continuous actions are not supported here.
@@ -135,11 +138,12 @@ class CRLSearchAgent(flax.struct.PyTreeNode):
             return jnp.log(jnp.maximum(x, 1e-6))
         
 
-        all_actions = jnp.tile(jnp.arange(6), (observations.shape[0], 1))  # B x 6
-        qs = jax.lax.stop_gradient(jax.vmap(self.network.select('critic'), in_axes=(None, None, 1))(observations, goals, all_actions)) # 6 x 2 x B
-        qs = qs.mean(axis=1) # 6 x B
+        action_dim = discrete_action_dim(self.config)
+        candidate_actions = all_actions(observations.shape[0], action_dim)
+        qs = jax.lax.stop_gradient(jax.vmap(self.network.select('critic'), in_axes=(None, None, 1))(observations, goals, candidate_actions)) # A x 2 x B
+        qs = qs.mean(axis=1) # A x B
         qs = value_transform(qs)
-        qs = qs.transpose(1, 0) # B x 6
+        qs = mask_logits(qs.transpose(1, 0), action_masks) # B x A
         
         if self.config['action_sampling'] == 'softmax':
             # Use critic to get Q-values (use first/ensemble as appropriate). Prefer the minimum head for conservative action,
@@ -153,7 +157,7 @@ class CRLSearchAgent(flax.struct.PyTreeNode):
             greedy_actions = jnp.argmax(qs, axis=-1)  # B
             # random actions
             rng, rng_uniform = jax.random.split(seed)
-            random_actions = jax.random.randint(rng, greedy_actions.shape, 0, 6)
+            random_actions = sample_uniform_actions(rng, action_masks, greedy_actions.shape, action_dim)
 
             # ε-greedy: pick random with prob ε, else greedy
             probs = jax.random.uniform(rng_uniform, greedy_actions.shape)
@@ -188,7 +192,7 @@ class CRLSearchAgent(flax.struct.PyTreeNode):
             ex_goals = ex_observations
 
         if config['discrete']:
-            action_dim = ex_actions.max() + 1
+            action_dim = int(config.get('action_dim') or (ex_actions.max() + 1))
         else:
             action_dim = ex_actions.shape[-1]
 

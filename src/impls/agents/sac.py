@@ -124,8 +124,10 @@ class SACAgent(flax.struct.PyTreeNode):
         goals=None,
         seed=None,
         temperature=1.0,
+        action_masks=None,
     ):
         """Sample actions from the actor."""
+        del action_masks
         dist = self.network.select('actor')(observations, goals, temperature=temperature)
         actions = dist.sample(seed=seed)
         actions = jnp.clip(actions, -1, 1)

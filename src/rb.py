@@ -345,6 +345,15 @@ def flatten_batch(gamma, get_mc_discounted_rewards, use_targets, transition, rol
     return state, actions, next_state, value_goals, actor_goals, reward
 
 
+@functools.partial(jax.jit)
+def flatten_native_batch(transition, sample_key):
+    seq_len = transition.grid.shape[0]
+    random_index = jax.random.randint(sample_key, (), minval=0, maxval=seq_len - 1)
+    state = jax.tree_util.tree_map(lambda x: jnp.take(x, random_index, axis=0), transition)
+    next_state = jax.tree_util.tree_map(lambda x: jnp.take(x, random_index + 1, axis=0), transition)
+    return state, next_state
+
+
 # Computes cumulative discounted returns for each time step until the end of its trajectory
 # Supports multiple trajectories in a rollout and wrap-around episodes
 def get_discounted_rewards(steps, rewards, gamma):

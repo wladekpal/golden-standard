@@ -9,6 +9,7 @@ import dataclasses
 import copy
 
 from rb import TrajectoryUniformSamplingQueue, jit_wrap, flatten_batch
+from rb import flatten_native_batch
 
 import jax
 import jax.numpy as jnp
@@ -24,41 +25,69 @@ from impls.utils.checkpoints import save_agent
 from utils import log_gif
 
 
+def env_uses_native_rewards(env_or_config) -> bool:
+    return bool(getattr(env_or_config, "uses_native_rewards", False) or env_or_config.__class__.__name__ == "JumanjiConfig")
+
+
+def get_env_action_dim(env) -> int:
+    if hasattr(env, "action_dim"):
+        return int(env.action_dim)
+    return int(env.action_space)
+
+
+def agent_inputs(env, state, use_targets=False, input_representation="normalized_flat"):
+    if hasattr(env, "agent_inputs"):
+        return env.agent_inputs(state, use_targets, input_representation)
+
+    state_agent = jax.lax.cond(
+        use_targets,
+        lambda: state.replace(),
+        lambda: state.replace(grid=remove_targets(state.grid), goal=remove_targets(state.goal)),
+    )
+    return (
+        encode_grid_inputs(state_agent.grid, input_representation),
+        encode_grid_inputs(state_agent.goal, input_representation),
+        None,
+    )
+
+
+def transition_from_step(env, state, actions, new_state, reward, done, info):
+    if hasattr(env, "transition_from_step"):
+        return env.transition_from_step(state, actions, new_state, reward, done, info)
+
+    return TimeStep(
+        key=state.key,
+        grid=state.grid,
+        agent_pos=state.agent_pos,
+        agent_has_box=state.agent_has_box,
+        steps=state.steps,
+        number_of_boxes=state.number_of_boxes,
+        action=actions,
+        goal=state.goal,
+        reward=reward,
+        success=new_state.success,
+        done=done,
+        truncated=info["truncated"],
+        extras=state.extras,
+    )
+
+
 @functools.partial(jax.jit, static_argnums=(2, 3, 4, 5, 6))
 def collect_data(agent, key, env, num_envs, episode_length, use_targets=False, input_representation="normalized_flat"):
     def step_fn(carry, step_num):
         state, info, key = carry
         key, sample_key = jax.random.split(key)
 
-        # Use jax.lax.cond instead of if statement to handle traced arrays
-        state_agent = jax.lax.cond(
-            use_targets,
-            lambda: state.replace(),
-            lambda: state.replace(grid=remove_targets(state.grid), goal=remove_targets(state.goal)),
-        )
-
+        observations, goals, action_masks = agent_inputs(env, state, use_targets, input_representation)
         actions = agent.sample_actions(
-            encode_grid_inputs(state_agent.grid, input_representation),
-            encode_grid_inputs(state_agent.goal, input_representation),
+            observations,
+            goals,
             seed=sample_key,
+            action_masks=action_masks,
         )
 
         new_state, reward, done, info = env.step(state, actions)
-        timestep = TimeStep(
-            key=state.key,
-            grid=state.grid,
-            agent_pos=state.agent_pos,
-            agent_has_box=state.agent_has_box,
-            steps=state.steps,
-            number_of_boxes=state.number_of_boxes,
-            action=actions,
-            goal=state.goal,
-            reward=reward,
-            success=new_state.success,
-            done=done,
-            truncated=info["truncated"],
-            extras=state.extras,
-        )
+        timestep = transition_from_step(env, state, actions, new_state, reward, done, info)
         return (new_state, info, key), timestep
 
     keys = jax.random.split(key, num_envs)
@@ -67,13 +96,14 @@ def collect_data(agent, key, env, num_envs, episode_length, use_targets=False, i
     return timestep, info, timesteps_all
 
 
-def create_batch(
+def create_box_moving_batch(
     timesteps,
     key,
     gamma,
     use_targets,
     use_future_and_random_goals,
     jitted_flatten_batch,
+    action_dim,
     use_discounted_mc_rewards=False,
     input_representation="normalized_flat",
 ):
@@ -105,8 +135,29 @@ def create_batch(
         "masks": jnp.ones_like(flat_rewards),  # Bootstrap always
         "value_goals": encode_grid_inputs(value_goals, input_representation),
         "actor_goals": encode_grid_inputs(actor_goals, input_representation),
+        "action_masks": jnp.ones((flat_rewards.shape[0], action_dim), dtype=jnp.bool_),
+        "next_action_masks": jnp.ones((flat_rewards.shape[0], action_dim), dtype=jnp.bool_),
     }
     return batch
+
+
+def create_native_reward_batch(timesteps, key, jitted_flatten_native_batch):
+    batch_keys = jax.random.split(key, timesteps.grid.shape[0])
+    state, next_state = jitted_flatten_native_batch(timesteps, batch_keys)
+    rewards = state.reward.reshape((state.reward.shape[0],))
+    done_or_truncated = state.done | state.truncated
+
+    return {
+        "observations": state.grid.reshape(state.grid.shape[0], -1),
+        "next_observations": next_state.grid.reshape(next_state.grid.shape[0], -1),
+        "actions": state.action.reshape((state.action.shape[0],)).astype(jnp.int32),
+        "rewards": rewards,
+        "masks": (~done_or_truncated).astype(jnp.float32).reshape(rewards.shape),
+        "value_goals": state.goal.reshape(state.goal.shape[0], -1),
+        "actor_goals": state.goal.reshape(state.goal.shape[0], -1),
+        "action_masks": state.action_mask,
+        "next_action_masks": next_state.action_mask,
+    }
 
 
 CRITIC_LOSS_AGENTS = {"gciql", "gciql_search", "gcdqn", "clearn_search"}
@@ -158,7 +209,8 @@ def append_metrics_jsonl(run_directory, metrics):
 
 def evaluate_agent_in_specific_env(agent, key, jitted_create_batch, config, name, create_gif=False):
     env_eval = create_env(config.env)
-    env_eval = wrap_for_eval(env_eval)  # Note: Wrap for eval is not using any quarter filtering
+    if not getattr(env_eval, "is_jumanji", False):
+        env_eval = wrap_for_eval(env_eval)  # Note: Wrap for eval is not using any quarter filtering
     env_eval.step = jax.jit(jax.vmap(env_eval.step))
     env_eval.reset = jax.jit(jax.vmap(env_eval.reset))
     prefix = f"eval{name}"
@@ -187,20 +239,22 @@ def evaluate_agent_in_specific_env(agent, key, jitted_create_batch, config, name
     # truncated_mask = timesteps.truncated
     done_or_trunc = timesteps.done | timesteps.truncated  # bool, (N_envs, T)
     # first-occurrence mask: True at the first time (per row) where done_or_trunc is True
-    truncated_mask = (jnp.cumsum(done_or_trunc.astype(jnp.int32), axis=1) == 1) & done_or_trunc
+    first_end_mask = (jnp.cumsum(done_or_trunc.astype(jnp.int32), axis=1) == 1) & done_or_trunc
+    last_step_mask = jnp.arange(timesteps.reward.shape[1])[None, :] == (timesteps.reward.shape[1] - 1)
+    truncated_mask = jnp.where(first_end_mask.any(axis=1, keepdims=True), first_end_mask, last_step_mask)
 
     eval_info_tmp = {
         f"{prefix}/mean_reward": timesteps.reward[truncated_mask].mean(),
         f"{prefix}/min_reward": timesteps.reward[truncated_mask].min(),
         f"{prefix}/max_reward": timesteps.reward[truncated_mask].max(),
         f"{prefix}/mean_success": timesteps.success[truncated_mask].mean(),
-        f"{prefix}/mean_boxes_on_target": info["boxes_on_target"].mean(),
+        f"{prefix}/mean_boxes_on_target": info.get("boxes_on_target", jnp.array(0.0)).mean(),
         f"{prefix}/mean_ep_len": timesteps.steps[truncated_mask].mean(),
         f"{prefix}/total_loss": loss,
     }
     eval_info_tmp.update(get_agent_specific_eval_metrics(prefix, loss_info, config.agent.agent_name))
 
-    if create_gif:
+    if create_gif and not getattr(env_eval, "is_jumanji", False):
         log_gif(env_eval, config.env.episode_length, prefix_gif, timesteps)
 
     return eval_info_tmp, loss_info
@@ -215,13 +269,13 @@ def evaluate_agent(agent, key, jitted_create_batch, epoch, config):
     eval_info = {"epoch": epoch}
     create_gif = epoch > 0 and epoch % config.exp.gif_every == 0 and config.exp.num_gifs > 0
 
-    if config.exp.eval_special:
+    if config.exp.eval_special and hasattr(config.env, "generator_special"):
         special_config = copy.deepcopy(config)
         special_config.env.generator_special = True
         eval_configs.append(special_config)
         eval_names_suff.append("_special")
 
-    if config.exp.eval_different_box_numbers:
+    if config.exp.eval_different_box_numbers and hasattr(config.env, "number_of_boxes_max"):
         for number_of_boxes in [config.env.number_of_boxes_max]:
             new_config = copy.deepcopy(config)
             new_config.env = dataclasses.replace(
@@ -266,22 +320,31 @@ def init_wandb_and_run_directory(config: Config):
 
 def build_training_env(config: Config):
     env = create_env(config.env)
-    env = wrap_for_training(config, env)
+    if not getattr(env, "is_jumanji", False):
+        env = wrap_for_training(config, env)
     env.step = jax.jit(jax.vmap(env.step))
     env.reset = jax.jit(jax.vmap(env.reset))
     return env
 
 
 def build_jitted_create_batch(config: Config):
+    if env_uses_native_rewards(config.env):
+        jitted_flatten_native_batch = jax.jit(jax.vmap(flatten_native_batch, in_axes=(0, 0)))
+        return functools.partial(
+            create_native_reward_batch,
+            jitted_flatten_native_batch=jitted_flatten_native_batch,
+        )
+
     jitted_flatten_batch = jax.jit(
         jax.vmap(flatten_batch, in_axes=(None, None, None, 0, 0, 0, 0)), static_argnums=(0, 1, 2)
     )
     return functools.partial(
-        create_batch,
+        create_box_moving_batch,
         gamma=config.agent.discount,
         use_targets=config.exp.use_targets,
         use_future_and_random_goals=config.exp.use_future_and_random_goals,
         jitted_flatten_batch=jitted_flatten_batch,
+        action_dim=getattr(config.env, "action_space", 6),
         use_discounted_mc_rewards=config.agent.use_discounted_mc_rewards,
         input_representation=config.exp.input_representation,
     )
@@ -289,6 +352,7 @@ def build_jitted_create_batch(config: Config):
 
 def build_replay_buffer_and_agent(config: Config, env, key):
     dummy_timestep = env.get_dummy_timestep(key)
+    action_dim = get_env_action_dim(env)
     replay_buffer = jit_wrap(
         TrajectoryUniformSamplingQueue(
             max_replay_size=config.exp.max_replay_size,
@@ -300,15 +364,23 @@ def build_replay_buffer_and_agent(config: Config, env, key):
     )
     buffer_state = jax.jit(replay_buffer.init)(key)
 
+    if getattr(env, "is_jumanji", False):
+        ex_observations = dummy_timestep.grid[None, ...]
+        ex_goals = dummy_timestep.goal[None, ...]
+    else:
+        ex_observations = encode_grid_inputs(dummy_timestep.grid[None, ...], config.exp.input_representation)
+        ex_goals = encode_grid_inputs(dummy_timestep.grid[None, ...], config.exp.input_representation)
+
     example_batch = {
-        "observations": encode_grid_inputs(dummy_timestep.grid[None, ...], config.exp.input_representation),
-        "next_observations": encode_grid_inputs(dummy_timestep.grid[None, ...], config.exp.input_representation),
-        "actions": jnp.ones((1,), dtype=jnp.int8)
-        * (env._env.action_space - 1),  # it should be the maximal value of action space
+        "observations": ex_observations,
+        "next_observations": ex_observations,
+        "actions": jnp.ones((1,), dtype=jnp.int32) * (action_dim - 1),
         "rewards": jnp.ones((1,), dtype=jnp.float32),
-        "masks": jnp.ones((1,), dtype=jnp.int8),
-        "value_goals": encode_grid_inputs(dummy_timestep.grid[None, ...], config.exp.input_representation),
-        "actor_goals": encode_grid_inputs(dummy_timestep.grid[None, ...], config.exp.input_representation),
+        "masks": jnp.ones((1,), dtype=jnp.float32),
+        "value_goals": ex_goals,
+        "actor_goals": ex_goals,
+        "action_masks": jnp.ones((1, action_dim), dtype=jnp.bool_),
+        "next_action_masks": jnp.ones((1, action_dim), dtype=jnp.bool_),
     }
     agent = create_agent(config.agent, example_batch, config.exp.seed)
     return replay_buffer, buffer_state, agent

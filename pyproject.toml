@@ -23,9 +23,10 @@ dependencies = [
     "aiofiles==25.1.0",
     "ipywidgets==8.1.8",
     "jupyterlab-widgets==3.0.16",
-    "nvidia-cuda-cccl-cu12==12.9.27",
-    "nvidia-cuda-nvrtc-cu12==12.9.86",
+    "nvidia-cuda-nvrtc-cu12==12.9.86; platform_system != 'Darwin'",
+    "nvidia-cuda-cccl-cu12==12.9.27; platform_system != 'Darwin'",
     "tensorflow-probability>=0.25.0",
+    "jumanji>=1.1.0",
 ]
 
 [dependency-groups]
