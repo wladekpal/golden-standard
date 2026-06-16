@@ -1,10 +1,12 @@
 from typing import NamedTuple
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 
 from envs.jumanji.action_mapping import JumanjiActionMapper
 from envs.jumanji.observation import encode_observation
+from envs.jumanji.jumanji_env import JumanjiDiscreteEnv
 
 
 class FakeDiscreteSpec:
@@ -78,3 +80,33 @@ def test_grid_observation_encoding_pads_channels_for_transformer_tokens():
     assert encoded.shape == (2 * 2 * 12,)
     assert jnp.all(encoded.reshape(2, 2, 12)[..., :5] == 1)
     assert jnp.all(encoded.reshape(2, 2, 12)[..., 5:] == 0)
+
+
+class FirstValidActionAgent:
+    def sample_actions(self, observations, goals=None, seed=None, temperature=1.0, action_masks=None):
+        del observations, goals, seed, temperature
+        return jnp.argmax(action_masks, axis=-1)
+
+
+def test_jumanji_render_state_rollout_collects_native_states():
+    env = JumanjiDiscreteEnv(env_id="Snake-v1", episode_length=3)
+    states = env.collect_render_states(FirstValidActionAgent(), jax.random.PRNGKey(0), episode_length=3)
+
+    assert 2 <= len(states) <= 4
+    assert hasattr(states[0], "head_position")
+
+
+def test_jumanji_gif_logger_logs_wandb_video(monkeypatch):
+    from utils import log_jumanji_gif
+
+    env = JumanjiDiscreteEnv(env_id="Snake-v1", episode_length=2)
+    logged = {}
+
+    def fake_log(payload):
+        logged.update(payload)
+
+    monkeypatch.setattr("wandb.log", fake_log)
+
+    log_jumanji_gif(env, FirstValidActionAgent(), jax.random.PRNGKey(0), 2, "gif_test")
+
+    assert "gif_test" in logged

@@ -138,6 +138,70 @@ class JumanjiDiscreteEnv:
         del use_targets, input_representation
         return state.grid, state.goal, state.action_mask
 
+    def collect_render_states(
+        self,
+        agent: Any,
+        key: jax.Array,
+        episode_length: int | None = None,
+        use_targets: bool = False,
+        input_representation: str = "normalized_flat",
+    ) -> list[Any]:
+        """Collect native Jumanji states for viewer-based rollout rendering."""
+        if not hasattr(self._env, "animate"):
+            raise ValueError(
+                f"Jumanji environment {self.env_id!r} does not expose animate(...). "
+                "Disable GIF logging with --exp.num_gifs 0."
+            )
+
+        rollout_length = self.episode_length if episode_length is None else episode_length
+        state, _ = self._reset_from_key(key)
+        render_states = [state.env_state]
+        step_key = key
+
+        for _ in range(rollout_length):
+            step_key, sample_key = jax.random.split(step_key)
+            observations, goals, action_masks = self.agent_inputs(state, use_targets, input_representation)
+            actions = agent.sample_actions(
+                observations[None, ...],
+                goals[None, ...],
+                seed=sample_key,
+                action_masks=action_masks[None, ...],
+            )
+            flat_action = jnp.asarray(actions).reshape(-1)[0]
+            action = self.action_mapper.unflatten(flat_action)
+            env_state, timestep = self._env.step(state.env_state, action)
+            observation = self._encode_observation(timestep.observation)
+            action_mask = self._extract_action_mask(timestep.observation)
+            reward = self._reduce_reward(timestep.reward)
+
+            new_steps = state.steps + 1
+            last = jnp.asarray(timestep.step_type == 2)
+            terminated = last & jnp.all(jnp.asarray(timestep.discount) == 0)
+            time_limit_truncated = new_steps >= rollout_length
+            truncated = (last & ~terminated) | time_limit_truncated
+            reset = terminated | truncated
+
+            state = JumanjiEnvState(
+                key=state.key,
+                env_state=env_state,
+                grid=observation,
+                goal=jnp.zeros_like(observation),
+                steps=new_steps,
+                reward=reward,
+                success=terminated.astype(jnp.int8),
+                done=terminated,
+                truncated=truncated,
+                action_mask=action_mask,
+                extras={"reset": reset},
+            )
+            render_states.append(state.env_state)
+
+            done_or_truncated = jax.device_get(terminated | truncated)
+            if bool(done_or_truncated):
+                break
+
+        return render_states
+
     def get_dummy_timestep(self, key: jax.Array) -> JumanjiTransition:
         state, _ = self._reset_from_key(key)
         return JumanjiTransition(

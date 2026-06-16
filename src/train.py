@@ -22,11 +22,13 @@ from envs.block_moving.env_types import TimeStep, remove_targets
 from envs.block_moving.input_features import encode_grid_inputs
 from config import ROOT_DIR
 from impls.utils.checkpoints import save_agent
-from utils import log_gif
+from utils import log_gif, log_jumanji_gif
 
 
 def env_uses_native_rewards(env_or_config) -> bool:
-    return bool(getattr(env_or_config, "uses_native_rewards", False) or env_or_config.__class__.__name__ == "JumanjiConfig")
+    return bool(
+        getattr(env_or_config, "uses_native_rewards", False) or env_or_config.__class__.__name__ == "JumanjiConfig"
+    )
 
 
 def get_env_action_dim(env) -> int:
@@ -177,7 +179,7 @@ def get_agent_specific_eval_metrics(prefix, loss_info, agent_name):
             f"{prefix}/q_min": loss_info["critic/q_min"],
             f"{prefix}/q_max": loss_info["critic/q_max"],
         }
-    
+
     if agent_name in {"gcbc"}:
         return {
             f"{prefix}/actor_loss": loss_info["actor/actor_loss"],
@@ -254,8 +256,20 @@ def evaluate_agent_in_specific_env(agent, key, jitted_create_batch, config, name
     }
     eval_info_tmp.update(get_agent_specific_eval_metrics(prefix, loss_info, config.agent.agent_name))
 
-    if create_gif and not getattr(env_eval, "is_jumanji", False):
-        log_gif(env_eval, config.env.episode_length, prefix_gif, timesteps)
+    if create_gif:
+        if getattr(env_eval, "is_jumanji", False):
+            gif_key = jax.random.fold_in(key, 1)
+            log_jumanji_gif(
+                env_eval,
+                agent,
+                gif_key,
+                config.env.episode_length,
+                prefix_gif,
+                use_targets=config.exp.use_targets,
+                input_representation=config.exp.input_representation,
+            )
+        else:
+            log_gif(env_eval, config.env.episode_length, prefix_gif, timesteps)
 
     return eval_info_tmp, loss_info
 
