@@ -9,7 +9,6 @@ import jax
 class JumanjiConfig:
     env_id: str = "Snake-v1"
     episode_length: int = 120
-    max_flattened_action_size: int = 4096
     observation_mode: Literal["flat", "grid"] = "flat"
     grid_observation_key: str = "grid"
     grid_token_channels: int = 12

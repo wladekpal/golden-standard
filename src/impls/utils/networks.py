@@ -389,6 +389,48 @@ class GCDiscreteCritic(GCValue):
         return super().__call__(observations, goals, actions)
 
 
+class GCMultiDiscreteCritic(nn.Module):
+    """Goal-conditioned critic with one categorical Q head per MultiDiscrete factor."""
+
+    hidden_dims: Sequence[int]
+    num_action_factors: int
+    action_dim: int
+    layer_norm: bool = True
+    ensemble: bool = True
+    gc_encoder: nn.Module = None
+    net_arch: str = "mlp"
+
+    def setup(self):
+        mlp_module = create_network(self.net_arch)
+        if self.ensemble:
+            mlp_module = ensemblize(mlp_module, 2)
+        self.value_net = mlp_module(
+            (*self.hidden_dims, self.num_action_factors * self.action_dim),
+            activate_final=False,
+            layer_norm=self.layer_norm,
+        )
+
+    def __call__(self, observations, goals=None, actions=None):
+        if self.gc_encoder is not None:
+            inputs = [self.gc_encoder(observations, goals)]
+        else:
+            inputs = [observations]
+            if goals is not None:
+                inputs.append(goals)
+        inputs = jnp.concatenate(inputs, axis=-1)
+
+        qs = self.value_net(inputs)
+        qs = qs.reshape((*qs.shape[:-1], self.num_action_factors, self.action_dim))
+        if actions is None:
+            return qs
+
+        actions = jnp.asarray(actions, dtype=jnp.int32)
+        indices = actions[..., None]
+        while indices.ndim < qs.ndim:
+            indices = indices[None, ...]
+        return jnp.take_along_axis(qs, indices, axis=-1).squeeze(-1)
+
+
 class TransformerEncoderBlock(nn.Module):
     """Pre-LN transformer encoder block."""
 

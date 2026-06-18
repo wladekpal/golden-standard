@@ -49,6 +49,10 @@ default_config = ml_collections.FrozenConfigDict(
             use_discounted_mc_rewards=False,  # Whether to use discounted Monte Carlo rewards.
             action_sampling='softmax',
             action_dim=0,
+            action_mode='discrete',
+            action_dims=(),
+            num_action_factors=1,
+            action_mask_mode='categorical',
             transformer_cell_dim=12,  # Channels per one-hot grid cell.
             transformer_d_model=128,
             transformer_num_heads=4,
@@ -63,7 +67,24 @@ default_config = ml_collections.FrozenConfigDict(
  
 def create_agent(config: ml_collections.FrozenConfigDict, example_batch: dict, seed: int):
     config = ml_collections.ConfigDict(config)
-    config.action_dim = int(example_batch['actions'].max()) + 1
+    action_mode = example_batch.get('action_mode', 'discrete')
+    config.action_mode = action_mode
+    if action_mode == 'multidiscrete':
+        if config.agent_name != "gcdqn":
+            raise ValueError(
+                "Jumanji MultiDiscrete action spaces are currently supported only by the gcdqn agent. "
+                f"Received agent_name={config.agent_name!r}."
+            )
+        action_dims = tuple(int(v) for v in example_batch['action_dims'])
+        config.action_dims = action_dims
+        config.num_action_factors = len(action_dims)
+        config.action_dim = max(action_dims)
+        config.action_mask_mode = example_batch.get('action_mask_mode', 'factor')
+    else:
+        config.action_dim = int(example_batch.get('action_dim', int(example_batch['actions'].max()) + 1))
+        config.action_dims = ()
+        config.num_action_factors = 1
+        config.action_mask_mode = example_batch.get('action_mask_mode', 'categorical')
 
     if config.agent_name == "crl":
         agent = CRLAgent.create(

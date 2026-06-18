@@ -2,11 +2,14 @@ from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
+import ml_collections
 import numpy as np
+import pytest
 
 from envs.jumanji.action_mapping import JumanjiActionMapper
 from envs.jumanji.observation import encode_observation
 from envs.jumanji.jumanji_env import JumanjiDiscreteEnv
+from impls.agents import create_agent, default_config
 
 
 class FakeDiscreteSpec:
@@ -21,6 +24,12 @@ class FakeMultiDiscreteSpec:
     num_values = np.array([2, 3])
 
 
+class FakeJointMaskedMultiDiscreteSpec:
+    shape = (2,)
+    dtype = jnp.int32
+    num_values = np.array([4, 10])
+
+
 class FakeObservation(NamedTuple):
     grid: jnp.ndarray
     step_count: jnp.ndarray
@@ -28,21 +37,25 @@ class FakeObservation(NamedTuple):
 
 
 def test_scalar_discrete_action_mapping():
-    mapper = JumanjiActionMapper.from_spec(FakeDiscreteSpec(), max_flattened_action_size=16)
+    mapper = JumanjiActionMapper.from_spec(FakeDiscreteSpec())
 
+    assert mapper.action_mode == "discrete"
     assert mapper.action_dim == 4
-    assert int(mapper.unflatten(jnp.array(3))) == 3
+    assert int(mapper.to_env_action(jnp.array(3))) == 3
     assert jnp.array_equal(
-        mapper.flatten_action_mask(jnp.array([True, False, True, False])),
+        mapper.agent_action_mask(jnp.array([True, False, True, False])),
         jnp.array([True, False, True, False]),
     )
 
 
-def test_multidiscrete_action_mapping_and_mask_flattening():
-    mapper = JumanjiActionMapper.from_spec(FakeMultiDiscreteSpec(), max_flattened_action_size=16)
+def test_multidiscrete_action_mapping_and_factor_mask():
+    mapper = JumanjiActionMapper.from_spec(FakeMultiDiscreteSpec())
 
-    assert mapper.action_dim == 6
-    assert jnp.array_equal(mapper.unflatten(jnp.array(5)), jnp.array([1, 2], dtype=jnp.int32))
+    assert mapper.action_mode == "multidiscrete"
+    assert mapper.action_dim == 3
+    assert mapper.factor_sizes == (2, 3)
+    assert mapper.agent_action_shape == (2,)
+    assert jnp.array_equal(mapper.to_env_action(jnp.array([1, 2])), jnp.array([1, 2], dtype=jnp.int32))
 
     factor_mask = jnp.array(
         [
@@ -51,9 +64,107 @@ def test_multidiscrete_action_mapping_and_mask_flattening():
         ]
     )
     assert jnp.array_equal(
-        mapper.flatten_action_mask(factor_mask),
-        jnp.array([False, True, True, False, False, False]),
+        mapper.agent_action_mask(factor_mask),
+        factor_mask,
     )
+
+
+def test_multidiscrete_joint_action_mask_passthrough():
+    mapper = JumanjiActionMapper.from_spec(FakeJointMaskedMultiDiscreteSpec())
+    joint_mask = jnp.zeros((4, 10), dtype=jnp.bool_).at[1, 3].set(True)
+
+    assert mapper.action_mask_mode(joint_mask) == "joint"
+    assert jnp.array_equal(
+        mapper.agent_action_mask(joint_mask),
+        joint_mask,
+    )
+
+
+def _multidiscrete_example_batch(action_mask_mode="factor"):
+    if action_mask_mode == "joint":
+        action_dims = (4, 10)
+        action_masks = jnp.zeros((2, 4, 10), dtype=jnp.bool_).at[:, 1, 3].set(True)
+        actions = jnp.array([[1, 3], [1, 3]], dtype=jnp.int32)
+    else:
+        action_dims = (2, 3)
+        action_masks = jnp.array(
+            [
+                [[True, False, False], [False, True, True]],
+                [[True, False, False], [True, False, False]],
+            ],
+            dtype=jnp.bool_,
+        )
+        actions = jnp.array([[0, 2], [0, 0]], dtype=jnp.int32)
+
+    observations = jnp.ones((2, 4), dtype=jnp.float32)
+    return {
+        "observations": observations,
+        "next_observations": observations,
+        "actions": actions,
+        "rewards": jnp.ones((2,), dtype=jnp.float32),
+        "masks": jnp.ones((2,), dtype=jnp.float32),
+        "value_goals": jnp.zeros_like(observations),
+        "actor_goals": jnp.zeros_like(observations),
+        "action_masks": action_masks,
+        "next_action_masks": action_masks,
+        "action_mode": "multidiscrete",
+        "action_dims": action_dims,
+        "action_mask_mode": action_mask_mode,
+    }
+
+
+def _without_action_metadata(batch):
+    return {k: v for k, v in batch.items() if k not in {"action_mode", "action_dims", "action_mask_mode"}}
+
+
+def test_dqn_multidiscrete_factor_mask_sampling_and_loss():
+    config = ml_collections.ConfigDict(default_config)
+    config.agent_name = "gcdqn"
+    config.actor_hidden_dims = (8,)
+    config.value_hidden_dims = (8,)
+    batch = _multidiscrete_example_batch("factor")
+    agent = create_agent(config, batch, seed=0)
+
+    actions = agent.sample_actions(
+        batch["observations"],
+        batch["value_goals"],
+        seed=jax.random.PRNGKey(1),
+        action_masks=batch["action_masks"],
+    )
+    loss, info = agent.total_loss(_without_action_metadata(batch), None)
+
+    assert actions.shape == (2, 2)
+    assert jnp.all(batch["action_masks"][jnp.arange(2)[:, None], jnp.arange(2)[None, :], actions])
+    assert jnp.isfinite(loss)
+    assert "critic/critic_loss" in info
+
+
+def test_dqn_multidiscrete_joint_mask_sampling_and_loss():
+    config = ml_collections.ConfigDict(default_config)
+    config.agent_name = "gcdqn"
+    config.actor_hidden_dims = (8,)
+    config.value_hidden_dims = (8,)
+    batch = _multidiscrete_example_batch("joint")
+    agent = create_agent(config, batch, seed=0)
+
+    actions = agent.sample_actions(
+        batch["observations"],
+        batch["value_goals"],
+        seed=jax.random.PRNGKey(2),
+        action_masks=batch["action_masks"],
+    )
+    loss, _ = agent.total_loss(_without_action_metadata(batch), None)
+
+    assert jnp.array_equal(actions, jnp.array([[1, 3], [1, 3]], dtype=jnp.int32))
+    assert jnp.isfinite(loss)
+
+
+def test_multidiscrete_env_rejects_unsupported_agent():
+    config = ml_collections.ConfigDict(default_config)
+    config.agent_name = "gciql"
+
+    with pytest.raises(ValueError, match="MultiDiscrete action spaces.*gcdqn"):
+        create_agent(config, _multidiscrete_example_batch("factor"), seed=0)
 
 
 def test_flat_observation_encoding_excludes_action_mask():

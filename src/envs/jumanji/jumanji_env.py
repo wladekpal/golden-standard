@@ -18,7 +18,6 @@ class JumanjiDiscreteEnv:
         self,
         env_id: str = "Snake-v1",
         episode_length: int = 120,
-        max_flattened_action_size: int = 4096,
         observation_mode: str = "flat",
         grid_observation_key: str = "grid",
         grid_token_channels: int = 12,
@@ -40,10 +39,13 @@ class JumanjiDiscreteEnv:
         self.grid_token_channels = grid_token_channels
         self.reward_reduction = reward_reduction
         self._env = jumanji.make(env_id)
-        self.action_mapper = JumanjiActionMapper.from_spec(
-            self._env.action_spec,
-            max_flattened_action_size=max_flattened_action_size,
-        )
+        self.action_mapper = JumanjiActionMapper.from_spec(self._env.action_spec)
+        _, sample_timestep = self._env.reset(jax.random.PRNGKey(0))
+        sample_mask = get_named_field(sample_timestep.observation, "action_mask")
+        self.action_mode = self.action_mapper.action_mode
+        self.action_dims = self.action_mapper.factor_sizes
+        self.num_action_factors = self.action_mapper.num_action_factors
+        self.action_mask_mode = self.action_mapper.action_mask_mode(sample_mask)
         self.action_dim = self.action_mapper.action_dim
         self.action_space = self.action_dim
 
@@ -75,13 +77,13 @@ class JumanjiDiscreteEnv:
         )
         return state, self._info(jnp.bool_(False), reward)
 
-    def step(self, state: JumanjiEnvState, flat_action: jax.Array):
+    def step(self, state: JumanjiEnvState, agent_action: jax.Array):
         def reset_branch():
             reset_state, reset_info = self._reset_from_key(state.key)
             return reset_state, jnp.zeros((), dtype=jnp.float32), jnp.bool_(False), reset_info
 
         def step_branch():
-            action = self.action_mapper.unflatten(flat_action)
+            action = self.action_mapper.to_env_action(agent_action)
             env_state, timestep = self._env.step(state.env_state, action)
             observation = self._encode_observation(timestep.observation)
             action_mask = self._extract_action_mask(timestep.observation)
@@ -167,8 +169,8 @@ class JumanjiDiscreteEnv:
                 seed=sample_key,
                 action_masks=action_masks[None, ...],
             )
-            flat_action = jnp.asarray(actions).reshape(-1)[0]
-            action = self.action_mapper.unflatten(flat_action)
+            agent_action = jnp.asarray(actions)[0]
+            action = self.action_mapper.to_env_action(agent_action)
             env_state, timestep = self._env.step(state.env_state, action)
             observation = self._encode_observation(timestep.observation)
             action_mask = self._extract_action_mask(timestep.observation)
@@ -209,12 +211,12 @@ class JumanjiDiscreteEnv:
             grid=jnp.zeros_like(state.grid),
             goal=jnp.zeros_like(state.goal),
             steps=jnp.zeros((), dtype=jnp.int32),
-            action=jnp.zeros((), dtype=jnp.int32),
+            action=self.action_mapper.default_agent_action,
             reward=jnp.zeros((), dtype=jnp.float32),
             success=jnp.zeros((), dtype=jnp.int8),
             done=jnp.bool_(False),
             truncated=jnp.bool_(False),
-            action_mask=jnp.ones((self.action_dim,), dtype=jnp.bool_),
+            action_mask=jnp.ones_like(state.action_mask, dtype=jnp.bool_),
             extras={"reset": jnp.bool_(False)},
         )
 
@@ -228,7 +230,7 @@ class JumanjiDiscreteEnv:
 
     def _extract_action_mask(self, observation: Any) -> jax.Array:
         action_mask = get_named_field(observation, "action_mask")
-        return self.action_mapper.flatten_action_mask(action_mask)
+        return self.action_mapper.agent_action_mask(action_mask)
 
     def _reduce_reward(self, reward: jax.Array) -> jax.Array:
         reward = jnp.asarray(reward, dtype=jnp.float32)

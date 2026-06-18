@@ -37,6 +37,24 @@ def get_env_action_dim(env) -> int:
     return int(env.action_space)
 
 
+def get_env_action_metadata(env) -> dict:
+    action_mode = getattr(env, "action_mode", "discrete")
+    metadata = {
+        "action_mode": action_mode,
+        "action_dim": get_env_action_dim(env),
+        "action_mask_mode": getattr(env, "action_mask_mode", "categorical"),
+    }
+    if action_mode == "multidiscrete":
+        metadata["action_dims"] = tuple(int(v) for v in env.action_dims)
+    return metadata
+
+
+def get_env_example_action(env, action_dim: int) -> jax.Array:
+    if hasattr(env, "action_mapper"):
+        return env.action_mapper.max_agent_action[None, ...]
+    return jnp.ones((1,), dtype=jnp.int32) * (action_dim - 1)
+
+
 def agent_inputs(env, state, use_targets=False, input_representation="normalized_flat"):
     if hasattr(env, "agent_inputs"):
         return env.agent_inputs(state, use_targets, input_representation)
@@ -148,11 +166,16 @@ def create_native_reward_batch(timesteps, key, jitted_flatten_native_batch):
     state, next_state = jitted_flatten_native_batch(timesteps, batch_keys)
     rewards = state.reward.reshape((state.reward.shape[0],))
     done_or_truncated = state.done | state.truncated
+    actions = state.action.astype(jnp.int32)
+    if actions.ndim > 1:
+        actions = actions.reshape((actions.shape[0], -1))
+    else:
+        actions = actions.reshape((actions.shape[0],))
 
     return {
         "observations": state.grid.reshape(state.grid.shape[0], -1),
         "next_observations": next_state.grid.reshape(next_state.grid.shape[0], -1),
-        "actions": state.action.reshape((state.action.shape[0],)).astype(jnp.int32),
+        "actions": actions,
         "rewards": rewards,
         "masks": (~done_or_truncated).astype(jnp.float32).reshape(rewards.shape),
         "value_goals": state.goal.reshape(state.goal.shape[0], -1),
@@ -367,6 +390,7 @@ def build_jitted_create_batch(config: Config):
 def build_replay_buffer_and_agent(config: Config, env, key):
     dummy_timestep = env.get_dummy_timestep(key)
     action_dim = get_env_action_dim(env)
+    action_metadata = get_env_action_metadata(env)
     replay_buffer = jit_wrap(
         TrajectoryUniformSamplingQueue(
             max_replay_size=config.exp.max_replay_size,
@@ -388,13 +412,14 @@ def build_replay_buffer_and_agent(config: Config, env, key):
     example_batch = {
         "observations": ex_observations,
         "next_observations": ex_observations,
-        "actions": jnp.ones((1,), dtype=jnp.int32) * (action_dim - 1),
+        "actions": get_env_example_action(env, action_dim),
         "rewards": jnp.ones((1,), dtype=jnp.float32),
         "masks": jnp.ones((1,), dtype=jnp.float32),
         "value_goals": ex_goals,
         "actor_goals": ex_goals,
-        "action_masks": jnp.ones((1, action_dim), dtype=jnp.bool_),
-        "next_action_masks": jnp.ones((1, action_dim), dtype=jnp.bool_),
+        "action_masks": jnp.ones((1, *dummy_timestep.action_mask.shape), dtype=jnp.bool_),
+        "next_action_masks": jnp.ones((1, *dummy_timestep.action_mask.shape), dtype=jnp.bool_),
+        **action_metadata,
     }
     agent = create_agent(config.agent, example_batch, config.exp.seed)
     return replay_buffer, buffer_state, agent

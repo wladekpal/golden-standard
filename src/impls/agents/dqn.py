@@ -8,9 +8,20 @@ import jax.numpy as jnp
 import ml_collections
 import optax
 from impls.utils.encoders import GCEncoder, encoder_modules
-from impls.utils.action_utils import all_actions, discrete_action_dim, mask_logits, sample_uniform_actions
+from impls.utils.action_utils import (
+    all_actions,
+    discrete_action_dim,
+    factor_action_mask,
+    mask_factor_logits,
+    mask_joint_logits,
+    mask_logits,
+    multidiscrete_action_dims,
+    multidiscrete_joint_q,
+    sample_uniform_actions,
+    unravel_multidiscrete,
+)
 from impls.utils.flax_utils import ModuleDict, TrainState, nonpytree_field
-from impls.utils.networks import GCActor, GCDiscreteActor, GCDiscreteCritic, GCValue, LogParam
+from impls.utils.networks import GCActor, GCDiscreteActor, GCDiscreteCritic, GCMultiDiscreteCritic, GCValue, LogParam
 
 
 class GCDQNAgent(flax.struct.PyTreeNode):
@@ -25,6 +36,11 @@ class GCDQNAgent(flax.struct.PyTreeNode):
     config: Any = nonpytree_field()
 
     def critic_loss(self, batch, grad_params):
+        if self.config.get('action_mode', 'discrete') == 'multidiscrete':
+            return self.multidiscrete_critic_loss(batch, grad_params)
+        return self.scalar_critic_loss(batch, grad_params)
+
+    def scalar_critic_loss(self, batch, grad_params):
         """Compute the DQN critic loss (discrete actions).
 
         Assumes:
@@ -87,6 +103,70 @@ class GCDQNAgent(flax.struct.PyTreeNode):
             'alpha_temp_loss': alpha_temp_loss,
         }
 
+    def multidiscrete_critic_loss(self, batch, grad_params):
+        action_dims = multidiscrete_action_dims(self.config)
+        q_values = self.network.select('critic')(
+            batch['observations'], batch['value_goals'], batch['actions'], params=grad_params
+        )
+
+        target_qs = jax.lax.stop_gradient(
+            self.network.select('target_critic')(batch['next_observations'], batch['value_goals'])
+        )
+        target_qs = target_qs.mean(axis=0)
+        max_next_q = self._multidiscrete_max_q(target_qs, batch.get('next_action_masks'), action_dims)
+
+        if self.config['use_discounted_mc_rewards']:
+            target = batch['rewards']
+        else:
+            target = batch['rewards'] + self.config['discount'] * batch['masks'] * max_next_q
+
+        critic_loss = ((q_values - target[None, :, None]) ** 2).mean()
+
+        current_qs = jax.lax.stop_gradient(
+            self.network.select("critic")(
+                batch['observations'],
+                jnp.roll(batch['next_observations'], shift=1, axis=0),
+            )
+        )
+        current_qs = current_qs.mean(axis=0)
+        alpha_temp = self.network.select('alpha_temp')(params=grad_params)
+        entropy = self._multidiscrete_entropy(current_qs, batch.get('action_masks'), action_dims, alpha_temp)
+        alpha_temp_loss = ((entropy + self.config['target_entropy']) ** 2).mean()
+
+        total_loss = critic_loss + alpha_temp_loss
+        return total_loss, {
+            'critic_loss': critic_loss,
+            'q_mean': target.mean(),
+            'q_max': target.max(),
+            'q_min': target.min(),
+            'q.std': target.std(),
+            'entropy': entropy.mean(),
+            'alpha_temp': alpha_temp,
+            'entropy_std': entropy.std(),
+            'alpha_temp_loss': alpha_temp_loss,
+        }
+
+    def _multidiscrete_max_q(self, qs, action_masks, action_dims):
+        if self.config.get('action_mask_mode', 'factor') == 'joint':
+            joint_q = multidiscrete_joint_q(qs, action_dims)
+            joint_q = mask_joint_logits(joint_q, action_masks)
+            return jnp.max(joint_q.reshape((joint_q.shape[0], -1)), axis=-1)
+
+        qs = mask_factor_logits(qs, action_masks, action_dims)
+        return jnp.max(qs, axis=-1).mean(axis=-1)
+
+    def _multidiscrete_entropy(self, qs, action_masks, action_dims, alpha_temp):
+        temperature = jnp.maximum(1e-6, alpha_temp)
+        if self.config.get('action_mask_mode', 'factor') == 'joint':
+            joint_q = multidiscrete_joint_q(qs, action_dims)
+            joint_q = mask_joint_logits(joint_q, action_masks)
+            dist = distrax.Categorical(logits=joint_q.reshape((joint_q.shape[0], -1)) / temperature)
+            return dist.entropy()
+
+        qs = mask_factor_logits(qs, action_masks, action_dims)
+        dist = distrax.Categorical(logits=qs / temperature)
+        return dist.entropy().mean(axis=-1)
+
     @jax.jit
     def total_loss(self, batch, grad_params, rng=None):
         """Compute the total loss (only critic loss for DQN)."""
@@ -135,6 +215,9 @@ class GCDQNAgent(flax.struct.PyTreeNode):
         """
         if not self.config['discrete']:
             raise NotImplementedError("ClearnSearchAgent.sample_actions supports only discrete action spaces.")
+
+        if self.config.get('action_mode', 'discrete') == 'multidiscrete':
+            return self.sample_multidiscrete_actions(observations, goals, seed, action_masks)
         
         action_dim = discrete_action_dim(self.config)
         candidate_actions = all_actions(observations.shape[0], action_dim)
@@ -164,6 +247,59 @@ class GCDQNAgent(flax.struct.PyTreeNode):
 
         return actions
 
+    def sample_multidiscrete_actions(self, observations, goals, seed, action_masks):
+        action_dims = multidiscrete_action_dims(self.config)
+        qs = jax.lax.stop_gradient(self.network.select('critic')(observations, goals))
+        qs = qs.mean(axis=0)
+
+        if self.config.get('action_mask_mode', 'factor') == 'joint':
+            return self._sample_joint_masked_multidiscrete(qs, action_masks, seed, action_dims)
+        return self._sample_factor_masked_multidiscrete(qs, action_masks, seed, action_dims)
+
+    def _sample_factor_masked_multidiscrete(self, qs, action_masks, seed, action_dims):
+        qs = mask_factor_logits(qs, action_masks, action_dims)
+        if self.config['action_sampling'] == 'softmax':
+            alpha_temp = jax.lax.stop_gradient(self.network.select('alpha_temp')())
+            dist = distrax.Categorical(logits=qs / jnp.maximum(1e-6, alpha_temp))
+            return dist.sample(seed=seed).astype(jnp.int32)
+
+        if self.config['action_sampling'] == 'epsilon_greedy':
+            greedy_actions = jnp.argmax(qs, axis=-1).astype(jnp.int32)
+            rng, rng_uniform = jax.random.split(seed)
+            valid_masks = factor_action_mask(action_masks, qs.shape[0], action_dims)
+            random_actions = jax.random.categorical(
+                rng,
+                mask_logits(jnp.zeros_like(valid_masks, dtype=jnp.float32), valid_masks),
+            ).astype(jnp.int32)
+            probs = jax.random.uniform(rng_uniform, greedy_actions.shape)
+            return jnp.where(probs < 0.1, random_actions, greedy_actions)
+
+        raise ValueError(f"Unknown action sampling type {self.config['action_sampling']}")
+
+    def _sample_joint_masked_multidiscrete(self, qs, action_masks, seed, action_dims):
+        joint_q = multidiscrete_joint_q(qs, action_dims)
+        joint_q = mask_joint_logits(joint_q, action_masks)
+        flat_q = joint_q.reshape((joint_q.shape[0], -1))
+
+        if self.config['action_sampling'] == 'softmax':
+            alpha_temp = jax.lax.stop_gradient(self.network.select('alpha_temp')())
+            dist = distrax.Categorical(logits=flat_q / jnp.maximum(1e-6, alpha_temp))
+            flat_actions = dist.sample(seed=seed)
+            return unravel_multidiscrete(flat_actions, action_dims)
+
+        if self.config['action_sampling'] == 'epsilon_greedy':
+            greedy_actions = unravel_multidiscrete(jnp.argmax(flat_q, axis=-1), action_dims)
+            rng, rng_uniform = jax.random.split(seed)
+            random_logits = mask_joint_logits(jnp.zeros_like(joint_q), action_masks).reshape((joint_q.shape[0], -1))
+            random_actions = unravel_multidiscrete(
+                jax.random.categorical(rng, random_logits).astype(jnp.int32),
+                action_dims,
+            )
+            probs = jax.random.uniform(rng_uniform, (greedy_actions.shape[0], 1))
+            return jnp.where(probs < 0.1, random_actions, greedy_actions)
+
+        raise ValueError(f"Unknown action sampling type {self.config['action_sampling']}")
+
     @classmethod
     def create(
         cls,
@@ -180,7 +316,14 @@ class GCDQNAgent(flax.struct.PyTreeNode):
         rng, init_rng = jax.random.split(rng, 2)
 
         ex_goals = ex_observations
-        action_dim = int(config.get('action_dim') or (ex_actions.max() + 1))
+        action_mode = config.get('action_mode', 'discrete')
+        if action_mode == 'multidiscrete':
+            action_dims = tuple(int(v) for v in config['action_dims'])
+            action_dim = max(action_dims)
+            num_action_factors = len(action_dims)
+        else:
+            action_dim = int(config.get('action_dim') or (ex_actions.max() + 1))
+            num_action_factors = 1
 
         # Define encoders.
         encoders = dict()
@@ -189,14 +332,25 @@ class GCDQNAgent(flax.struct.PyTreeNode):
             encoders['critic'] = GCEncoder(concat_encoder=encoder_module())
 
         # For DQN we only need a discrete critic (we keep other modules for compatibility/minimal changes).
-        critic_def = GCDiscreteCritic(
-            hidden_dims=config['value_hidden_dims'],
-            layer_norm=config['layer_norm'],
-            ensemble=True,
-            gc_encoder=encoders.get('critic'),
-            action_dim=action_dim,
-            net_arch=config['net_arch'],
-        )
+        if action_mode == 'multidiscrete':
+            critic_def = GCMultiDiscreteCritic(
+                hidden_dims=config['value_hidden_dims'],
+                layer_norm=config['layer_norm'],
+                ensemble=True,
+                gc_encoder=encoders.get('critic'),
+                num_action_factors=num_action_factors,
+                action_dim=action_dim,
+                net_arch=config['net_arch'],
+            )
+        else:
+            critic_def = GCDiscreteCritic(
+                hidden_dims=config['value_hidden_dims'],
+                layer_norm=config['layer_norm'],
+                ensemble=True,
+                gc_encoder=encoders.get('critic'),
+                action_dim=action_dim,
+                net_arch=config['net_arch'],
+            )
 
         # Keep dummy value/actor defs to minimize code changes (they won't be used in training).
         value_def = GCValue(
@@ -214,7 +368,10 @@ class GCDQNAgent(flax.struct.PyTreeNode):
         )
         
         if config['target_entropy'] is None:
-            config['target_entropy'] = -config['target_entropy_multiplier'] * action_dim/2
+            if action_mode == 'multidiscrete':
+                config['target_entropy'] = -config['target_entropy_multiplier'] * sum(config['action_dims']) / 2
+            else:
+                config['target_entropy'] = -config['target_entropy_multiplier'] * action_dim/2
         alpha_temp_def = LogParam()
 
         network_info = dict(
@@ -257,6 +414,12 @@ def get_config():
             const_std=True,
             discrete=True,  # DQN requires discrete actions
             encoder=ml_collections.config_dict.placeholder(str),
+            action_sampling='softmax',
+            action_dim=0,
+            action_mode='discrete',
+            action_dims=(),
+            num_action_factors=1,
+            action_mask_mode='categorical',
             # Dataset hyperparameters.
             dataset_class='GCDataset',
             value_p_curgoal=0.2,
