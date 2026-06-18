@@ -110,3 +110,10 @@ def unravel_multidiscrete(flat_actions: jax.Array, action_dims: tuple[int, ...])
         digits_reversed.append(remaining % size)
         remaining = remaining // size
     return jnp.stack(list(reversed(digits_reversed)), axis=-1).astype(jnp.int32)
+
+
+def ravel_multidiscrete(actions: jax.Array, action_dims: tuple[int, ...]) -> jax.Array:
+    flat = jnp.zeros(actions.shape[:-1], dtype=jnp.int32)
+    for factor_idx, size in enumerate(action_dims):
+        flat = flat * size + actions[..., factor_idx].astype(jnp.int32)
+    return flat

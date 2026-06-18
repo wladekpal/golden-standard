@@ -21,7 +21,16 @@ from impls.utils.action_utils import (
     unravel_multidiscrete,
 )
 from impls.utils.flax_utils import ModuleDict, TrainState, nonpytree_field
-from impls.utils.networks import GCActor, GCDiscreteActor, GCDiscreteCritic, GCMultiDiscreteCritic, GCValue, LogParam
+from impls.utils.networks import (
+    GCActor,
+    GCDiscreteActor,
+    GCDiscreteCritic,
+    GCDiscreteUniversalTransformerCritic,
+    GCMultiDiscreteCritic,
+    GCMultiDiscreteUniversalTransformerCritic,
+    GCValue,
+    LogParam,
+)
 
 
 class GCDQNAgent(flax.struct.PyTreeNode):
@@ -331,8 +340,46 @@ class GCDQNAgent(flax.struct.PyTreeNode):
             encoder_module = encoder_modules[config['encoder']]
             encoders['critic'] = GCEncoder(concat_encoder=encoder_module())
 
+        critic_arch = config.get('critic_arch') or config['net_arch']
+        if critic_arch in {"default", "none", "None"}:
+            critic_arch = config['net_arch']
+        if critic_arch == 'universal_transformer':
+            if config['encoder'] is not None:
+                raise ValueError("DQN universal transformer critic expects flat grid inputs and does not use encoders.")
+            num_heads = int(config['transformer_num_heads'])
+            d_model = int(config['transformer_d_model'])
+            if d_model % num_heads != 0:
+                raise ValueError(
+                    f"transformer_d_model ({d_model}) must be divisible by transformer_num_heads ({num_heads})."
+                )
+            transformer_kwargs = dict(
+                cell_dim=int(config['transformer_cell_dim']),
+                d_model=d_model,
+                num_heads=num_heads,
+                thinking_steps=int(config['transformer_thinking_steps']),
+                mlp_dim=int(config['transformer_mlp_dim']),
+                pool=config['transformer_pool'],
+                token_mode=config['transformer_token_mode'],
+                token_subgrid=int(config['transformer_token_subgrid']),
+            )
+        else:
+            transformer_kwargs = None
+
         # For DQN we only need a discrete critic (we keep other modules for compatibility/minimal changes).
-        if action_mode == 'multidiscrete':
+        if critic_arch == 'universal_transformer' and action_mode == 'multidiscrete':
+            critic_def = GCMultiDiscreteUniversalTransformerCritic(
+                ensemble=True,
+                num_action_factors=num_action_factors,
+                action_dim=action_dim,
+                **transformer_kwargs,
+            )
+        elif critic_arch == 'universal_transformer':
+            critic_def = GCDiscreteUniversalTransformerCritic(
+                ensemble=True,
+                action_dim=action_dim,
+                **transformer_kwargs,
+            )
+        elif action_mode == 'multidiscrete':
             critic_def = GCMultiDiscreteCritic(
                 hidden_dims=config['value_hidden_dims'],
                 layer_norm=config['layer_norm'],
@@ -340,7 +387,7 @@ class GCDQNAgent(flax.struct.PyTreeNode):
                 gc_encoder=encoders.get('critic'),
                 num_action_factors=num_action_factors,
                 action_dim=action_dim,
-                net_arch=config['net_arch'],
+                net_arch=critic_arch,
             )
         else:
             critic_def = GCDiscreteCritic(
@@ -349,7 +396,7 @@ class GCDQNAgent(flax.struct.PyTreeNode):
                 ensemble=True,
                 gc_encoder=encoders.get('critic'),
                 action_dim=action_dim,
-                net_arch=config['net_arch'],
+                net_arch=critic_arch,
             )
 
         # Keep dummy value/actor defs to minimize code changes (they won't be used in training).
@@ -405,6 +452,8 @@ def get_config():
             actor_hidden_dims=(512, 512, 512),
             value_hidden_dims=(512, 512, 512),
             layer_norm=True,
+            net_arch='mlp',
+            critic_arch='default',
             discount=0.99,
             tau=0.005,
             # legacy / unused fields from IQL left for compatibility:
@@ -420,6 +469,14 @@ def get_config():
             action_dims=(),
             num_action_factors=1,
             action_mask_mode='categorical',
+            transformer_cell_dim=12,
+            transformer_d_model=128,
+            transformer_num_heads=4,
+            transformer_thinking_steps=1,
+            transformer_mlp_dim=256,
+            transformer_pool='cls',
+            transformer_token_mode='paired',
+            transformer_token_subgrid=1,
             # Dataset hyperparameters.
             dataset_class='GCDataset',
             value_p_curgoal=0.2,

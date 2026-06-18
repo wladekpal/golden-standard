@@ -113,15 +113,52 @@ def _multidiscrete_example_batch(action_mask_mode="factor"):
     }
 
 
+def _scalar_example_batch(obs_dim=4):
+    observations = jnp.ones((2, obs_dim), dtype=jnp.float32)
+    return {
+        "observations": observations,
+        "next_observations": observations,
+        "actions": jnp.array([0, 1], dtype=jnp.int32),
+        "rewards": jnp.ones((2,), dtype=jnp.float32),
+        "masks": jnp.ones((2,), dtype=jnp.float32),
+        "value_goals": jnp.zeros_like(observations),
+        "actor_goals": jnp.zeros_like(observations),
+        "action_masks": jnp.array([[True, False, True, False], [False, True, True, False]], dtype=jnp.bool_),
+        "next_action_masks": jnp.array([[True, False, True, False], [False, True, True, False]], dtype=jnp.bool_),
+        "action_mode": "discrete",
+        "action_dim": 4,
+        "action_mask_mode": "categorical",
+    }
+
+
 def _without_action_metadata(batch):
-    return {k: v for k, v in batch.items() if k not in {"action_mode", "action_dims", "action_mask_mode"}}
+    return {k: v for k, v in batch.items() if k not in {"action_mode", "action_dim", "action_dims", "action_mask_mode"}}
+
+
+def _agent_config(agent_name):
+    config = ml_collections.ConfigDict(default_config)
+    config.agent_name = agent_name
+    config.actor_hidden_dims = (8,)
+    config.value_hidden_dims = (8,)
+    if agent_name == "gciql":
+        config.discrete = True
+        config.actor_loss = "awr"
+    return config
+
+
+def _transformer_config(agent_name):
+    config = _agent_config(agent_name)
+    config.critic_arch = "universal_transformer"
+    config.transformer_cell_dim = 1
+    config.transformer_d_model = 8
+    config.transformer_num_heads = 2
+    config.transformer_mlp_dim = 16
+    config.transformer_thinking_steps = 2
+    return config
 
 
 def test_dqn_multidiscrete_factor_mask_sampling_and_loss():
-    config = ml_collections.ConfigDict(default_config)
-    config.agent_name = "gcdqn"
-    config.actor_hidden_dims = (8,)
-    config.value_hidden_dims = (8,)
+    config = _agent_config("gcdqn")
     batch = _multidiscrete_example_batch("factor")
     agent = create_agent(config, batch, seed=0)
 
@@ -140,10 +177,7 @@ def test_dqn_multidiscrete_factor_mask_sampling_and_loss():
 
 
 def test_dqn_multidiscrete_joint_mask_sampling_and_loss():
-    config = ml_collections.ConfigDict(default_config)
-    config.agent_name = "gcdqn"
-    config.actor_hidden_dims = (8,)
-    config.value_hidden_dims = (8,)
+    config = _agent_config("gcdqn")
     batch = _multidiscrete_example_batch("joint")
     agent = create_agent(config, batch, seed=0)
 
@@ -159,11 +193,137 @@ def test_dqn_multidiscrete_joint_mask_sampling_and_loss():
     assert jnp.isfinite(loss)
 
 
+def test_gciql_multidiscrete_factor_mask_sampling_and_loss():
+    config = _agent_config("gciql")
+    batch = _multidiscrete_example_batch("factor")
+    agent = create_agent(config, batch, seed=0)
+
+    actions = agent.sample_actions(
+        batch["observations"],
+        batch["value_goals"],
+        seed=jax.random.PRNGKey(3),
+        action_masks=batch["action_masks"],
+    )
+    loss, info = agent.total_loss(_without_action_metadata(batch), None)
+
+    assert actions.shape == (2, 2)
+    assert jnp.all(batch["action_masks"][jnp.arange(2)[:, None], jnp.arange(2)[None, :], actions])
+    assert jnp.isfinite(loss)
+    assert "actor/bc_log_prob" in info
+
+
+def test_gciql_multidiscrete_joint_mask_sampling_and_loss():
+    config = _agent_config("gciql")
+    batch = _multidiscrete_example_batch("joint")
+    agent = create_agent(config, batch, seed=0)
+
+    actions = agent.sample_actions(
+        batch["observations"],
+        batch["value_goals"],
+        seed=jax.random.PRNGKey(4),
+        action_masks=batch["action_masks"],
+    )
+    loss, _ = agent.total_loss(_without_action_metadata(batch), None)
+
+    assert jnp.array_equal(actions, jnp.array([[1, 3], [1, 3]], dtype=jnp.int32))
+    assert jnp.isfinite(loss)
+
+
+def test_dqn_transformer_scalar_discrete_loss_and_sampling():
+    config = _transformer_config("gcdqn")
+    batch = _scalar_example_batch()
+    agent = create_agent(config, batch, seed=0)
+
+    actions = agent.sample_actions(
+        batch["observations"],
+        batch["value_goals"],
+        seed=jax.random.PRNGKey(5),
+        action_masks=batch["action_masks"],
+    )
+    loss, _ = agent.total_loss(_without_action_metadata(batch), None)
+
+    assert actions.shape == (2,)
+    assert jnp.all(batch["action_masks"][jnp.arange(2), actions])
+    assert jnp.isfinite(loss)
+
+
+def test_dqn_transformer_multidiscrete_loss_and_sampling():
+    config = _transformer_config("gcdqn")
+    batch = _multidiscrete_example_batch("factor")
+    agent = create_agent(config, batch, seed=0)
+
+    actions = agent.sample_actions(
+        batch["observations"],
+        batch["value_goals"],
+        seed=jax.random.PRNGKey(6),
+        action_masks=batch["action_masks"],
+    )
+    loss, _ = agent.total_loss(_without_action_metadata(batch), None)
+
+    assert actions.shape == (2, 2)
+    assert jnp.all(batch["action_masks"][jnp.arange(2)[:, None], jnp.arange(2)[None, :], actions])
+    assert jnp.isfinite(loss)
+
+
+def test_gciql_transformer_scalar_actor_critic_loss_and_sampling():
+    config = _transformer_config("gciql")
+    config.actor_arch = "universal_transformer"
+    batch = _scalar_example_batch()
+    agent = create_agent(config, batch, seed=0)
+
+    actions = agent.sample_actions(
+        batch["observations"],
+        batch["value_goals"],
+        seed=jax.random.PRNGKey(7),
+        action_masks=batch["action_masks"],
+    )
+    loss, _ = agent.total_loss(_without_action_metadata(batch), None)
+
+    assert actions.shape == (2,)
+    assert jnp.all(batch["action_masks"][jnp.arange(2), actions])
+    assert jnp.isfinite(loss)
+
+
+def test_gciql_transformer_multidiscrete_actor_critic_loss_and_sampling():
+    config = _transformer_config("gciql")
+    config.actor_arch = "universal_transformer"
+    batch = _multidiscrete_example_batch("factor")
+    agent = create_agent(config, batch, seed=0)
+
+    actions = agent.sample_actions(
+        batch["observations"],
+        batch["value_goals"],
+        seed=jax.random.PRNGKey(8),
+        action_masks=batch["action_masks"],
+    )
+    loss, _ = agent.total_loss(_without_action_metadata(batch), None)
+
+    assert actions.shape == (2, 2)
+    assert jnp.all(batch["action_masks"][jnp.arange(2)[:, None], jnp.arange(2)[None, :], actions])
+    assert jnp.isfinite(loss)
+
+
+def test_transformer_rejects_non_grid_observation():
+    config = _transformer_config("gcdqn")
+    batch = _scalar_example_batch(obs_dim=5)
+
+    with pytest.raises(ValueError, match="not a square grid"):
+        create_agent(config, batch, seed=0)
+
+
+def test_gciql_discrete_rejects_ddpgbc_actor_loss():
+    config = _agent_config("gciql")
+    config.actor_loss = "ddpgbc"
+
+    with pytest.raises(ValueError, match="ddpgbc is continuous-only"):
+        create_agent(config, _scalar_example_batch(), seed=0)
+
+
 def test_multidiscrete_env_rejects_unsupported_agent():
     config = ml_collections.ConfigDict(default_config)
-    config.agent_name = "gciql"
+    config.agent_name = "gciql_search"
 
-    with pytest.raises(ValueError, match="MultiDiscrete action spaces.*gcdqn"):
+    with pytest.raises(ValueError, match="MultiDiscrete action spaces.*gcdqn and gciql"):
         create_agent(config, _multidiscrete_example_batch("factor"), seed=0)
 
 

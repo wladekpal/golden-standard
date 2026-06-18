@@ -29,6 +29,7 @@ default_config = ml_collections.FrozenConfigDict(
             actor_arch='mlp',  # Actor architecture for GCBC ('mlp' or 'universal_transformer').
             latent_dim=64,
             net_arch='mlp',
+            critic_arch='default',
             layer_norm=True,  # Whether to use layer normalization.
             discount=0.99,  # Discount factor.
             contrastive_loss = 'binary',
@@ -70,9 +71,9 @@ def create_agent(config: ml_collections.FrozenConfigDict, example_batch: dict, s
     action_mode = example_batch.get('action_mode', 'discrete')
     config.action_mode = action_mode
     if action_mode == 'multidiscrete':
-        if config.agent_name != "gcdqn":
+        if config.agent_name not in {"gcdqn", "gciql"}:
             raise ValueError(
-                "Jumanji MultiDiscrete action spaces are currently supported only by the gcdqn agent. "
+                "Jumanji MultiDiscrete action spaces are currently supported only by gcdqn and gciql. "
                 f"Received agent_name={config.agent_name!r}."
             )
         action_dims = tuple(int(v) for v in example_batch['action_dims'])

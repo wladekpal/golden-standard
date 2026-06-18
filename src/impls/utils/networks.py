@@ -5,7 +5,14 @@ import flax
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
-from impls.utils.action_utils import mask_logits
+from impls.utils.action_utils import (
+    mask_factor_logits,
+    mask_joint_logits,
+    mask_logits,
+    multidiscrete_joint_q,
+    ravel_multidiscrete,
+    unravel_multidiscrete,
+)
 
 
 def default_init(scale=1.0):
@@ -330,6 +337,106 @@ class GCDiscreteActor(nn.Module):
         return distribution
 
 
+class MultiDiscretePolicyDistribution:
+    """Policy distribution for vector-valued finite discrete actions."""
+
+    def __init__(
+        self,
+        logits,
+        action_dims: tuple[int, ...],
+        action_mask_mode: str = "factor",
+        action_masks=None,
+        temperature=1.0,
+    ):
+        self.logits = logits
+        self.action_dims = tuple(int(v) for v in action_dims)
+        self.action_mask_mode = action_mask_mode
+        self.action_masks = action_masks
+        self.temperature = temperature
+
+    @property
+    def _temperature(self):
+        return jnp.maximum(1e-6, self.temperature)
+
+    def _factor_logits(self):
+        return mask_factor_logits(self.logits, self.action_masks, self.action_dims) / self._temperature
+
+    def _joint_logits(self):
+        joint_logits = multidiscrete_joint_q(self.logits, self.action_dims, reduction="sum")
+        joint_logits = mask_joint_logits(joint_logits, self.action_masks)
+        return joint_logits.reshape((joint_logits.shape[0], -1)) / self._temperature
+
+    def sample(self, seed):
+        if self.action_mask_mode == "joint":
+            flat_actions = distrax.Categorical(logits=self._joint_logits()).sample(seed=seed)
+            return unravel_multidiscrete(flat_actions, self.action_dims)
+        return distrax.Categorical(logits=self._factor_logits()).sample(seed=seed).astype(jnp.int32)
+
+    def log_prob(self, actions):
+        actions = actions.astype(jnp.int32)
+        if self.action_mask_mode == "joint":
+            flat_actions = ravel_multidiscrete(actions, self.action_dims)
+            return distrax.Categorical(logits=self._joint_logits()).log_prob(flat_actions)
+        return distrax.Categorical(logits=self._factor_logits()).log_prob(actions).sum(axis=-1)
+
+    def entropy(self):
+        if self.action_mask_mode == "joint":
+            return distrax.Categorical(logits=self._joint_logits()).entropy()
+        return distrax.Categorical(logits=self._factor_logits()).entropy().sum(axis=-1)
+
+    def mode(self):
+        if self.action_mask_mode == "joint":
+            flat_actions = jnp.argmax(self._joint_logits(), axis=-1)
+            return unravel_multidiscrete(flat_actions, self.action_dims)
+        return jnp.argmax(self._factor_logits(), axis=-1).astype(jnp.int32)
+
+
+class GCMultiDiscreteActor(nn.Module):
+    """Goal-conditioned actor for MultiDiscrete actions."""
+
+    hidden_dims: Sequence[int]
+    num_action_factors: int
+    action_dim: int
+    action_dims: tuple[int, ...]
+    action_mask_mode: str = "factor"
+    final_fc_init_scale: float = 1e-2
+    gc_encoder: nn.Module = None
+    net_arch: str = 'mlp'
+
+    def setup(self):
+        net = create_network(self.net_arch)
+        self.actor_net = net(self.hidden_dims, activate_final=True)
+        self.logit_net = nn.Dense(
+            self.num_action_factors * self.action_dim,
+            kernel_init=default_init(self.final_fc_init_scale),
+        )
+
+    def __call__(
+        self,
+        observations,
+        goals=None,
+        goal_encoded=False,
+        temperature=1.0,
+        action_masks=None,
+    ):
+        if self.gc_encoder is not None:
+            inputs = self.gc_encoder(observations, goals, goal_encoded=goal_encoded)
+        else:
+            inputs = [observations]
+            if goals is not None:
+                inputs.append(goals)
+            inputs = jnp.concatenate(inputs, axis=-1)
+        outputs = self.actor_net(inputs)
+        logits = self.logit_net(outputs).reshape((*outputs.shape[:-1], self.num_action_factors, self.action_dim))
+        return MultiDiscretePolicyDistribution(
+            logits,
+            action_dims=self.action_dims,
+            action_mask_mode=self.action_mask_mode,
+            action_masks=action_masks,
+            temperature=temperature,
+        )
+
+
 class GCValue(nn.Module):
     """Goal-conditioned value/critic function.
 
@@ -490,10 +597,9 @@ class UniversalTransformerEncoder(nn.Module):
         return x
 
 
-class GCDiscreteUniversalTransformerActor(nn.Module):
-    """Goal-conditioned discrete actor with a universal transformer over grid tokens."""
+class GCUniversalTransformerTorso(nn.Module):
+    """Shared universal-transformer torso over paired grid observations and goals."""
 
-    action_dim: int
     cell_dim: int = 12
     d_model: int = 128
     num_heads: int = 4
@@ -502,10 +608,9 @@ class GCDiscreteUniversalTransformerActor(nn.Module):
     pool: str = "cls"
     token_mode: str = "paired"
     token_subgrid: int = 1
-    final_fc_init_scale: float = 1e-2
 
     @nn.compact
-    def __call__(self, observations, goals=None, goal_encoded=False, temperature=1.0, action_masks=None):
+    def __call__(self, observations, goals=None, goal_encoded=False):
         del goal_encoded
         batch_shape = observations.shape[:-1]
         obs_tokens = _patchify(observations, self.cell_dim, self.token_subgrid)
@@ -546,8 +651,230 @@ class GCDiscreteUniversalTransformerActor(nn.Module):
         else:
             raise ValueError(f"Unknown pool {self.pool}")
 
-        logits = mask_logits(nn.Dense(self.action_dim, kernel_init=default_init(self.final_fc_init_scale))(pooled), action_masks)
+        return pooled
+
+
+class GCDiscreteUniversalTransformerActor(nn.Module):
+    """Goal-conditioned discrete actor with a universal transformer over grid tokens."""
+
+    action_dim: int
+    cell_dim: int = 12
+    d_model: int = 128
+    num_heads: int = 4
+    thinking_steps: int = 1
+    mlp_dim: int = 256
+    pool: str = "cls"
+    token_mode: str = "paired"
+    token_subgrid: int = 1
+    final_fc_init_scale: float = 1e-2
+
+    @nn.compact
+    def __call__(self, observations, goals=None, goal_encoded=False, temperature=1.0, action_masks=None):
+        pooled = GCUniversalTransformerTorso(
+            cell_dim=self.cell_dim,
+            d_model=self.d_model,
+            num_heads=self.num_heads,
+            thinking_steps=self.thinking_steps,
+            mlp_dim=self.mlp_dim,
+            pool=self.pool,
+            token_mode=self.token_mode,
+            token_subgrid=self.token_subgrid,
+        )(observations, goals, goal_encoded=goal_encoded)
+        logits = mask_logits(
+            nn.Dense(self.action_dim, kernel_init=default_init(self.final_fc_init_scale))(pooled),
+            action_masks,
+        )
         return distrax.Categorical(logits=logits / jnp.maximum(1e-6, temperature))
+
+
+class GCMultiDiscreteUniversalTransformerActor(nn.Module):
+    """Goal-conditioned MultiDiscrete actor with a universal transformer over grid tokens."""
+
+    num_action_factors: int
+    action_dim: int
+    action_dims: tuple[int, ...]
+    action_mask_mode: str = "factor"
+    cell_dim: int = 12
+    d_model: int = 128
+    num_heads: int = 4
+    thinking_steps: int = 1
+    mlp_dim: int = 256
+    pool: str = "cls"
+    token_mode: str = "paired"
+    token_subgrid: int = 1
+    final_fc_init_scale: float = 1e-2
+
+    @nn.compact
+    def __call__(self, observations, goals=None, goal_encoded=False, temperature=1.0, action_masks=None):
+        pooled = GCUniversalTransformerTorso(
+            cell_dim=self.cell_dim,
+            d_model=self.d_model,
+            num_heads=self.num_heads,
+            thinking_steps=self.thinking_steps,
+            mlp_dim=self.mlp_dim,
+            pool=self.pool,
+            token_mode=self.token_mode,
+            token_subgrid=self.token_subgrid,
+        )(observations, goals, goal_encoded=goal_encoded)
+        logits = nn.Dense(
+            self.num_action_factors * self.action_dim,
+            kernel_init=default_init(self.final_fc_init_scale),
+        )(pooled)
+        logits = logits.reshape((*pooled.shape[:-1], self.num_action_factors, self.action_dim))
+        return MultiDiscretePolicyDistribution(
+            logits,
+            action_dims=self.action_dims,
+            action_mask_mode=self.action_mask_mode,
+            action_masks=action_masks,
+            temperature=temperature,
+        )
+
+
+class GCUniversalTransformerScalarHead(nn.Module):
+    output_dim: int
+    cell_dim: int = 12
+    d_model: int = 128
+    num_heads: int = 4
+    thinking_steps: int = 1
+    mlp_dim: int = 256
+    pool: str = "cls"
+    token_mode: str = "paired"
+    token_subgrid: int = 1
+    final_fc_init_scale: float = 1e-2
+
+    @nn.compact
+    def __call__(self, observations, goals=None):
+        pooled = GCUniversalTransformerTorso(
+            cell_dim=self.cell_dim,
+            d_model=self.d_model,
+            num_heads=self.num_heads,
+            thinking_steps=self.thinking_steps,
+            mlp_dim=self.mlp_dim,
+            pool=self.pool,
+            token_mode=self.token_mode,
+            token_subgrid=self.token_subgrid,
+        )(observations, goals)
+        return nn.Dense(self.output_dim, kernel_init=default_init(self.final_fc_init_scale))(pooled)
+
+
+class GCUniversalTransformerValue(nn.Module):
+    """Goal-conditioned scalar value network with a universal transformer over grid tokens."""
+
+    ensemble: bool = False
+    cell_dim: int = 12
+    d_model: int = 128
+    num_heads: int = 4
+    thinking_steps: int = 1
+    mlp_dim: int = 256
+    pool: str = "cls"
+    token_mode: str = "paired"
+    token_subgrid: int = 1
+
+    def setup(self):
+        head = GCUniversalTransformerScalarHead
+        if self.ensemble:
+            head = ensemblize(head, 2)
+        self.value_net = head(
+            output_dim=1,
+            cell_dim=self.cell_dim,
+            d_model=self.d_model,
+            num_heads=self.num_heads,
+            thinking_steps=self.thinking_steps,
+            mlp_dim=self.mlp_dim,
+            pool=self.pool,
+            token_mode=self.token_mode,
+            token_subgrid=self.token_subgrid,
+        )
+
+    def __call__(self, observations, goals=None, actions=None):
+        if actions is not None:
+            raise ValueError("GCUniversalTransformerValue does not support action-conditioned calls.")
+        return self.value_net(observations, goals).squeeze(-1)
+
+
+class GCDiscreteUniversalTransformerCritic(nn.Module):
+    """Goal-conditioned scalar-discrete critic with universal-transformer grid tokens."""
+
+    action_dim: int
+    ensemble: bool = True
+    cell_dim: int = 12
+    d_model: int = 128
+    num_heads: int = 4
+    thinking_steps: int = 1
+    mlp_dim: int = 256
+    pool: str = "cls"
+    token_mode: str = "paired"
+    token_subgrid: int = 1
+
+    def setup(self):
+        head = GCUniversalTransformerScalarHead
+        if self.ensemble:
+            head = ensemblize(head, 2)
+        self.q_net = head(
+            output_dim=self.action_dim,
+            cell_dim=self.cell_dim,
+            d_model=self.d_model,
+            num_heads=self.num_heads,
+            thinking_steps=self.thinking_steps,
+            mlp_dim=self.mlp_dim,
+            pool=self.pool,
+            token_mode=self.token_mode,
+            token_subgrid=self.token_subgrid,
+        )
+
+    def __call__(self, observations, goals=None, actions=None):
+        qs = self.q_net(observations, goals)
+        if actions is None:
+            return qs
+        actions = actions.astype(jnp.int32)
+        indices = actions[..., None]
+        while indices.ndim < qs.ndim:
+            indices = indices[None, ...]
+        return jnp.take_along_axis(qs, indices, axis=-1).squeeze(-1)
+
+
+class GCMultiDiscreteUniversalTransformerCritic(nn.Module):
+    """Goal-conditioned MultiDiscrete critic with universal-transformer grid tokens."""
+
+    num_action_factors: int
+    action_dim: int
+    ensemble: bool = True
+    cell_dim: int = 12
+    d_model: int = 128
+    num_heads: int = 4
+    thinking_steps: int = 1
+    mlp_dim: int = 256
+    pool: str = "cls"
+    token_mode: str = "paired"
+    token_subgrid: int = 1
+
+    def setup(self):
+        head = GCUniversalTransformerScalarHead
+        if self.ensemble:
+            head = ensemblize(head, 2)
+        self.q_net = head(
+            output_dim=self.num_action_factors * self.action_dim,
+            cell_dim=self.cell_dim,
+            d_model=self.d_model,
+            num_heads=self.num_heads,
+            thinking_steps=self.thinking_steps,
+            mlp_dim=self.mlp_dim,
+            pool=self.pool,
+            token_mode=self.token_mode,
+            token_subgrid=self.token_subgrid,
+        )
+
+    def __call__(self, observations, goals=None, actions=None):
+        qs = self.q_net(observations, goals)
+        qs = qs.reshape((*qs.shape[:-1], self.num_action_factors, self.action_dim))
+        if actions is None:
+            return qs
+
+        actions = jnp.asarray(actions, dtype=jnp.int32)
+        indices = actions[..., None]
+        while indices.ndim < qs.ndim:
+            indices = indices[None, ...]
+        return jnp.take_along_axis(qs, indices, axis=-1).squeeze(-1)
 
 
 class GCBilinearValue(nn.Module):
