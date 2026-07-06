@@ -11,6 +11,7 @@ class JumanjiConfig:
     episode_length: int = 120
     observation_mode: Literal["flat", "grid"] = "flat"
     grid_observation_key: str = "grid"
+    grid_observation_layout: Literal["spatial", "cube"] = "spatial"
     grid_token_channels: int = 12
     reward_reduction: Literal["sum", "mean"] = "sum"
 

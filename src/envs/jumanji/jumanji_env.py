@@ -20,6 +20,7 @@ class JumanjiDiscreteEnv:
         episode_length: int = 120,
         observation_mode: str = "flat",
         grid_observation_key: str = "grid",
+        grid_observation_layout: str = "spatial",
         grid_token_channels: int = 12,
         reward_reduction: str = "sum",
         **kwargs,
@@ -36,6 +37,7 @@ class JumanjiDiscreteEnv:
         self.episode_length = episode_length
         self.observation_mode = observation_mode
         self.grid_observation_key = grid_observation_key
+        self.grid_observation_layout = grid_observation_layout
         self.grid_token_channels = grid_token_channels
         self.reward_reduction = reward_reduction
         self._env = jumanji.make(env_id)
@@ -225,6 +227,7 @@ class JumanjiDiscreteEnv:
             observation,
             self.observation_mode,
             grid_observation_key=self.grid_observation_key,
+            grid_observation_layout=self.grid_observation_layout,
             grid_token_channels=self.grid_token_channels,
         )
 

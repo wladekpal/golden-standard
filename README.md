@@ -29,7 +29,9 @@ To run a simple training with CRL and the default environment configuration:
 uv run src/train.py env:box-moving --exp.name test
 ```
 
-The current version supports only the `box-moving` environment; specify `env:box-moving` for each experiment.
+The current version supports the local `box-moving` environment and finite-discrete Jumanji environments. Use
+`env:box-moving` for the original grid-world experiments, or `env:jumanji --env.env-id Snake-v1` for a native-reward
+Jumanji run. Some Jumanji environments, such as `Sokoban-v0`, may download external level data on first use.
 
 ## Wandb logging 📈
 
